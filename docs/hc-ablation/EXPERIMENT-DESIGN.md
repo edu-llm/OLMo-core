@@ -65,13 +65,17 @@ cells**, and that is both cheaper and better-placed than one eight-GPU node:
 
 | way to buy 8 concurrent 12-hour runs | priced worst case | places |
 | --- | --- | --- |
-| 8 cells of `gpu-1xa10g` at $1.006/h | $193.15 | reliably |
+| 8 cells of `gpu-1xa10g` at $1.006/h for 12h | $193.15 | reliably |
 | 8 cells of `gpu-1xl4` at $0.8048/h | $154.52 | unreliably |
 | 1 cell of `gpu-8xa100` at $21.958/h (one 8-way job, not 8 runs) | $526.98 | after a wait, 61-minute median |
 
-Priced cost is `rate x nodes x hours x attempts x cells` with `attempts = 2`, which is what
-`olmo-core-train` allows and what a resume is granted on; a tranche whose first attempts all
-succeed spends half of it.
+Priced cost is `rate x nodes x hours x attempts x cells` with `attempts = 2`. **The second
+attempt is narrower than it looks and the design depends on knowing that.**
+`RETRY_ONLY_WHAT_A_RETRY_FIXES` in the platform's execution module retries `Host EC2*`, exits on
+`OutOfMemoryError*`, and exits on every other exit code — so a cell that runs out of wall clock
+is **not** retried. The second attempt is for a host that went away. That is why `--hours` is 20
+against an estimated 12: the bound is the approval ceiling and billing is by actual runtime, so
+buying margin there is free, and buying it by cutting `--steps` is not.
 
 **So: `gpu-1xa10g`, one card per cell, one cell per seed-and-arm.** It is the only 24 GB-class
 shape in the catalog that both has bfloat16 in hardware and places reliably. `gpu-1xl4` is 20%
@@ -87,7 +91,8 @@ which is one of the reasons the command names it.
 | --- | --- |
 | total parameters | 565,036,800 |
 | non-embedding | 487,966,464 |
-| **active per token** | **about 190.7M** — 12 x (2.36M attention + 3.54M shared MLP + 3.54M of 4-in-32 experts) + 77.07M output projection |
+| **active per token** | **267,765,504** as `TransformerConfig.num_active_params` counts it, of which **190,695,168** are in matmuls — the difference is the embedding table, which is a lookup |
+| FLOPs per token | **1.3706 GFLOP** at sequence length 2048, from the model's own `num_flops_per_token` rather than from `6N` |
 | shape | `d_model` 768, 12 layers, 12 heads, block `moe_reordered_norm` |
 | experts | 32, top-4, expert hidden 384, shared MLP hidden 1536, `lb_loss_weight` 0.01, `z_loss_weight` 0.001 |
 | sequence length | 2,048 |
@@ -108,10 +113,17 @@ so the MoE factories reachable without new code are exactly `smallmoe`, `small_h
 `olmoe_1B_7B`. The third does not fit the budget. Using an untouched factory is what lets stage
 1 run before any of this branch's code exists.
 
-**Inherited and uncomfortable: 786M tokens is short.** It comes from 12 hours on one A10G at an
-assumed 20% MFU — see the arithmetic in `.edullm/run.hc-baseline.yaml`'s header — and the smoke
-run is what replaces the assumption with a measurement. Against Chinchilla it is about a
-twentieth of what 190M active parameters would want. Section 7 says what that costs.
+**Inherited and uncomfortable: 786M tokens is short.** One step is 262,144 x 1.3706 GFLOP =
+359.3 TFLOP; an A10G is 125 TFLOP/s bf16, so at an assumed 20% MFU that is 14.4 s/step and 3,000
+steps is 12.0 hours. The smoke replaces the assumption with a measurement. Against Chinchilla it
+is about a twentieth of what this active size would want. Section 7 says what that costs.
+
+**And the card is 22.35 GiB, not 24.** `gpu-1xa10g` carries 22,888 MiB. The term that decides
+whether `--rank-microbatch-size 8192` fits is not the 9.47 GiB of parameter, gradient and Adam
+state but the **fp32 logits**: 8,192 tokens x 100,352 vocab is 3.06 GiB per copy, and at the LM
+head's backward two or three copies can be live. The estimate lands between 18 and 21.5 GiB. It
+probably fits, it has no margin, and doubling the microbatch doubles that term specifically — so
+a comfortable `peak_memory_gib` at 8192 does not license 16384.
 
 ## 4. The arms
 
@@ -131,8 +143,8 @@ shares the shape, the optimizer, the schedule, the data, the horizon and the see
 
 The brief asked for this to be justified against the budget rather than asserted, so:
 
-**Against the budget it is nearly free.** Two arms at five seeds is 10 cells and $241.44
-priced; four arms at five seeds is 20 cells and $482.88. The comparable tranche this team
+**Against the budget it is nearly free.** Two arms at five seeds is 10 cells and $402.40
+priced at 20 hours; four arms at five seeds is 20 cells and $804.80. The comparable tranche this team
 funded — nine cells at 19 hours on `gpu-4xl40s`, commit `38b66591` — was priced against a
 $4,000 ceiling. `edullm check` classifies all three of 10, 20 and 32 cells as `routine`,
 released by a team lead, with no denied-outright condition. **The budget is not the binding
@@ -141,6 +153,9 @@ recommendation, and it is worth re-deriving rather than trusting: run
 `edullm check --json --spec .edullm/run.hc-treatment.yaml ... --fanout-size 20` and read `cost`
 and `approval_class` out of the output.
 
+(Those figures are the approval ceiling at `--hours 20`; the expected spend is a little over
+half, because the horizon is sized for 12.)
+
 **Against the science it is not optional.** Without the identity arms, the result is
 `mhc_moe_balanced` > `mhc_moe`, and the cheapest explanation for that is not the hypothesis: an
 auxiliary loss on a set of gates is a regulariser, and regularisers help under-trained models.
@@ -148,6 +163,14 @@ The hypothesis is specifically that balancing makes *mixing* start to matter, wh
 about an interaction — balancing should buy more where there is a learned matrix to rescue than
 where `H_res` is pinned to the identity and there is nothing to rescue. That is H4 in section 6,
 and it does not exist in a two-arm design.
+
+**And there is now a second reason, which was not available when the 2x2 was chosen.** The
+mechanism turns out to be *caused by the constraint map*, not by the streams: with identical
+streams a constrained mixer's gradient with respect to its logits is exactly zero, because every
+constraint map's Jacobian annihilates the only direction identical streams produce. The
+`identity` arms have no constraint map and no logits at all, so they are the arm in which the
+treatment cannot possibly act through the mechanism the hypothesis names. That makes H5 a sharp
+control rather than a courtesy: a gain there is balancing doing something else.
 
 **What it costs is power.** A 2x2 interaction has `sum(w^2) = 4` against a simple difference's
 2, so its standard error is `sqrt(2)` larger and its minimum detectable effect is 41% worse.
@@ -253,8 +276,28 @@ support a superiority claim" — arrived at with more seeds and the same lack of
 
 `D`, the mixer's displacement from initialisation, has no published seed variance and stage 1
 cannot supply one, because stage 1 has no hyper-connection in it. **That is a real gap and this
-document does not paper over it.** What stands in its place is a pre-registered manipulation
-check that is diagnosable at one seed inside the first hour:
+document does not paper over it.**
+
+What has changed since this section was first written is that the mechanism is no longer a
+hypothesis about a quantity nobody has measured. Two things are now measured, on a CPU, in
+seconds, and both are asserted as tests:
+
+- **Why the gradient is ~1e-9.** With the `n` streams carrying the same vector, every
+  constrained mixer's gradient with respect to its logits is exactly zero — the constraint map's
+  Jacobian annihilates the only direction identical streams can produce. At the uniform doubly
+  stochastic initialisation, which averages the streams and so destroys their dispersion, the
+  Sinkhorn, Birkhoff and Kronecker mixers get gradient norms of 2e-8, 0.0 and 4e-8 against the
+  unconstrained mixer's 2.3 on the same block, the same inputs and the same loss.
+  (`hc_moe_block_test.py::test_constrained_mixer_gradient_is_orders_below_the_unconstrained_one`)
+- **That the treatment moves it.** Over 200 AdamW steps on a four-block model, against an
+  otherwise identical untreated model: stream dispersion 5.9e-08 to 3.0e-03, `H_res` gradient
+  norm 1.6e-09 to 2.5e-04, and the ratio against a reference parameter 2.4e-08 to 8.5e-05. The
+  degenerate `energy` statistic — the literal mirror of MoE's loss — moves neither, which is the
+  negative control. (`stream_balance_test.py::test_balancing_revives_the_mixer_gradient`)
+
+That does not make the endpoint powered on a GPU at this shape, and it is not a claim that the
+model is better for it. What it does is turn the manipulation check below from a hope into a
+prediction with a measured effect size behind it:
 
 > If, at step 500, the median `H_res` gradient norm in the `mhc_moe_balanced` cells has not
 > risen by at least three orders of magnitude over the `mhc_moe` cells at the same step, the
@@ -340,22 +383,31 @@ Both are in `docs/hc-ablation/AGENT-STATUS.md` under DECISIONS NEEDED FROM HUMAN
 
 ## 9. The order to spend the first twelve hours in
 
+0. **The two GPU tests nothing has run**, before any of this:
+   `pytest -v src/test/nn/hc_moe_block_test.py -k "real_moe or router_auxiliary"`. They cost
+   minutes on any card. The second asks whether the MoE router's auxiliary loss survives the
+   hyper-connection's write-out gate; if it does not, every arm below trains with an unbalanced
+   router and looks healthy.
 1. **The smoke, `.edullm/run.hc-smoke.yaml`, $2.01, about 20 minutes.** Nothing else starts
    until it has printed a summary JSON. It settles step time, peak memory, and whether the
-   corpus opens at all.
-2. **Set `--steps` from it** in both the baseline and the treatment spec, commit, push. The
-   horizon has to be identical across every cell of both stages.
+   corpus opens at all. Read `peak_memory_gib` against 22.35 and not 24.
+2. **Set `--steps` and `--save-interval` from it** in both the baseline and the treatment spec,
+   identically, commit, push. The horizon has to be the same in every cell of both stages.
 3. **A four-cell mechanism pilot, about $50, one hour per cell.** One seed of each of the four
-   arms at `--steps 500`, for the manipulation check in section 6 and nothing else. If the
-   `H_res` gradient ratio has not moved by three orders of magnitude, the twenty-cell tranche
-   would have measured nothing and this is where that is found out. This is the single highest
-   value hour in the plan and it is not in the original brief.
-4. **Stage 1, `.edullm/run.hc-baseline.yaml`, $120.72, five cells.** The noise floor, and the
-   MoE-without-hyper-connections reference. Recompute the power table from its sigma.
-5. **Stage 2, `.edullm/run.hc-treatment.yaml`, $482.88, twenty cells.** Only after 3 and 4 have
-   both reported.
+   arms at `--steps 500` and `--seeds-per-arm 1`, for the manipulation check in section 6 and
+   nothing else. If the `H_res` gradient ratio has not moved by three orders of magnitude, the
+   twenty-cell tranche would have measured nothing and this is where that is found out. This is
+   the single highest value hour in the plan and it is not in the original brief. Run it with
+   `--monitor-interval 10`, because the monitor callback that carries the primary endpoint has
+   never run inside a trainer.
+4. **Stage 1, `.edullm/run.hc-baseline.yaml`, $201.20 priced, five cells.** The noise floor, and
+   the MoE-without-hyper-connections reference. Recompute the power table from its sigma:
+   `python src/scripts/ablations/hc_power.py --sigma <measured>`.
+5. **Stage 2, `.edullm/run.hc-treatment.yaml`, $804.80 priced, twenty cells.** Only after 3 and
+   4 have both reported.
 
-Total priced worst case for the whole plan is about $655, against a tranche ceiling that this
-team has previously funded at $4,000. If more money appears, **buy seeds and not horizon** —
-`SE ~ D^+0.328` — and buy them on the arms in H4, which is the contrast that carries the
-mechanism claim and is the widest of the five.
+Total priced worst case for the whole plan is about $1,060 at `--hours 20`, of which a little
+over half is expected to be spent, against a tranche ceiling this team has previously funded at
+$4,000. If more money appears, **buy seeds and not horizon** — `SE ~ D^+0.328` — and buy them on
+the arms in H4, which is the contrast that carries the mechanism claim and is the widest of the
+five.

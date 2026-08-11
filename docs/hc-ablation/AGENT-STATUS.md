@@ -1,0 +1,290 @@
+# Agent status: hyper-connected MoE and the stream-balancing treatment
+
+Branch `hc/moe-stream-balancing-5bd7`, off `hc/moe-base`. Nothing here has run on a GPU.
+
+---
+
+# START HERE
+
+Six commands from a fresh terminal to a launched baseline. **Step 3 is the one this agent could
+not do**: the platform refuses to submit a commit with no published image, and images are built
+only by a push to `edullm/**`.
+
+```bash
+# 1. Get the CLI and the branch. Re-running the install line is the upgrade.
+uv tool install --force git+https://github.com/edu-llm/platform
+git clone https://github.com/edu-llm/OLMo-core && cd OLMo-core
+git checkout hc/moe-stream-balancing-5bd7
+
+# 2. Price it. Free, reaches no network, and should print refused: false.
+edullm check --json --spec .edullm/run.hc-smoke.yaml \
+  --experiment hc-moe-stream-balance --dataset regmix-10b-v1 \
+  --team input-core --compute gpu-1xa10g --hours 1
+
+# 3. PUBLISH THE IMAGE. This is yours to do and nothing else in this list works without it.
+#    Pushing this exact commit to a branch under edullm/** is what builds the image. Wait for
+#    the build to go green in Actions -- about three to five minutes -- before step 4.
+git push origin 1ca04d68ee4128094e8a4dc3d97bfaa6cbadf2f4:refs/heads/edullm/hc-moe-stream-balance
+
+# 4. The twenty-minute smoke, $2.01. Nothing else starts until this has printed a summary.
+edullm submit --spec .edullm/run.hc-smoke.yaml \
+  --experiment hc-moe-stream-balance --dataset regmix-10b-v1 \
+  --team input-core --compute gpu-1xa10g --hours 1
+edullm status --json          # free, answers from GitHub, safe to poll
+
+# 5. Read `seconds`, `steps` and `peak_memory_gib` out of its summary JSON and set --steps and
+#    --save-interval in run.hc-baseline.yaml and run.hc-treatment.yaml from them -- identically
+#    in both. Commit, and push again to the edullm/** branch so the image carries the edit.
+
+# 6. Stage 1: the noise floor. Five cells, twelve hours each, $201.20 priced worst case.
+edullm submit --spec .edullm/run.hc-baseline.yaml \
+  --experiment hc-moe-stream-balance --dataset regmix-10b-v1 \
+  --team input-core --compute gpu-1xa10g --hours 20
+```
+
+`1ca04d68ee4128094e8a4dc3d97bfaa6cbadf2f4` is the commit these numbers were checked against.
+If you have added commits, use `git rev-parse HEAD` and re-run step 2 — `edullm check` refuses
+a commit no remote branch contains, so it will tell you if you push the wrong one.
+
+Do not submit `.edullm/run.hc-treatment.yaml` yet. Its header lists three things that have to
+report first, one of which is a four-cell mechanism pilot costing about $50 that decides whether
+the twenty-cell tranche is worth submitting at all.
+
+## Evidence: all three specs pass `edullm check --json --spec` with an empty refusals list
+
+Run at commit `1ca04d68ee41`, on a clean tree, with `EDULLM_GITHUB_LOGIN=philote-dev` — this
+container's own `gh` login is `cursor`, which is not on the platform roster, so an unprefixed
+check adds one refusal that is a property of the container rather than of the specs.
+
+```json
+{ "spec": ".edullm/run.hc-smoke.yaml", "hours": 1,
+  "refused": false, "refusals": [],
+  "cost": {"cells": 1, "hourly_rate_usd": "1.006", "maximum_attempts": 2,
+           "maximum_runtime_hours": "1", "nodes": 1, "maximum_compute_cost_usd": "2.01"},
+  "approval_class": "automatic", "approving_environment": "run-approval-automatic",
+  "commit_sha": "1ca04d68ee4128094e8a4dc3d97bfaa6cbadf2f4" }
+
+{ "spec": ".edullm/run.hc-baseline.yaml", "hours": 20,
+  "refused": false, "refusals": [],
+  "cost": {"cells": 5, "hourly_rate_usd": "1.006", "maximum_attempts": 2,
+           "maximum_runtime_hours": "20", "nodes": 1, "maximum_compute_cost_usd": "201.20"},
+  "approval_class": "routine", "approving_environment": "run-approval-lead",
+  "manifest": {"fanout": {"index_parameter": "seed", "size": 5}},
+  "commit_sha": "1ca04d68ee4128094e8a4dc3d97bfaa6cbadf2f4" }
+
+{ "spec": ".edullm/run.hc-treatment.yaml", "hours": 20,
+  "refused": false, "refusals": [],
+  "cost": {"cells": 20, "hourly_rate_usd": "1.006", "maximum_attempts": 2,
+           "maximum_runtime_hours": "20", "nodes": 1, "maximum_compute_cost_usd": "804.80"},
+  "approval_class": "routine", "approving_environment": "run-approval-lead",
+  "manifest": {"fanout": {"index_parameter": "arm-and-seed", "size": 20}},
+  "commit_sha": "1ca04d68ee4128094e8a4dc3d97bfaa6cbadf2f4" }
+```
+
+All three carry the same three deferred checks, which no laptop can make: `no_published_image`,
+`image_is_ambiguous` and `image_scan_findings_unreviewed`. Step 3 above is what settles the first.
+
+## The CPU checks, all of which should pass before you spend anything
+
+```bash
+pip install -e '.[all]'
+pytest -q src/test/nn/ --ignore=src/test/nn/hf      # 553 passed
+python src/scripts/ablations/hc_gate1_check.py       # GATE_1 PASSED: 30 passed, 0 failed
+python src/scripts/ablations/hc_launch_check.py      # 3 specs checked, 0 problems
+python src/scripts/ablations/hc_ablation.py --dry-run --model-size tiny
+python src/scripts/ablations/hc_power.py --sweep     # the MDE table; re-run with stage 1's sigma
+```
+
+---
+
+## Checklist
+
+| package | state | what it is |
+| --- | --- | --- |
+| **WP0** launchable baseline | **done** | three specs, all passing `check` with zero refusals, plus a launch checker that runs the real command |
+| **WP4** powered design | **done** | `docs/hc-ablation/EXPERIMENT-DESIGN.md`, `src/scripts/ablations/hc_power.py`, `.edullm/run.hc-treatment.yaml` |
+| **WP1** MoE + hyper-connections | **done, CPU only** | four new block classes, one model class; expert parallelism refuses |
+| **WP2** stream balancing | **done, CPU only** | one flag defaulting off; the mechanism is measured over 200 CPU steps |
+| **WP3** diagnostics | **done, never run** | `HyperConnectionMonitorCallback`, plus the stream metrics on the model |
+
+### WP0 — the launch artifacts
+
+`.edullm/run.hc-smoke.yaml` (128 lines), `.edullm/run.hc-baseline.yaml` (166),
+`.edullm/run.hc-treatment.yaml` (117), `src/scripts/ablations/hc_launch_check.py` (612).
+
+**CPU-verified.** All three pass `edullm check --json --spec` with `refused: false` and an empty
+refusals list, at the commit above, on a clean tree. `hc_launch_check.py` splits each command the
+way the submission workflow does, applies the platform's own `FANOUT_PROLOGUE`, runs it in a real
+`bash` against a stub `python`, and asserts every value of the resulting config against a per-spec
+expectations table — 0 problems on all three. Seven mutations that break production are caught and
+the unmutated control is green. `exec` was verified to deliver SIGTERM to the training process.
+
+**NOT verified.** Everything that needs a container: whether the corpus opens, whether the model
+fits in 22.35 GiB, actual MFU and therefore whether `--steps 3000` fits the wall clock, and
+whether a second attempt resumes. The smoke is the instrument for the first three.
+
+### WP1 — hyper-connections around the MoE blocks
+
+`src/olmo_core/nn/transformer/hc_moe_block.py` (430), plumbing in `hc_block.py`, `model.py`,
+`config.py`, `__init__.py`, and `src/test/nn/hc_moe_block_test.py` (600). Four new block classes
+covering all five MoE block classes in `block.py`, and `HyperConnectionMoETransformer`.
+
+**CPU-verified.** Bit-exact equivalence to the unwrapped MoE model at initialisation with the
+noise off — `max|logits - baseline| = 0.000e+00` for five mixers x four block types — and each of
+the `n` streams individually reproduces the unwrapped block rather than only their mean. Parameter
+counts agree across the config, the block and the model, and the delta against the unwrapped model
+is exactly the routing count. Doubly stochastic mixers off initialisation. Gradients finite on
+every routing tensor. Save/resume round-trip with every routing tensor in the state dict. Routing
+math stays float32 under bfloat16. Expert, tensor and context parallelism all raise, as does the
+hybrid block's combined forward. The model class is `MoETransformer`'s, so the router's
+load-balancing loss and z-loss still reach the trainer, and the config refuses both ways of
+getting that wrong.
+
+**NOT verified, and this is the largest gap in the deliverable.** *No hyper-connected MoE block
+has run a single step on a GPU.* The MoE forward needs CUDA kernels — `olmo_core.ops.moe` asserts
+them and every MoE test in this repository carries `@requires_gpu` — so the CPU tests substitute a
+stand-in for `feed_forward_moe` on **both** sides of every comparison. That tests the residual
+wiring exactly, which is what this work adds, and nothing about its interaction with the real
+expert dispatch. Two tests are written, marked `@requires_gpu`, and have never been run:
+
+```bash
+pytest -v src/test/nn/hc_moe_block_test.py -k "real_moe or router_auxiliary"
+```
+
+The second of those is the one to care about: it asks whether the router's auxiliary loss survives
+the two einsums and the addition the hyper-connection puts between it and the loss. If it does
+not, the arms train with an unbalanced router and look healthy.
+
+### WP2 — the stream-balancing treatment
+
+`src/olmo_core/nn/hyper_connections.py` (+~230), `src/test/nn/stream_balance_test.py` (390).
+One flag, `stream_balance_loss_weight`, defaulting to `0.0`.
+
+**CPU-verified.** Disabled is exactly a no-op: the statistic is replaced by something that raises
+and a full forward and backward runs through the disabled path. The reported cross-entropy is
+bit-identical at weights 0, 0.05 and 0.5, because the loss reaches the optimizer through
+`attach_auxiliary_loss` — which is what keeps every loss comparison in the tranche between the
+same quantity. Over 200 AdamW steps on a four-block model the treatment moves the stream dispersion
+from 5.9e-08 to 3.0e-03 and the `H_res` gradient ratio from 2.4e-08 to 8.5e-05, and the degenerate
+`energy` statistic moves neither, which is the negative control.
+
+**NOT verified.** Whether reviving that gradient makes the model better. That is the experiment.
+
+### WP3 — diagnostics
+
+`src/olmo_core/train/callbacks/hyper_connection_monitor.py` (190), plus the stream metrics on
+`HyperConnectionStreamsMixin.compute_auxiliary_metrics`. Logs, per wrapped sub-layer and pooled:
+the mixer's displacement from initialisation, the `H_res` gradient norm and its ratio to the
+attention output projection's, the largest absolute residual logit, the doubly-stochastic row-sum
+error, the stream dispersion share, the stream usage entropy and imbalance, and the `H_res`
+matrices entry by entry at a slower interval.
+
+**NOT verified.** The callback has never run inside a `Trainer`. It is exercised only by the
+import and by its config's construction; the metric names and the interval logic are untested.
+**This is the weakest-tested thing in the deliverable and it carries the primary endpoint.** Run
+the smoke with `--monitor-interval 10` against the treatment entrypoint before trusting it.
+
+### WP4 — the design
+
+`docs/hc-ablation/EXPERIMENT-DESIGN.md` (240), `src/scripts/ablations/hc_power.py` (430).
+Four arms, a 2x2 of {learned Sinkhorn mixer, `H_res = I`} x {balancing off, on}, five seeds each.
+
+The headline conclusion is that **the loss endpoint cannot answer the question**: at the planning
+sigma the minimum detectable effect is 0.035 nats on the simple contrast and 0.049 on the
+interaction, against a literature effect of 0.030 for the whole of hyper-connections, of which
+this treatment is second-order. Thirty seeds an arm would not close it. So the primary endpoint is
+the mixer's displacement and the `H_res` gradient ratio, whose control value sits seven to eight
+orders of magnitude below its neighbours, and loss is a secondary reported with no claim attached.
+
+---
+
+## DECISIONS NEEDED FROM HUMAN
+
+1. **Is a held-out metric worth one file?** Stage 1 as specified measures the seed sigma of final
+   *training* cross-entropy. The 370M pre-registration's gate wants held-out bits-per-byte and
+   per-source inverse-variance weights, worth another 1.2-2.9x on sigma at zero compute, and
+   neither can be recovered from a run that never evaluated per source. Two routes, both costed in
+   EXPERIMENT-DESIGN.md section 8: score the saved checkpoints afterwards with a separate cheap
+   job, or port `--held-out-shards` from `edullm/hyper-connections-370m`'s
+   `train_hyper_connections.py` **before** stage 1 runs. This is the single highest-value decision
+   on the list and it is cheaper before than after.
+
+2. **Does `regmix-10b-v1` publish a validation split?** Two committed documents disagree. This
+   branch says it declares none; `38b66591`'s a100 tranche spec says it declares seven validation
+   shards, which reads like a confusion with its seven source categories. `edullm data
+   regmix-10b-v1 --json` carries no validation field. Settling it needs one `edullm_data.read`
+   from a machine with the grant. Decision 1 depends on the answer.
+
+3. **The p5 node the brief asked for does not exist here.** Both H100 profiles are
+   `provisioned: false` in the workload catalog and `places: unreliably` in the capacity file, and
+   the whole P pool was dry when it was last probed. The design is on `gpu-1xa10g`, one card per
+   cell, which places reliably and is cheaper for the same concurrency. If somebody can get H100
+   capacity provisioned, the design scales to it unchanged; if not, nothing needs to change.
+
+4. **Team and experiment name.** `--team input-core` and `--experiment hc-moe-stream-balance` are
+   this agent's choices, taken because `philote-dev` leads `input-core` and the 370M
+   pre-registration was charged there. Neither is registered by anything; change both freely.
+
+5. **`--steps` and `--save-interval` are estimates and the smoke replaces them.** The committed
+   3,000 and 125 come from an assumed 20% MFU on a shape nothing has measured. They must be
+   identical in the baseline and the treatment spec, and changing one without the other silently
+   confounds the horizon with the arm.
+
+6. **The stream-balancing weight, 0.01, is a guess.** Matched to `MoEConfig.lb_loss_weight`, on
+   losses that are on different scales. It is identical in both treated arms, which is the
+   requirement; whether it is the right magnitude is unknown and the four-cell pilot is where that
+   shows up.
+
+---
+
+## RISKS — what I most expect to fail on real hardware, in order
+
+1. **The router's auxiliary loss does not survive the write-out gate.** The load-balancing loss
+   reaches the optimizer through `attach_auxiliary_loss`, an autograd function that returns its
+   activation unchanged and seeds the aux loss's gradient in the backward pass. A hyper-connection
+   puts two einsums and an addition between that activation and the loss. I believe it survives —
+   the activation flows into the streams and the streams flow into the loss — but I could not run
+   it. If it does not, every MoE arm trains with an unbalanced router while looking healthy.
+   `test_router_auxiliary_loss_survives_the_write_out_gate` is the check and it needs a GPU.
+
+2. **Memory.** The term that decides whether `--rank-microbatch-size 8192` fits is not the
+   optimizer state but the fp32 logits: 8,192 tokens x 100,352 vocab is 3.06 GiB per copy, and at
+   the LM head's backward two or three copies can be live. The estimate lands between 18 and 21.5
+   GiB against the A10G's 22.35. It probably fits and it has no margin. Doubling the microbatch
+   doubles that term specifically, so a comfortable `peak_memory_gib` at 8192 does not license
+   16384.
+
+3. **Throughput.** Every wall-clock number is downstream of a 20% MFU assumption on a 32-expert
+   MoE that nothing has measured. If it is 12%, `--steps 3000` does not finish, and a timed-out
+   attempt is **not** retried — `RETRY_ONLY_WHAT_A_RETRY_FIXES` retries `Host EC2*` and exits on
+   everything else. That is why `--hours` is 20 against an estimate of 12.
+
+4. **The monitor callback has never run in a trainer.** It carries the primary endpoint and its
+   only exercise is an import. A wrong metric name or an interval that never fires would leave the
+   tranche with a loss curve and nothing else, which is the one outcome the design says is
+   uninterpretable.
+
+5. **FSDP over a four-dimensional residual.** Inherited from the dense prototype and untested
+   there too. At one card per cell FSDP is a no-op, so this tranche does not exercise it — which
+   means a later multi-card run is unprotected.
+
+6. **`torch.compile` is off and has to stay off in every arm.** Turning it on for one arm is a
+   confound, and it is one word in a YAML file.
+
+---
+
+## What was audited, and by whom
+
+Four adversarial read-only audits, two model families, two rounds. Round one covered the WP0
+launch artifacts before anything else was written; round two covered the whole deliverable.
+Every confirmed finding was fixed rather than recorded, and the fixes are in the commit messages.
+The largest were: SIGTERM never reaching the trainer through the logging wrapper; the second
+attempt not covering a wall-clock overrun, which made a 12-hour bound on a 12-hour run a certainty
+rather than a risk; a checkpoint interval four times the declared contract; `${...:-0}` as a
+silent path to a measured noise floor of exactly zero; and a launch checker that was green on four
+mutations that break production, one of them silent through a whole tranche.
+
+Where the two judges disagreed, the disagreement was settled by reading the source rather than
+averaged. One reported a missing `grouped_gemm` forcing a slow Python fallback in the MoE; it does
+not, because `MoEType.default` builds `MoEMLP`, which is `torch.bmm` over a fixed capacity, and
+the fallback lives in `DroplessMoEMLP`, which this factory never instantiates.
