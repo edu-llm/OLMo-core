@@ -60,7 +60,8 @@ edullm submit --spec .edullm/run.hc-baseline.yaml \
 `HEAD` rather than a literal SHA on purpose: `edullm check` prints the `commit_sha` it would
 submit, and it refuses a commit no remote branch contains, so step 2 tells you whether step 3
 pushed the right thing. The numbers below were checked at
-`9d6146871110521d35ea6bcff947fdb52ccb2e46`.
+`6ea77919cf5b0b138c4a12efe5e959e731b58eef` (the commit before this one-line edit; nothing but this
+sentence changed).
 
 Do not submit `.edullm/run.hc-treatment.yaml` yet. Its header lists three things that have to
 report first, one of which is a four-cell mechanism pilot costing about $50 that decides whether
@@ -78,7 +79,7 @@ check adds one refusal that is a property of the container rather than of the sp
   "cost": {"cells": 1, "hourly_rate_usd": "1.006", "maximum_attempts": 2,
            "maximum_runtime_hours": "1", "nodes": 1, "maximum_compute_cost_usd": "2.01"},
   "approval_class": "automatic", "approving_environment": "run-approval-automatic",
-  "commit_sha": "1ca04d68ee4128094e8a4dc3d97bfaa6cbadf2f4" }
+  "commit_sha": "6ea77919cf5b0b138c4a12efe5e959e731b58eef" }
 
 { "spec": ".edullm/run.hc-baseline.yaml", "hours": 20,
   "refused": false, "refusals": [],
@@ -86,7 +87,7 @@ check adds one refusal that is a property of the container rather than of the sp
            "maximum_runtime_hours": "20", "nodes": 1, "maximum_compute_cost_usd": "201.20"},
   "approval_class": "routine", "approving_environment": "run-approval-lead",
   "manifest": {"fanout": {"index_parameter": "seed", "size": 5}},
-  "commit_sha": "1ca04d68ee4128094e8a4dc3d97bfaa6cbadf2f4" }
+  "commit_sha": "6ea77919cf5b0b138c4a12efe5e959e731b58eef" }
 
 { "spec": ".edullm/run.hc-treatment.yaml", "hours": 20,
   "refused": false, "refusals": [],
@@ -94,7 +95,7 @@ check adds one refusal that is a property of the container rather than of the sp
            "maximum_runtime_hours": "20", "nodes": 1, "maximum_compute_cost_usd": "804.80"},
   "approval_class": "routine", "approving_environment": "run-approval-lead",
   "manifest": {"fanout": {"index_parameter": "arm-and-seed", "size": 20}},
-  "commit_sha": "1ca04d68ee4128094e8a4dc3d97bfaa6cbadf2f4" }
+  "commit_sha": "6ea77919cf5b0b138c4a12efe5e959e731b58eef" }
 ```
 
 All three carry the same three deferred checks, which no laptop can make: `no_published_image`,
