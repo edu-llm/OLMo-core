@@ -225,9 +225,9 @@ def test_olmoe_factory_is_separate_and_builds_mesh_from_launched_world(monkeypat
     assert moe.hidden_size == 1_024
     assert olmoe.data_loader.global_batch_size == 262_144
     assert olmoe.dataset.sequence_length == 2_048
-    assert olmoe.train_module.rank_microbatch_size == 32_768
+    assert olmoe.train_module.rank_microbatch_size == 16_384
     assert olmoe.train_module.max_sequence_length == 2_048
-    assert 262_144 // (8 * olmoe.train_module.rank_microbatch_size) == 1
+    assert 262_144 // (8 * olmoe.train_module.rank_microbatch_size) == 2
     assert olmoe.train_module.compile_model is True
     assert str(olmoe.train_module.dp_config.name) == "hsdp"
     assert olmoe.train_module.dp_config.num_replicas == 1
@@ -246,7 +246,7 @@ def test_olmoe_factory_is_separate_and_builds_mesh_from_launched_world(monkeypat
     "kwargs",
     [
         {"global_batch_size": 524_288},
-        {"rank_microbatch_size": 16_384},
+        {"rank_microbatch_size": 32_768},
         {"sequence_length": 4_096},
     ],
 )
@@ -282,7 +282,7 @@ def test_olmoe_probe_specs_are_separate_fixed_batch_capacity_block_arms():
         assert "global_batch_mult" not in json.dumps(spec["search_space"])
         assert spec["base_global_batch_size"] == 262_144
         assert spec["factory_kwargs"]["global_batch_size"] == 262_144
-        assert spec["factory_kwargs"]["rank_microbatch_size"] == 32_768
+        assert spec["factory_kwargs"]["rank_microbatch_size"] == 16_384
         assert spec["factory_kwargs"]["sequence_length"] == 2_048
         assert spec["experiment_factory"].endswith(":build_olmoe_hpo_experiment")
         assert spec["model_parameterization"] == {
@@ -326,7 +326,7 @@ def test_olmoe_curriculum_no_proxy_spec_combines_required_contracts():
     assert spec["model_parameterization"]["architecture"] == "olmoe_1B_7B"
     assert "global_batch_mult" not in json.dumps(spec["search_space"])
     assert spec["base_global_batch_size"] == 262_144
-    assert spec["factory_kwargs"]["rank_microbatch_size"] == 32_768
+    assert spec["factory_kwargs"]["rank_microbatch_size"] == 16_384
     assert spec["factory_kwargs"]["data_bucket"] == "edullm-data-us-east-2"
     assert spec["controller"]["worker_count"] == spec["max_workers"] == 6
     assert spec["controller"]["quantum"] == 50_331_648
@@ -364,7 +364,7 @@ def test_olmoe_runbook_pins_parallel_node_dispatch_and_launch_safety():
     assert "dry-run" in text
     assert "refuse-busy" in text
     assert "262,144" in text
-    assert "32,768" in text
+    assert "16,384" in text
     assert "2,048" in text
 
 

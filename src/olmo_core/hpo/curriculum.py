@@ -821,7 +821,7 @@ def build_olmoe_curriculum_hpo_experiment(
     *,
     sequence_length: int = 2048,
     global_batch_size: int = 262_144,
-    rank_microbatch_size: int = 32_768,
+    rank_microbatch_size: int = 16_384,
     data_seed: int = 210007,
     init_seed: int = 110007,
     eval_steps: int = 2,

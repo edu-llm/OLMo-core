@@ -93,12 +93,14 @@ def reader(monkeypatch):
             handed["region"] = region
             return adapter
 
-    def dataset_paths(dataset_id, version, *, s3, **_):
+    def dataset_paths(dataset_id, version, *, s3, **kwargs):
         handed["s3"] = s3
+        handed["dataset_paths_kwargs"] = kwargs
         return FakeManifest()
 
-    def resolve_latest(dataset_id, *, s3, **_):
+    def resolve_latest(dataset_id, *, s3, **kwargs):
         handed["resolve_latest_s3"] = s3
+        handed["resolve_latest_kwargs"] = kwargs
         return "v7"
 
     # Typed Any because these are modules being built rather than imported, and mypy is
@@ -146,6 +148,18 @@ def test_resolving_the_latest_version_uses_the_same_adapter(reader):
     )
 
     assert reader["resolve_latest_s3"] is reader["s3"]
+
+
+def test_explicit_data_bucket_reaches_reader_validation(reader):
+    entry.resolve_corpus(
+        dataset_id="pretrain/regmix-10b",
+        version="latest",
+        tokenizer_id="tokenizer/dolma2-bpe",
+        data_bucket="edullm-data-us-east-2",
+    )
+
+    assert reader["resolve_latest_kwargs"]["data_bucket"] == "edullm-data-us-east-2"
+    assert reader["dataset_paths_kwargs"]["data_bucket"] == "edullm-data-us-east-2"
 
 
 def test_a_healthy_corpus_keeps_the_width_the_manifest_declared():

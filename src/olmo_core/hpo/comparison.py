@@ -281,7 +281,7 @@ def build_olmoe_hpo_experiment(
     *,
     sequence_length: int = 2048,
     global_batch_size: int = 262_144,
-    rank_microbatch_size: int = 32_768,
+    rank_microbatch_size: int = 16_384,
     data_seed: int = 210007,
     init_seed: int = 110007,
     eval_steps: int = 2,
@@ -294,7 +294,7 @@ def build_olmoe_hpo_experiment(
     fixed_batch_contract = {
         "sequence_length": 2_048,
         "global_batch_size": 262_144,
-        "rank_microbatch_size": 32_768,
+        "rank_microbatch_size": 16_384,
     }
     requested_batch_contract = {
         "sequence_length": sequence_length,

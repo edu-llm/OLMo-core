@@ -15,13 +15,14 @@ object URIs by reading the manifest the validator sealed. There is no path liter
 file and there is deliberately no flag to supply one: a path typed on a command line is the
 failure above wearing different clothes.
 
-WHAT THE PLATFORM HANDS THIS PROCESS. Four environment variables, all set by the submission
-path rather than by the person submitting:
+WHAT THE PLATFORM HANDS THIS PROCESS. Four required environment variables, all set by the
+submission path rather than by the person submitting, plus an optional data-bucket override:
 
     EDULLM_DATASET_ID         pretrain/regmix-10b
     EDULLM_DATASET_VERSION    v1
     EDULLM_DATASET_TOKENIZER  tokenizer/dolma2-bpe
     EDULLM_CHECKPOINT_DIR     s3://.../teams/<team>/runs/<run id>/checkpoints/
+    EDULLM_DATA_BUCKET        edullm-data-us-east-2
 
 The first three come from the registry entry for whatever the form's dataset field named, so
 they cannot disagree with the record. The fourth is why a second attempt resumes instead of
@@ -78,7 +79,7 @@ import sys
 import time
 import traceback
 from dataclasses import dataclass, replace
-from typing import Dict, Iterator, List, Optional, cast
+from typing import Any, Dict, Iterator, List, Optional, cast
 
 import rich
 import torch
@@ -411,7 +412,9 @@ def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: s
     )
 
 
-def resolve_corpus(*, dataset_id: str, version: str, tokenizer_id: str) -> Corpus:
+def resolve_corpus(
+    *, dataset_id: str, version: str, tokenizer_id: str, data_bucket: Optional[str] = None
+) -> Corpus:
     # Imported here rather than at the top so that everything above can be exercised on a
     # host without the reader installed. In the image it is always present -- the Dockerfile
     # asserts the import at build time -- so this defers nothing that can fail in a run.
@@ -442,7 +445,10 @@ def resolve_corpus(*, dataset_id: str, version: str, tokenizer_id: str) -> Corpu
     # person poking at the image by hand does not have to look one up first.
     if version in ("", "latest"):
         try:
-            resolved = resolve_latest(dataset_id, s3=s3)
+            latest_kwargs: Dict[str, Any] = {"s3": s3}
+            if data_bucket is not None:
+                latest_kwargs["data_bucket"] = data_bucket
+            resolved = resolve_latest(dataset_id, **latest_kwargs)
         except Refusal:
             raise
         except BaseException as exc:
@@ -464,7 +470,10 @@ def resolve_corpus(*, dataset_id: str, version: str, tokenizer_id: str) -> Corpu
     # and a role without that grant and a registry entry pointing at an unpublished prefix
     # both arrive here as a failed read. read_failure separates them.
     try:
-        read = dataset_paths(dataset_id, version, s3=s3)
+        read_kwargs: Dict[str, Any] = {"s3": s3}
+        if data_bucket is not None:
+            read_kwargs["data_bucket"] = data_bucket
+        read = dataset_paths(dataset_id, version, **read_kwargs)
     except Refusal:
         raise
     except BaseException as exc:
@@ -566,6 +575,7 @@ def build_config(opts, overrides: List[str]):
         dataset_id=opts.dataset_id,
         version=opts.dataset_version,
         tokenizer_id=opts.dataset_tokenizer,
+        data_bucket=opts.data_bucket,
     )
     log.info(
         "%s/%s: %d shards, dtype %s, tokenizer %s",
@@ -846,6 +856,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dataset-tokenizer", default=os.environ.get("EDULLM_DATASET_TOKENIZER", "")
     )
+    parser.add_argument("--data-bucket", default=os.environ.get("EDULLM_DATA_BUCKET") or None)
     parser.add_argument(
         "--save-folder",
         default=os.environ.get("EDULLM_CHECKPOINT_DIR", ""),
