@@ -318,6 +318,10 @@ def build_olmoe_hpo_experiment(
         dataset_group=dataset_group,
         data_bucket=data_bucket,
     )
+    # Cold torch.compile latency can differ substantially across ranks for OLMoE. Keep metric
+    # collectives on the training thread so an early rank cannot time out an asynchronous Gloo
+    # reduction while its peers are still compiling their first microbatch.
+    config.trainer.async_bookkeeping = False
     config.model = TransformerConfig.olmoe_1B_7B(vocab_size=config.model.vocab_size)
     config.train_module = TransformerTrainModuleConfig(
         rank_microbatch_size=rank_microbatch_size,

@@ -229,6 +229,7 @@ def test_olmoe_factory_is_separate_and_builds_mesh_from_launched_world(monkeypat
     assert olmoe.train_module.max_sequence_length == 2_048
     assert 262_144 // (8 * olmoe.train_module.rank_microbatch_size) == 4
     assert olmoe.train_module.compile_model is True
+    assert olmoe.trainer.async_bookkeeping is False
     assert str(olmoe.train_module.dp_config.name) == "hsdp"
     assert olmoe.train_module.dp_config.num_replicas == 1
     assert olmoe.train_module.dp_config.get_replicate_and_shard_degree(8) == (1, 8)
