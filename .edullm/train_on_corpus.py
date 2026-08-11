@@ -1671,6 +1671,15 @@ def train(config, opts=None) -> None:
         if getattr(opts, "no_balance_bands", False):
             assertion_kwargs["drop_frac_max"] = None
             assertion_kwargs["dead_expert_frac_max"] = None
+            # Expert-parallel dispatch reports ``drop_frac_upper_bound`` and cannot currently
+            # produce the positional-drop availability signal. Requiring those exact diagnostics
+            # would still kill the throughput run even though their magnitude bands are disabled.
+            # Keep anti-vacuity checks for the independent gate-mass and dead-expert telemetry.
+            assertion_kwargs["require_present"] = (
+                "dead_expert_frac_global",
+                "gate_mass_mean",
+            )
+            assertion_kwargs["assert_instrumented"] = False
             # THE RAW-CV CEILING IS A BALANCE BAND AND `--no-balance-bands` MUST DISABLE IT. The
             # flag exists for "a run whose purpose is to observe routing imbalance past the
             # steady-state window", and a CV ceiling is the most direct possible way to kill exactly
