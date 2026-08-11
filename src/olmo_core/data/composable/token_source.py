@@ -26,7 +26,10 @@ from .source_abc import SourceABC
 from .utils import SEED_NOT_SET, as_ndarray, resolve_seed
 
 if TYPE_CHECKING:
-    from .sampling_document_source import SamplingDocumentSource, SamplingDocumentSourceConfig
+    from .sampling_document_source import (
+        SamplingDocumentSource,
+        SamplingDocumentSourceConfig,
+    )
     from .sampling_token_source import SamplingTokenSource, SamplingTokenSourceConfig
     from .sliced_token_source import SlicedTokenSource
 

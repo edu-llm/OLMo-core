@@ -6,7 +6,12 @@ import os
 import pickle
 import tempfile
 import traceback
-from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    Executor,
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    as_completed,
+)
 from contextlib import ExitStack
 from dataclasses import dataclass
 from functools import partial

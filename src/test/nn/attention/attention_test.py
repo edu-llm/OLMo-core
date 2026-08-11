@@ -6,7 +6,10 @@ import torch.nn.functional as F
 from torch.distributed.tensor import Shard, init_device_mesh
 
 from olmo_core.data.utils import attention_mask_to_cache_leftpad
-from olmo_core.distributed.checkpoint import load_model_and_optim_state, save_model_and_optim_state
+from olmo_core.distributed.checkpoint import (
+    load_model_and_optim_state,
+    save_model_and_optim_state,
+)
 from olmo_core.distributed.utils import get_rank, get_world_size
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.nn.attention import (
@@ -21,7 +24,10 @@ from olmo_core.nn.attention import (
     RingAttentionLoadBalancerType,
     SlidingWindowAttentionConfig,
 )
-from olmo_core.nn.attention.ring import RingContextParallelStyle, UlyssesContextParallelStyle
+from olmo_core.nn.attention.ring import (
+    RingContextParallelStyle,
+    UlyssesContextParallelStyle,
+)
 from olmo_core.nn.layer_norm import LayerNormConfig
 from olmo_core.nn.rope import RoPEConfig, RoPEType
 from olmo_core.testing import (

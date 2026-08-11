@@ -31,7 +31,10 @@ from olmo_core.nn.transformer import (
 )
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
-from olmo_core.train.train_module.config import TrainModuleConfig, validate_precision_support
+from olmo_core.train.train_module.config import (
+    TrainModuleConfig,
+    validate_precision_support,
+)
 
 if TYPE_CHECKING:
     from .pipeline_train_module import TransformerPipelineTrainModule

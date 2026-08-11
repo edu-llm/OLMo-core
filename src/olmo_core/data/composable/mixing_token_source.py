@@ -11,8 +11,18 @@ from olmo_core.config import Config
 from olmo_core.exceptions import OLMoConfigurationError
 
 from .sampling_token_source import SamplingTokenSource
-from .token_source import ConcatenatedTokenSource, TokenRange, TokenSource, TokenSourceConfig
-from .utils import SEED_NOT_SET, calculate_sample_sizes, format_token_count, resolve_seed
+from .token_source import (
+    ConcatenatedTokenSource,
+    TokenRange,
+    TokenSource,
+    TokenSourceConfig,
+)
+from .utils import (
+    SEED_NOT_SET,
+    calculate_sample_sizes,
+    format_token_count,
+    resolve_seed,
+)
 
 log = logging.getLogger(__name__)
 

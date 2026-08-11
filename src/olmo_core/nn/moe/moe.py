@@ -14,7 +14,11 @@ from torch.distributed.tensor.parallel import (
 )
 
 from olmo_core.config import DType, StrEnum
-from olmo_core.distributed.parallel import flatten_mesh, get_pp_stage_mesh, get_world_mesh
+from olmo_core.distributed.parallel import (
+    flatten_mesh,
+    get_pp_stage_mesh,
+    get_world_mesh,
+)
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.ops import attach_auxiliary_loss
 

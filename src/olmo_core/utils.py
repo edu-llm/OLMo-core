@@ -14,7 +14,18 @@ from functools import lru_cache
 from itertools import cycle, islice
 from queue import Queue
 from threading import Thread
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypeVar, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    TypeVar,
+    Union,
+    cast,
+)
 
 import rich
 import torch
@@ -132,7 +143,11 @@ def get_default_device() -> torch.device:
     Get the default device.
     """
 
-    from .distributed.utils import backend_supports_cpu, backend_supports_cuda, is_distributed
+    from .distributed.utils import (
+        backend_supports_cpu,
+        backend_supports_cuda,
+        is_distributed,
+    )
 
     if is_distributed():
         backend = dist.get_backend()

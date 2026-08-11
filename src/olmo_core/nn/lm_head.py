@@ -21,7 +21,11 @@ from olmo_core.doc_utils import beta_feature
 from olmo_core.exceptions import OLMoConfigurationError
 
 from .config import ModuleConfig
-from .functional import cross_entropy_loss, fused_linear_cross_entropy_loss, l2_normalize
+from .functional import (
+    cross_entropy_loss,
+    fused_linear_cross_entropy_loss,
+    l2_normalize,
+)
 from .layer_norm import LayerNormConfig
 
 __all__ = [

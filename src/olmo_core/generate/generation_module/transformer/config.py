@@ -12,7 +12,9 @@ from olmo_core.doc_utils import beta_feature
 from olmo_core.float8 import Float8Config
 from olmo_core.generate.generation_module.config import GenerationConfig
 from olmo_core.nn.transformer import TransformerConfig
-from olmo_core.train.train_module.transformer.config import TransformerDataParallelConfig
+from olmo_core.train.train_module.transformer.config import (
+    TransformerDataParallelConfig,
+)
 from olmo_core.utils import log_or_print
 
 log = logging.getLogger(__name__)

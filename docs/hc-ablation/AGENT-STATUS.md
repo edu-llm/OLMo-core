@@ -352,6 +352,38 @@ to act on.
 
 ---
 
+## Every file this branch touches
+
+Twenty, and nothing else. A repo-wide `make style` run had incidentally reformatted 43 more,
+including `src/olmo_core/nn/moe/moe.py`, which the brief forbids touching and which another team
+runs against on `edullm/moe-m1-pilot`; that was a cosmetic import reflow with no semantics in it
+and it has been reverted. `git diff hc/moe-base..HEAD --name-only -- src/olmo_core/nn/moe/` is
+empty, and so is the same query for `src/olmo_core/nn/transformer/block.py` — the five MoE block
+classes are wrapped by subclassing rather than by editing.
+
+| file | new? |
+| --- | --- |
+| `src/olmo_core/nn/hyper_connections.py` | edited — the treatment, the statistics, the metrics |
+| `src/olmo_core/nn/transformer/hc_moe_block.py` | **new** — four hyper-connected MoE block classes |
+| `src/olmo_core/nn/transformer/hc_block.py` | edited — the shared block mixin |
+| `src/olmo_core/nn/transformer/model.py` | edited — the stream mixin and `HyperConnectionMoETransformer` |
+| `src/olmo_core/nn/transformer/config.py` | edited — enum members, build wiring, validation |
+| `src/olmo_core/nn/transformer/__init__.py` | edited — exports |
+| `src/olmo_core/train/callbacks/hyper_connection_monitor.py` | **new** — the diagnostics |
+| `src/olmo_core/train/callbacks/__init__.py` | edited — exports |
+| `src/scripts/ablations/hc_ablation.py` | edited — the MoE arms |
+| `src/scripts/ablations/hc_gate1_check.py` | edited — 30 checks to 63 |
+| `src/scripts/ablations/hc_launch_check.py` | **new** — what `edullm check` cannot ask |
+| `src/scripts/ablations/hc_power.py` | **new** — the power arithmetic |
+| `src/test/nn/hc_moe_block_test.py` | **new** |
+| `src/test/nn/stream_balance_test.py` | **new** |
+| `.edullm/train_hc_moe.py` | **new** — the arm entrypoint |
+| `.edullm/run.hc-smoke.yaml` | **new** |
+| `.edullm/run.hc-baseline.yaml` | **new** |
+| `.edullm/run.hc-treatment.yaml` | **new** |
+| `docs/hc-ablation/EXPERIMENT-DESIGN.md` | **new** |
+| `docs/hc-ablation/AGENT-STATUS.md` | **new** — this file |
+
 ## What was audited, and by whom
 
 Four adversarial read-only audits, two model families, two rounds. Round one covered the WP0

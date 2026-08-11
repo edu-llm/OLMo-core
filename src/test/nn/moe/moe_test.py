@@ -7,7 +7,10 @@ import torch.distributed as dist
 from torch.distributed.tensor import Replicate, Shard, distribute_tensor
 
 from olmo_core.config import DType
-from olmo_core.distributed.checkpoint import load_model_and_optim_state, save_model_and_optim_state
+from olmo_core.distributed.checkpoint import (
+    load_model_and_optim_state,
+    save_model_and_optim_state,
+)
 from olmo_core.distributed.parallel import (
     ExpertParallelConfig,
     build_expert_parallel_mesh,
@@ -15,7 +18,12 @@ from olmo_core.distributed.parallel import (
 )
 from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.nn.feed_forward import FeedForwardConfig
-from olmo_core.nn.moe import MoEConfig, MoELoadBalancingLossGranularity, MoERouterConfig, MoEType
+from olmo_core.nn.moe import (
+    MoEConfig,
+    MoELoadBalancingLossGranularity,
+    MoERouterConfig,
+    MoEType,
+)
 from olmo_core.testing import (
     has_grouped_gemm,
     requires_gpu,

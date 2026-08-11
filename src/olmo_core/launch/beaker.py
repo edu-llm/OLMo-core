@@ -35,7 +35,12 @@ from ..exceptions import (
     OLMoEnvironmentError,
 )
 from ..train.callbacks.beaker import BEAKER_RESULT_DIR
-from ..utils import LOG_FILTER_TYPE_ENV_VAR, LogFilterType, generate_uuid, prepare_cli_environment
+from ..utils import (
+    LOG_FILTER_TYPE_ENV_VAR,
+    LogFilterType,
+    generate_uuid,
+    prepare_cli_environment,
+)
 from ..version import VERSION
 
 log = logging.getLogger(__name__)
@@ -591,7 +596,9 @@ class BeakerLaunchConfig(Config):
         # Check for webhook URL env var if needed.
         slack_webhook_url: str | None = None
         if follow and slack_notifications is not False:
-            from olmo_core.train.callbacks.slack_notifier import SLACK_WEBHOOK_URL_ENV_VAR
+            from olmo_core.train.callbacks.slack_notifier import (
+                SLACK_WEBHOOK_URL_ENV_VAR,
+            )
 
             if SLACK_WEBHOOK_URL_ENV_VAR in os.environ:
                 slack_webhook_url = os.environ[SLACK_WEBHOOK_URL_ENV_VAR]
