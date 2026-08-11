@@ -519,12 +519,53 @@ def resolve_corpus(*, dataset_id: str, version: str, tokenizer_id: str) -> Corpu
     # environment, which on Batch is the workload role.
     s3 = Boto3S3.default()
 
+    # WHICH BUCKET THE CORPUS IS READ OUT OF, AND WHY OMITTING IT IS FATAL ON THE BLOCK RATHER
+    # THAN MERELY SLOW.
+    #
+    # `edullm_data.read.DATA_BUCKET` is the module constant `edullm-data`, in us-east-1. The
+    # reader takes `data_bucket` as a keyword and honours no environment variable of its own, so
+    # every call that omits it reads `edullm-data` whatever the platform said.
+    #
+    # That was correct for as long as every consumer was a Batch job in us-east-1. The capacity
+    # block is not: it is eight machines in us-east-2 reading a mirror at
+    # `edullm-data-us-east-2`, and `infra/iam/block-fleet-roles.yaml` grants the node role
+    # `s3:GetObject` on `${DataBucket}` -- that mirror -- AND ON NOTHING ELSE. So the reader's
+    # default sends the run at a bucket its own instance profile may not read, and every rank
+    # dies at `THE_ROLE_MAY_NOT_READ_THE_CORPUS` (exit 65) in the first minute of a reservation
+    # that is already billing. It is not a cross-region slowness question; it is a denial.
+    #
+    # THE PLATFORM HAS BEEN EXPORTING THE ANSWER ALL ALONG AND THIS FILE DID NOT READ IT.
+    # `infra/block-node-bootstrap.sh:214` writes EDULLM_BLOCK_DATA_BUCKET into the node settings
+    # and `infra/block-distributed-launch.sh:264` passes it into the container as
+    # EDULLM_DATA_BUCKET. Reading it here is what makes the mirror reachable at all.
+    #
+    # AND ON THIS BRANCH IT IS NEWLY LOAD-BEARING, WHICH IS THE PART WORTH WRITING DOWN. The
+    # image the fleet baked carries a copy of this script that already does this, but the block
+    # mounts the branch at /work and this file puts its own `src/` first on `sys.path` -- so the
+    # script that RUNS is this one. The sys.path bootstrap that fixed the library mismatch also
+    # made every fix living only in the image's script disappear. This is one of them.
+    #
+    # UNSET FALLS THROUGH TO THE READER'S OWN DEFAULT rather than to a literal repeated here. A
+    # second copy of `edullm-data` in this file is the copy that is wrong on the day the
+    # reader's moves, and every existing caller -- Batch, a laptop, a test -- sets nothing and
+    # must keep getting exactly what it got before.
+    data_bucket = os.environ.get("EDULLM_DATA_BUCKET") or None
+    bucket_kwargs = {"data_bucket": data_bucket} if data_bucket else {}
+    # Logged because `show` prints the shard list as a count, so the bucket is otherwise nowhere
+    # a person watching the first minute of a run can see it.
+    log.info(
+        "reading %s/%s from bucket %s",
+        dataset_id,
+        version,
+        data_bucket or "the reader's own default",
+    )
+
     # "latest" resolves through the catalog rather than being an alias anybody can move. A
     # pinned version is the normal case and what the platform sends; this branch exists so a
     # person poking at the image by hand does not have to look one up first.
     if version in ("", "latest"):
         try:
-            resolved = resolve_latest(dataset_id, s3=s3)
+            resolved = resolve_latest(dataset_id, s3=s3, **bucket_kwargs)
         except Refusal:
             raise
         except BaseException as exc:
@@ -546,7 +587,7 @@ def resolve_corpus(*, dataset_id: str, version: str, tokenizer_id: str) -> Corpu
     # and a role without that grant and a registry entry pointing at an unpublished prefix
     # both arrive here as a failed read. read_failure separates them.
     try:
-        read = dataset_paths(dataset_id, version, s3=s3)
+        read = dataset_paths(dataset_id, version, s3=s3, **bucket_kwargs)
     except Refusal:
         raise
     except BaseException as exc:
@@ -916,6 +957,11 @@ def build_config(opts, overrides: List[str]):
     factory_kwargs: Dict[str, Any] = {}
     if opts.quantize is not None:
         factory_kwargs["quantize"] = opts.quantize
+    # Same `is not None` discipline as `quantize`, and for the same reason: the Maple factories
+    # accept `attn_backend` and resolve it themselves when it is absent, and no `olmo2_*` factory
+    # accepts the keyword at all. Passing it unconditionally would break every non-Maple preset.
+    if getattr(opts, "attn_backend", None) is not None:
+        factory_kwargs["attn_backend"] = opts.attn_backend
     model_config = factory(vocab_size=corpus.tokenizer.padded_vocab_size(), **factory_kwargs)
 
     # THE LOSS IMPLEMENTATION, WHICH IS A MEMORY DECISION MASQUERADING AS A NUMERICS ONE.
@@ -1381,6 +1427,149 @@ def a_precision_this_hardware_does_not_have(config) -> Optional[str]:
     )
 
 
+#: The backend a sliding-window run has to be on for its own headline feature to be a saving
+#: rather than a cost. See :func:`the_attention_backend_this_run_resolved`.
+SWA_REQUIRES_BACKEND = "flash_2"
+
+
+def attention_backends_in(config) -> List[Tuple[str, str, Optional[List[int]]]]:
+    """Every attention config this model will build, as (path, backend, window pattern).
+
+    Read off the merged config rather than off `_maple_uniform_attn_backend()` a second time,
+    because what a probe answers and what the config carries are two different facts and it is
+    the second one that trains. A dotlist override can set `model.block.sequence_mixer.backend`
+    directly, `--attn-backend` reaches the factory as a kwarg, and `block_overrides` can give
+    one layer a backend the others do not have -- none of which a re-probe would see.
+
+    `backend` unset is reported as "unresolved" rather than guessed at: left None it is chosen
+    PER LAYER at build time from whether that layer has a window, which for a 3:1 SWA layout is
+    a 3:1 kernel split rather than one backend. That is its own defect and the caller says so.
+    """
+    found: List[Tuple[str, str, Optional[List[int]]]] = []
+
+    def walk(node, path: str) -> None:
+        if isinstance(node, dict):
+            # RECOGNISED BY `_CLASS_`, WHICH `as_config_dict` PRESERVES (`include_class_name=True`,
+            # `Config.CLASS_NAME_FIELD`), rather than by duck-typing on the presence of `n_heads`.
+            # The point of the walk is to find the configs that HAVE a backend, and duck-typing
+            # would miss exactly the ones that matter: `exclude_none=True` drops `backend` and
+            # `sliding_window` when they are unset, so an unresolved backend -- the split-kernel
+            # defect this function reports -- is invisible to a test that requires those keys.
+            #
+            # `endswith` rather than an exact module path, so a moved module is still recognised.
+            # THE LEADING DOT IS LOAD-BEARING: `SlidingWindowAttentionConfig` also ends with
+            # "AttentionConfig", and matching it would append a windowed entry carrying no backend
+            # -- an "unresolved" refusal on every SWA model, i.e. this guard failing closed on
+            # exactly the configuration it is meant to pass. `_CLASS_` is module-qualified
+            # (`olmo_core.nn.attention.AttentionConfig`), so the dot distinguishes them.
+            #
+            # A `sequence_mixer` holding a recurrent mixer (GatedDeltaNetConfig) does not match and
+            # is correctly skipped: it has no attention backend to report.
+            if str(node.get("_CLASS_", "")).endswith(".AttentionConfig"):
+                backend = node.get("backend") or "unresolved"
+                window = node.get("sliding_window")
+                pattern = window.get("pattern") if isinstance(window, dict) else None
+                found.append((path or "model", str(backend), pattern))
+            for key, value in node.items():
+                walk(value, f"{path}.{key}" if path else str(key))
+        elif isinstance(node, (list, tuple)):
+            for position, value in enumerate(node):
+                walk(value, f"{path}[{position}]")
+
+    walk(config.as_config_dict(), "")
+    return found
+
+
+def the_attention_backend_this_run_resolved(config) -> Tuple[str, List[str]]:
+    """What to print about the attention backend, and every reason the number would be wrong.
+
+    THE FAILURE THIS EXISTS FOR IS THE ONE THAT COMPLETES AND REPORTS. `_maple_uniform_attn_backend()`
+    probes for flash-attn and, when the import fails, returns `AttentionBackendName.torch` with a
+    `log.info` and nothing else -- so a run whose image lacks the package trains every layer on
+    torch SDPA, exits zero, and reports a throughput number. Nothing in the config, the summary
+    or the exit code says which kernel produced it.
+
+    AND ON A SLIDING-WINDOW MODEL THAT NUMBER IS NOT MERELY LOW, IT IS MEASURING A DIFFERENT
+    MODEL'S ARITHMETIC. `TorchAttentionBackend` implements a window by materialising a dense
+    `(s, s)` boolean mask (`nn/attention/backend.py:421-434`), and `:371` reads
+    `is_causal=attn_mask is None` -- so the moment a window exists `is_causal` goes False and
+    SDPA loses its causal fast path. A sliding layer then computes the FULL `s x s` score matrix
+    and discards the part outside the window, which is MORE arithmetic than plain global causal
+    attention, not less. A 3:1 SWA:global layout therefore runs at roughly 1.75x the attention
+    cost of the global-only model it was supposed to beat: the headline efficiency feature,
+    inverted, at full price, with an ordinary-looking log.
+
+    A crash costs minutes. A throughput number measured on the pessimized path costs the
+    comparison it was funded to make, and it costs it silently -- so this refuses by default and
+    the waiver is a flag somebody has to type.
+
+    Returns the line to print unconditionally and the refusals, in the collect-rather-than-raise
+    shape the caller uses so a dry run can warn where a real run stops.
+    """
+    attentions = attention_backends_in(config)
+    if not attentions:
+        # Not every factory builds attention -- a recurrent mixer carries none. Nothing to say
+        # and nothing to refuse; silence here is correct rather than a missed check.
+        return ("attention: no attention config in this model", [])
+
+    backends = sorted({backend for _, backend, _ in attentions})
+    windowed = [
+        (path, backend, pattern)
+        for path, backend, pattern in attentions
+        if pattern and any(size != -1 for size in pattern)
+    ]
+
+    summary = (
+        f"attention backend: {', '.join(backends)} "
+        f"across {len(attentions)} attention config(s), "
+        f"{len(windowed)} of them with a sliding-window pattern"
+    )
+
+    refusals: List[str] = []
+
+    # UNIFORMITY FIRST, because a split is wrong even when both halves are fast. MFU is the
+    # dependent variable of the E-sweep, and two kernels in one model make it non-comparable to
+    # a baseline measured with one.
+    if len(backends) > 1:
+        refusals.append(
+            f"this model would run {len(backends)} different attention backends "
+            f"({', '.join(backends)}), so its throughput is not comparable to any baseline "
+            "measured with one. The Maple factory pins a single backend for every layer; a "
+            "dotlist override or a block_override has un-pinned it."
+        )
+
+    if "unresolved" in backends:
+        refusals.append(
+            "at least one attention config carries no backend, which is NOT a default -- it is "
+            "resolved per layer at build time from whether that layer has a window, so a 3:1 "
+            "SWA layout becomes a 3:1 kernel split (sliding layers on flash_2, global layers on "
+            "torch SDPA). Pass --attn-backend, or use a factory that pins one."
+        )
+
+    if windowed and backends == ["torch"]:
+        refusals.append(
+            f"every layer would run the torch SDPA backend and {len(windowed)} of this model's "
+            "attention configs carry a sliding-window pattern. That backend implements a window "
+            "by materialising a dense (s, s) mask, which forces is_causal=False and makes each "
+            "sliding layer compute the FULL score matrix -- MORE attention arithmetic than "
+            "global causal attention, not less. A throughput or MFU number measured here "
+            "describes the pessimized path rather than the architecture, and it completes and "
+            "looks ordinary, which is why this is a refusal rather than a warning.\n\n"
+            "flash-attn 2 is missing from the environment: `_maple_uniform_attn_backend()` "
+            "probes `has_flash_attn_2()` and silently falls back. On the capacity block the "
+            "likely cause is that the fleet's image was baked from a commit whose "
+            "`.edullm/Dockerfile` does not install it -- the branch's `src/` rides along on "
+            "sys.path, but a pip package cannot.\n\n"
+            "Two ways forward. Re-bake the fleet image from a commit that installs the pinned "
+            "flash-attn wheel, which is what makes the measurement worth taking. Or, if a "
+            "number on the un-fixed path is genuinely what is wanted, pass "
+            "--allow-pessimized-attention: it proceeds, and every line it prints says the "
+            "number describes the dense-mask path."
+        )
+
+    return (summary, refusals)
+
+
 class LossWatcher(Callback):
     """Keeps what the summary can only learn while the run is still going.
 
@@ -1786,6 +1975,42 @@ def build_parser() -> argparse.ArgumentParser:
         "comparison paired; this is X4a's bf16 arm, NOT the same as omitting. 'ternary' is the "
         "quantized arm. 'off' is an explicit spelling of the default. Maple factories only.",
     )
+    # THE ATTENTION BACKEND, WHICH IS A THROUGHPUT-MEASUREMENT CONTROL RATHER THAN A KERNEL
+    # PREFERENCE. See `the_attention_backend_this_run_resolved`.
+    #
+    # Default None = omit the keyword, so the Maple factory keeps probing for flash-attn and
+    # pinning one backend for every layer, and every non-Maple factory is unaffected by this flag
+    # existing. Naming a value here overrides that probe -- which is how a run says "measure this
+    # kernel" rather than "measure whatever the image happens to carry".
+    parser.add_argument(
+        "--attn-backend",
+        default=None,
+        choices=["torch", "flash_2", "flash_3", "flash_4"],
+        help="Pin ONE attention backend for every layer. Left unset, the Maple factories probe "
+        "for flash-attn 2 and pin what they find, which is uniform but depends on the image. "
+        "Note the torch backend implements a sliding window with a dense (s, s) mask and is a "
+        "PESSIMIZATION on an SWA model -- see --allow-pessimized-attention. Maple factories only.",
+    )
+    # THE WAIVER, WHICH IS DELIBERATELY A FLAG SOMEBODY HAS TO TYPE.
+    #
+    # The refusal it waives exists because the failure it guards is a run that COMPLETES and
+    # reports a number from the wrong kernel. There is no exit code, no traceback and no config
+    # field that distinguishes it, so the only two designs available are "refuse by default" and
+    # "hope somebody notices". A crash costs minutes; a wrong MFU number costs the comparison.
+    #
+    # Not `--force`, and not folded into an existing escape hatch, so that it appears verbatim in
+    # the recorded command line of any run that used it. The number and the waiver are then the
+    # same artifact, and nobody has to reconstruct which one produced which.
+    parser.add_argument(
+        "--allow-pessimized-attention",
+        action="store_true",
+        help="Proceed even when every layer would run the torch SDPA backend on a model with a "
+        "sliding-window pattern -- which computes the FULL score matrix per sliding layer, ~1.75x "
+        "the attention arithmetic of global causal attention at a 3:1 layout. Refused by default "
+        "because such a run completes and reports an ordinary-looking throughput number. With "
+        "this flag the run proceeds and every line it prints says the number describes the "
+        "dense-mask path.",
+    )
     parser.add_argument("--sequence-length", type=int, default=2048)
     parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--save-interval", type=int, default=100)
@@ -2080,6 +2305,37 @@ def main() -> None:
             log.warning("%s", unusable)
         else:
             raise Refusal(Stage.THE_DEVICE_CANNOT_DO_THE_REQUESTED_PRECISION, unusable)
+
+    # THE BACKEND IS PRINTED ON EVERY RUN, WHETHER OR NOT IT IS A PROBLEM, so the log proves
+    # which kernel produced a number instead of implying it. A throughput measurement whose
+    # denominator is unstated is how a benchmark reports the wrong sign and reproduces cleanly,
+    # and the kernel is part of that denominator.
+    #
+    # Printed on rank 0 only. Thirty-two identical lines is not thirty-two times the evidence,
+    # and the one that matters is the one next to the config the same rank prints.
+    backend_summary, backend_refusals = the_attention_backend_this_run_resolved(config)
+    if get_rank() == 0:
+        log.info("%s", backend_summary)
+    if backend_refusals:
+        explanation = "\n\n".join(backend_refusals)
+        if opts.allow_pessimized_attention:
+            # WAIVED, AND SAID SO LOUDLY AND REPEATEDLY. The point of the waiver is a number
+            # somebody wanted from the un-fixed path; the point of the label is that nobody
+            # reading the log later mistakes it for a number from the fixed one.
+            log.warning(
+                "PROCEEDING ON A PESSIMIZED ATTENTION PATH BECAUSE "
+                "--allow-pessimized-attention WAS PASSED. EVERY THROUGHPUT AND MFU NUMBER "
+                "FROM THIS RUN DESCRIBES THE DENSE-MASK SWA PATH AND NOT THE ARCHITECTURE. "
+                "Label it that way wherever it is reported.\n\n%s",
+                explanation,
+            )
+        elif opts.dry_run:
+            # A dry run builds nothing and measures nothing, so it cannot produce a wrong
+            # number and must not be stopped. Telling the person who is about to spend the
+            # fleet is the entire point of a dry run.
+            log.warning("%s", explanation)
+        else:
+            raise Refusal(Stage.THE_CONFIG_WOULD_NOT_BUILD, explanation)
 
     if opts.dry_run:
         show(config)
