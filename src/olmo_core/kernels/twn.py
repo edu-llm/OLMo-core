@@ -135,7 +135,9 @@ def _block_shape(n_trail: int) -> Tuple[int, int]:
     return max(1, 2048 // block_b), block_b
 
 
-def fused_twn_quantize(w: torch.Tensor, *, in_dim: int) -> Optional[torch.Tensor]:
+def fused_twn_quantize(
+    w: torch.Tensor, *, in_dim: int, delta_factor: Optional[float] = None
+) -> Optional[torch.Tensor]:
     """
     Ternarize ``w`` with the TWN rule in a single fused kernel.
 
@@ -144,6 +146,7 @@ def fused_twn_quantize(w: torch.Tensor, *, in_dim: int) -> Optional[torch.Tensor
     :param w: The latent weight.
     :param in_dim: The input-feature axis to reduce over. May be negative; callers routinely
         pass ``-1`` for a 2-D :class:`torch.nn.Linear` weight.
+    :param delta_factor: The threshold constant, defaulting to TWN's ``0.7``.
 
     :returns: The quantized weight, or ``None`` if the fused path does not apply, in which case
         the caller should fall back to the reference implementation.
@@ -153,6 +156,8 @@ def fused_twn_quantize(w: torch.Tensor, *, in_dim: int) -> Optional[torch.Tensor
 
     from ..nn.quantization import TWN_DELTA_FACTOR
 
+    if delta_factor is None:
+        delta_factor = TWN_DELTA_FACTOR
     source = w.detach().contiguous()
     axis = in_dim % source.ndim
     n_reduce = source.shape[axis]
@@ -168,7 +173,7 @@ def fused_twn_quantize(w: torch.Tensor, *, in_dim: int) -> Optional[torch.Tensor
         out.view(n_lead, n_reduce, n_trail),
         n_reduce,
         n_trail,
-        TWN_DELTA_FACTOR,
+        delta_factor,
         BLOCK_R=block_r,
         BLOCK_B=block_b,
     )

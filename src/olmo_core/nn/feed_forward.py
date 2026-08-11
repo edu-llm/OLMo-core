@@ -230,6 +230,7 @@ class FeedForward(nn.Module):
                 bias=bias,
                 enabled=quant.enabled,
                 cache_quantized_weight=quant.cache_quantized_weight,
+                delta_factor=quant.delta_factor,
                 dtype=dtype,
                 device=init_device,
             )

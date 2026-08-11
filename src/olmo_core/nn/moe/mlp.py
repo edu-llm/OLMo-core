@@ -15,7 +15,12 @@ from torch.distributed.tensor import Placement, Shard, distribute_tensor
 from olmo_core.distributed.parallel import get_device_mesh_info
 from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.exceptions import OLMoConfigurationError
-from olmo_core.nn.quantization import QuantConfig, TWNQuantCache, twn_quantize_ste
+from olmo_core.nn.quantization import (
+    TWN_DELTA_FACTOR,
+    QuantConfig,
+    TWNQuantCache,
+    twn_quantize_ste,
+)
 from olmo_core.utils import log_once
 
 try:
@@ -94,9 +99,12 @@ class MoEMLPBase(nn.Module):
         """
         if not self.quant_enabled:
             return w
+        delta_factor = self.quant.delta_factor if self.quant is not None else TWN_DELTA_FACTOR
         if self.quant_caches is not None:
-            return self.quant_caches[slot].quantize(w, in_dim=in_dim)
-        return twn_quantize_ste(w, in_dim=in_dim)
+            return self.quant_caches[slot].quantize(
+                w, in_dim=in_dim, delta_factor=delta_factor
+            )
+        return twn_quantize_ste(w, in_dim=in_dim, delta_factor=delta_factor)
 
     def apply_ep(self, ep_mesh: DeviceMesh):
         """

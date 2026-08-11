@@ -126,7 +126,7 @@ def _resolve_in_dim(w: torch.Tensor, in_dim: Optional[int]) -> int:
 
 
 def twn_threshold_and_scale(
-    w: torch.Tensor, *, in_dim: Optional[int] = None
+    w: torch.Tensor, *, in_dim: Optional[int] = None, delta_factor: float = TWN_DELTA_FACTOR
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Compute the TWN per-output-row threshold ``delta`` and scale ``alpha``.
@@ -158,7 +158,7 @@ def twn_threshold_and_scale(
     in_dim = _resolve_in_dim(w, in_dim)
     w32 = w.detach().to(torch.float32)
     absw = w32.abs()
-    delta = TWN_DELTA_FACTOR * absw.mean(dim=in_dim, keepdim=True)
+    delta = delta_factor * absw.mean(dim=in_dim, keepdim=True)
     mask = absw > delta
     # A row survives its own threshold unless it is identically zero: delta = 0.7 * mean|W| is
     # strictly below max|W| whenever any element is nonzero. The clamp only guards the
@@ -168,7 +168,9 @@ def twn_threshold_and_scale(
     return delta, alpha
 
 
-def twn_quantize(w: torch.Tensor, *, in_dim: Optional[int] = None) -> torch.Tensor:
+def twn_quantize(
+    w: torch.Tensor, *, in_dim: Optional[int] = None, delta_factor: float = TWN_DELTA_FACTOR
+) -> torch.Tensor:
     """
     Ternarize ``w`` with the TWN rule: ``alpha * sign(W) * 1[|W| > delta]``, per output row.
 
@@ -197,6 +199,9 @@ def twn_quantize(w: torch.Tensor, *, in_dim: Optional[int] = None) -> torch.Tens
 
     :param w: The latent weight.
     :param in_dim: The input-feature axis. See the table above.
+    :param delta_factor: The threshold constant. ``0.7`` is TWN's, derived by minimizing
+        reconstruction error rather than loss, and it decides which ~42% of the weights are
+        zero -- see :func:`gaussian_zero_fraction` for the closed form relating the two.
     """
     in_dim = _resolve_in_dim(w, in_dim)
 
@@ -205,11 +210,11 @@ def twn_quantize(w: torch.Tensor, *, in_dim: Optional[int] = None) -> torch.Tens
     # stays a pure optimization and the definition below remains the reference.
     from ..kernels import fused_twn_quantize
 
-    fused = fused_twn_quantize(w, in_dim=in_dim)
+    fused = fused_twn_quantize(w, in_dim=in_dim, delta_factor=delta_factor)
     if fused is not None:
         return fused
 
-    delta, alpha = twn_threshold_and_scale(w, in_dim=in_dim)
+    delta, alpha = twn_threshold_and_scale(w, in_dim=in_dim, delta_factor=delta_factor)
     w32 = w.detach().to(torch.float32)
     q = torch.sign(w32) * (w32.abs() > delta) * alpha
     return q.to(w.dtype)
@@ -235,19 +240,21 @@ class _TWNQuantizeSTE(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, w: torch.Tensor, in_dim: int) -> torch.Tensor:  # type: ignore[override]
+    def forward(ctx, w: torch.Tensor, in_dim: int, delta_factor: float) -> torch.Tensor:  # type: ignore[override]
         del ctx
-        return twn_quantize(w, in_dim=in_dim)
+        return twn_quantize(w, in_dim=in_dim, delta_factor=delta_factor)
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):  # type: ignore[override]
         del ctx
         # Identity STE: the gradient of the quantized weight is the gradient of the latent
-        # weight. `None` for the non-tensor `in_dim` argument.
-        return grad_output, None
+        # weight. `None` for the non-tensor `in_dim` and `delta_factor` arguments.
+        return grad_output, None, None
 
 
-def twn_quantize_ste(w: torch.Tensor, *, in_dim: Optional[int] = None) -> torch.Tensor:
+def twn_quantize_ste(
+    w: torch.Tensor, *, in_dim: Optional[int] = None, delta_factor: float = TWN_DELTA_FACTOR
+) -> torch.Tensor:
     """
     :func:`twn_quantize` in the forward direction, identity straight-through in the backward.
 
@@ -255,7 +262,9 @@ def twn_quantize_ste(w: torch.Tensor, *, in_dim: Optional[int] = None) -> torch.
     :func:`twn_quantize` for the ``in_dim`` orientation table -- getting it wrong builds a
     different quantizer without erroring.
     """
-    return _TWNQuantizeSTE.apply(w, _resolve_in_dim(w, in_dim))  # type: ignore[no-any-return]
+    return _TWNQuantizeSTE.apply(  # type: ignore[no-any-return]
+        w, _resolve_in_dim(w, in_dim), delta_factor
+    )
 
 
 class _CachedSTE(torch.autograd.Function):
@@ -316,13 +325,16 @@ class TWNQuantCache:
         self._version = None
         self._quantized = None
 
-    def quantize(self, w: torch.Tensor, *, in_dim: int) -> torch.Tensor:
+    def quantize(
+        self, w: torch.Tensor, *, in_dim: int, delta_factor: float = TWN_DELTA_FACTOR
+    ) -> torch.Tensor:
         """
         Return the quantized ``w`` with an identity-STE backward, reusing the memo if valid.
 
         :param w: The latent weight.
         :param in_dim: The axis the forward pass treats as input features. See
             :func:`twn_quantize`.
+        :param delta_factor: The threshold constant. See :func:`twn_quantize`.
 
         :returns: The quantized weight, differentiable back to ``w``.
         """
@@ -333,7 +345,7 @@ class TWNQuantCache:
         ):
             return _CachedSTE.apply(w, self._quantized)  # type: ignore[no-any-return]
 
-        quantized = twn_quantize(w, in_dim=in_dim)
+        quantized = twn_quantize(w, in_dim=in_dim, delta_factor=delta_factor)
         self._source = w
         self._version = w._version
         self._quantized = quantized
@@ -379,6 +391,16 @@ class QuantConfig(Config):
     enabled: bool = True
     """
     Whether the quantizer actually fires. ``False`` gives an exact-equality control arm.
+    """
+    delta_factor: float = TWN_DELTA_FACTOR
+    """
+    The TWN threshold constant, ``delta_r = delta_factor * mean_j |W_rj|``.
+
+    ``0.7`` is TWN's own value, obtained by minimizing ``||W - alpha*W_t||^2`` -- reconstruction
+    error, not loss -- and it places ~42% of the weights at zero. BitNet's round-to-nearest rule
+    is an effective factor of ``0.5`` and lands at ~31%. Exposed because it decides the fate of
+    every weight in the model and the right value is an empirical question, not a settled one;
+    :func:`gaussian_zero_fraction` gives the closed form for a Gaussian latent.
     """
     cache_quantized_weight: bool = False
     """
@@ -426,11 +448,13 @@ class QuantLinear(nn.Linear):
         *,
         enabled: bool = True,
         cache_quantized_weight: bool = False,
+        delta_factor: float = TWN_DELTA_FACTOR,
         device: Any = None,
         dtype: Any = None,
     ):
         super().__init__(in_features, out_features, bias=bias, device=device, dtype=dtype)
         self.quant_enabled = enabled
+        self.delta_factor = delta_factor
         self.quant_cache = TWNQuantCache() if cache_quantized_weight else None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -440,8 +464,14 @@ class QuantLinear(nn.Linear):
             # arm a control.
             return F.linear(x, self.weight, self.bias)
         if self.quant_cache is not None:
-            return F.linear(x, self.quant_cache.quantize(self.weight, in_dim=-1), self.bias)
-        return F.linear(x, twn_quantize_ste(self.weight, in_dim=-1), self.bias)
+            quantized = self.quant_cache.quantize(
+                self.weight, in_dim=-1, delta_factor=self.delta_factor
+            )
+        else:
+            quantized = twn_quantize_ste(
+                self.weight, in_dim=-1, delta_factor=self.delta_factor
+            )
+        return F.linear(x, quantized, self.bias)
 
     def extra_repr(self) -> str:
         return (

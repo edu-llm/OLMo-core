@@ -112,6 +112,35 @@ def parallelize_model(
         else:
             log.warning("Skipping model compilation since CUDA is not available")
 
+    # Maybe convert quantized weights to all-gather as packed ternary. This MUST happen before
+    # `fully_shard` and before `prepare_experts_for_fsdp`: FSDP2 discovers the extension hooks by
+    # `hasattr` on the sharded local tensor it constructs at `fully_shard` time
+    # (torch 2.9.0 `_fsdp_param.py:678`), so a swap afterwards is silently invisible and the run
+    # would all-gather bf16 while reporting itself compressed. Same ordering constraint torchao's
+    # float8 conversion documents at `olmo_core/float8/__init__.py:73-76`.
+    #
+    # Gated on a per-model-part flag so the default path is untouched: with `ternary_comm=False`
+    # nothing below runs and behaviour is bitwise what it was.
+    if dp_config is not None and any(
+        getattr(m, "ternary_comm_enabled", False) for m in model_parts
+    ):
+        from olmo_core.nn.quantization_comm import apply_ternary_comm
+
+        for m in model_parts:
+            if not getattr(m, "ternary_comm_enabled", False):
+                continue
+            converted = apply_ternary_comm(m)
+            if not converted:
+                raise OLMoConfigurationError(
+                    "ternary_comm=True converted no parameters. That means the model has no "
+                    "enabled quantized weights, so the compressed all-gather would be a no-op "
+                    "while the config records it as active. Set quantize=True or ternary_comm="
+                    "False."
+                )
+            log.info(
+                "Ternary-compressed all-gather enabled on %d parameter(s)", len(converted)
+            )
+
     # Maybe shard/replicate according to data parallel config.
     if dp_config is not None:
         assert world_mesh is not None

@@ -882,6 +882,33 @@ def test_a_summary_is_printed_even_when_no_step_reported_a_loss(capsys):
     assert printed["last_loss"] is None
 
 
+def test_the_summary_survives_a_trainer_with_no_gpu_monitor_callback(capsys, monkeypatch):
+    """The GPU branch of `summarise` must not assume a `gpu_monitor` callback is registered.
+
+    Forced on rather than gated behind real hardware: with a CUDA device visible, `summarise`
+    reads `trainer.callbacks` to upgrade its peak-memory figure from final-step to whole-run.
+    A trainer that has no such callback must still emit its summary, because that JSON line is
+    the only record the platform parses -- losing it loses the run's result.
+    """
+    import json
+
+    monkeypatch.setattr(entry.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(entry.torch.cuda, "max_memory_allocated", lambda: 8 * 1024**3)
+    monkeypatch.setattr(entry.torch.cuda, "memory_allocated", lambda: 4 * 1024**3)
+
+    entry.summarise(
+        opts=FakeOptions(),
+        config=FakeConfig(),
+        trainer=FakeTrainer([FakeParameter(7)], step=3),
+        losses=entry.LossWatcher(),
+        seconds=1.5,
+    )
+
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["parameters"] == 7
+    assert printed["peak_memory_gib"] == pytest.approx(8.0)
+
+
 def test_the_config_print_names_how_many_shards_rather_than_all_of_them(monkeypatch):
     """olmo-150b-dolma2 resolves to 6,851 objects and the dtype must stay readable."""
     printed = []
@@ -1887,6 +1914,27 @@ def test_the_two_qat_spellings_are_mutually_exclusive():
         entry.build_parser().parse_known_args(
             ["a-run-id", "--qat-start-step", "5", "--qat-start-fraction", "0.5"]
         )
+
+
+def test_the_delta_factor_flag_reaches_the_built_quantizer():
+    """The threshold decides which ~42% of every weight is zero, so the sweep over it has to
+    be reachable from a command line, not only from Python."""
+    from olmo_core.nn.quantization import TWN_DELTA_FACTOR
+    from olmo_core.nn.transformer import TransformerConfig
+
+    assert _throughput_opts().twn_delta_factor == TWN_DELTA_FACTOR
+    assert _throughput_opts("--twn-delta-factor", "0.5").twn_delta_factor == 0.5
+
+    config = TransformerConfig.maple_scaled(
+        vocab_size=1024, rung="R0", quantize=True, delta_factor=0.5
+    )
+    # Maple ternarizes both the attention projections and the expert stack, so the factor has
+    # to land on both quantized surfaces, not just whichever one the test happened to check.
+    assert config.block.sequence_mixer.quant.delta_factor == 0.5
+    assert config.block.feed_forward_moe.quant.delta_factor == 0.5
+
+    default = TransformerConfig.maple_scaled(vocab_size=1024, rung="R0", quantize=True)
+    assert default.block.sequence_mixer.quant.delta_factor == TWN_DELTA_FACTOR
 
 
 def test_the_cache_flag_defaults_off():

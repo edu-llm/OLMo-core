@@ -357,6 +357,20 @@ class TransformerConfig(ModelConfig):
     block_overrides: Optional[Dict[int, TransformerBlockConfig]] = None
     embed_scale: Optional[float] = None
     tie_word_embeddings: bool = False
+    ternary_comm: bool = False
+    """
+    All-gather packed ternary (2-bit trits + per-row ``alpha``) instead of bf16 under FSDP2.
+
+    A field on the config rather than an argument to :meth:`build` so a dotlist override rooted at
+    ``ExperimentConfig`` reaches it as ``model.ternary_comm=true``, and so it is recorded in the
+    serialized config of every run. Consumed by
+    :func:`~olmo_core.nn.quantization_comm.apply_ternary_comm`, which must be called **before**
+    ``fully_shard``.
+
+    Default ``False``. This is a transport optimization that is required to be *bitwise* identical
+    to the uncompressed path, and it refuses rather than approximating when a shard boundary would
+    split a TWN output row.
+    """
 
     def __post_init__(self):
         if self.tie_word_embeddings and self.name == TransformerType.normalized:
@@ -462,6 +476,12 @@ class TransformerConfig(ModelConfig):
                         break
                 else:
                     log.info(f"Param '{name}' will be trainable")
+
+        # Carried onto the model, not acted on here: the conversion has to happen immediately
+        # before `fully_shard`, which is in `train_module/transformer/common.py`. Doing it at build
+        # time would put a tensor subclass into the model before init and checkpoint loading, both
+        # of which are easier to reason about on plain parameters.
+        model._ternary_comm_enabled = self.ternary_comm
 
         log.info("%s", model)
         log.info(
@@ -1199,6 +1219,8 @@ class TransformerConfig(ModelConfig):
         rung: str = "R3",
         quantize: Optional[bool] = None,
         cache_quantized_weight: bool = False,
+        ternary_comm: bool = False,
+        delta_factor: Optional[float] = None,
         **kwargs,
     ) -> "TransformerConfig":
         """
@@ -1237,6 +1259,24 @@ class TransformerConfig(ModelConfig):
             so this is a pure throughput setting. See
             :attr:`~olmo_core.nn.quantization.QuantConfig.cache_quantized_weight` for the
             memory trade-off that keeps it off by default.
+        :param ternary_comm: All-gather **packed ternary** (2-bit trits + per-row ``alpha``)
+            instead of bf16 under FSDP2, an 8x cut in all-gather bytes on the quantized weights.
+            Reachable from a dotlist override rooted at ``ExperimentConfig`` as
+            ``model.ternary_comm=true``, and accepted identically by every Maple factory because
+            they all delegate here.
+
+            This is a **transport** optimization, not an architecture change -- but only because
+            FSDP2's ``Shard(0)`` keeps every TWN output row whole on one rank, so ``alpha`` and
+            ``delta`` are computable locally and come out identical. Where that does not hold (a
+            flattened expert weight whose shard boundary is not expert-aligned)
+            :meth:`~olmo_core.nn.quantization_comm.TernaryCommSpec.assert_exact` **raises**. It is
+            never approximated and never rescued with an all-reduce of row statistics: either
+            would change the quantizer, which changes the model, and Maple faithfulness outranks
+            all-gather bytes.
+
+            Requires ``quantize=True``; it is meaningless otherwise and raises rather than
+            silently doing nothing, because a run that reports itself as compressed and is not is
+            the failure mode this whole surface exists to prevent.
         """
         if rung not in cls.MAPLE_RUNGS:
             raise OLMoConfigurationError(
@@ -1261,7 +1301,7 @@ class TransformerConfig(ModelConfig):
         quant = None
         if quantize is not None:
             try:
-                from ..quantization import QuantConfig
+                from ..quantization import TWN_DELTA_FACTOR, QuantConfig
             except ImportError as e:
                 raise OLMoConfigurationError(
                     "`quantize` was requested but `olmo_core.nn.quantization` is not present "
@@ -1271,7 +1311,21 @@ class TransformerConfig(ModelConfig):
                     "paired comparison, which is the worst outcome for X4a."
                 ) from e
             quant = QuantConfig(
-                enabled=quantize, cache_quantized_weight=cache_quantized_weight
+                enabled=quantize,
+                cache_quantized_weight=cache_quantized_weight,
+                delta_factor=TWN_DELTA_FACTOR if delta_factor is None else delta_factor,
+            )
+
+        # Refuse rather than no-op. `ternary_comm` compresses exactly the tensors the quantizer
+        # ternarizes, so with no quantizer there is nothing to compress -- and a run that was
+        # asked for compression, silently got none, and reported success is the failure mode this
+        # surface exists to prevent.
+        if ternary_comm and not quantize:
+            raise OLMoConfigurationError(
+                "`ternary_comm=True` requires `quantize=True`: the compressed all-gather sends "
+                "2-bit trits plus a per-row alpha for exactly the weights the TWN quantizer "
+                f"ternarizes, and quantize={quantize!r} means there are none. Refusing rather "
+                "than silently all-gathering bf16 while the config records compression."
             )
 
         config = cls._maple_config(
@@ -1300,6 +1354,10 @@ class TransformerConfig(ModelConfig):
             expert_hidden_size=expert_hidden_size,
             vocab_size=vocab_size,
         )
+        # Set after the ladder assertion, deliberately: `ternary_comm` is a transport choice and
+        # must not perturb a single parameter count. If it ever does, the assertion above should
+        # have run against the unaffected config, so the diff is attributable.
+        config.ternary_comm = ternary_comm
         return config
 
     @classmethod

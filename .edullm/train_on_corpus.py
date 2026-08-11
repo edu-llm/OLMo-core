@@ -92,7 +92,7 @@ from olmo_core.distributed.parallel import DataParallelType
 from olmo_core.distributed.utils import barrier, get_rank
 from olmo_core.io import clear_directory, list_directory, normalize_path
 from olmo_core.nn.lm_head import LMLossImplementation
-from olmo_core.nn.quantization import audit_quantization
+from olmo_core.nn.quantization import TWN_DELTA_FACTOR, audit_quantization
 from olmo_core.nn.transformer import TransformerConfig
 from olmo_core.optim import (
     AdamWConfig,
@@ -897,6 +897,7 @@ def build_config(opts, overrides: List[str]):
         factory_kwargs["quantize"] = opts.quantize
         if getattr(opts, "cache_quantized_weight", False):
             factory_kwargs["cache_quantized_weight"] = True
+        factory_kwargs["delta_factor"] = opts.twn_delta_factor
     model_config = factory(vocab_size=corpus.tokenizer.padded_vocab_size(), **factory_kwargs)
 
     # THE LOSS IMPLEMENTATION, WHICH IS A MEMORY DECISION MASQUERADING AS A NUMERICS ONE.
@@ -1423,7 +1424,10 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
         peak = torch.cuda.max_memory_allocated() / 1024**3
         peak_source = "final_step_only"
         current_allocated = torch.cuda.memory_allocated() / 1024**3
-        monitor = trainer.callbacks.get("gpu_monitor")
+        # Defensive because this line is the last thing standing between a finished run and a
+        # parseable result. The whole-run peak is an upgrade over the final-step figure, not a
+        # requirement, so a trainer assembled without the monitor keeps its summary.
+        monitor = getattr(trainer, "callbacks", {}).get("gpu_monitor")
         if isinstance(monitor, GPUMemoryMonitorCallback) and monitor.peak_active_bytes > 0:
             peak = monitor.peak_active_bytes / 1024**3
             peak_source = "whole_run"
@@ -1774,6 +1778,16 @@ def build_parser() -> argparse.ArgumentParser:
     # early budget in full precision is both faster per step and better at the end. Requires
     # --quantize control (not ternary): the modules must exist from step 0 so the state dict and
     # module tree never change, with only the arithmetic switching at the transition.
+    # The threshold decides which weights are zero, and TWN's 0.7 was derived by minimizing
+    # reconstruction error rather than loss. BitNet's rule is an effective 0.5 and lands at ~31%
+    # zeros against our ~42%; BitNet reports that more zeros hurts. Exposed so that is testable.
+    parser.add_argument(
+        "--twn-delta-factor",
+        type=float,
+        default=TWN_DELTA_FACTOR,
+        help="TWN threshold constant: delta = factor * mean|W| per output row. Default 0.7 "
+        "(~42%% zeros); 0.5 is BitNet's effective value (~31%%). Requires --quantize.",
+    )
     qat_schedule = parser.add_mutually_exclusive_group()
     qat_schedule.add_argument(
         "--qat-start-step",

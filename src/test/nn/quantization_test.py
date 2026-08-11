@@ -117,6 +117,56 @@ def test_threshold_is_exactly_0p7_mean_abs():
     assert torch.allclose(delta, expected, atol=1e-6)
 
 
+@pytest.mark.parametrize("delta_factor", [0.5, 0.6, 0.7])
+def test_delta_factor_is_configurable_and_moves_the_zero_fraction(delta_factor):
+    """The threshold constant decides which ~42% of every weight is zero, and 0.7 optimises
+    reconstruction error rather than loss, so the sweep over it has to be runnable."""
+    torch.manual_seed(0)
+    w = torch.randn(64, 4096)
+
+    q = twn_quantize(w, in_dim=-1, delta_factor=delta_factor)
+    zero_frac = (q == 0).float().mean().item()
+
+    # A Gaussian latent puts the realised zero fraction on the closed form for that factor.
+    assert zero_frac == pytest.approx(gaussian_zero_fraction(delta_factor), abs=0.01)
+
+
+def test_a_lower_delta_factor_keeps_more_weights():
+    """Monotonicity, which is the property the sweep depends on."""
+    torch.manual_seed(0)
+    w = torch.randn(32, 2048)
+
+    zeros = [
+        (twn_quantize(w, in_dim=-1, delta_factor=k) == 0).float().mean().item()
+        for k in (0.5, 0.6, 0.7)
+    ]
+    assert zeros[0] < zeros[1] < zeros[2]
+
+
+def test_delta_factor_defaults_to_twn_and_is_unchanged():
+    """Omitting the argument must reproduce today's quantizer exactly, bit for bit."""
+    torch.manual_seed(0)
+    w = torch.randn(16, 512)
+    assert torch.equal(
+        twn_quantize(w, in_dim=-1), twn_quantize(w, in_dim=-1, delta_factor=TWN_DELTA_FACTOR)
+    )
+    delta, _ = twn_threshold_and_scale(w, in_dim=-1, delta_factor=0.5)
+    torch.testing.assert_close(delta, 0.5 * w.abs().mean(dim=-1, keepdim=True))
+
+
+def test_quant_config_threads_delta_factor_to_quant_linear():
+    """A configured factor has to reach the module that actually quantizes."""
+    torch.manual_seed(0)
+    strict = QuantLinear(512, 32, enabled=True, delta_factor=0.7)
+    loose = QuantLinear(512, 32, enabled=True, delta_factor=0.5)
+    loose.load_state_dict(strict.state_dict())
+
+    x = torch.randn(4, 512)
+    assert not torch.allclose(strict(x), loose(x))
+    assert QuantConfig().delta_factor == TWN_DELTA_FACTOR
+    assert QuantConfig(delta_factor=0.5).delta_factor == 0.5
+
+
 def test_alpha_is_mean_of_surviving_magnitudes():
     torch.manual_seed(0)
     w = torch.randn(8, 512)
