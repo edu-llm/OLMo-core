@@ -1108,6 +1108,15 @@ def build_config(opts, overrides: List[str]):
         )
         .with_callback("config_saver", ConfigSaverCallback())
     )
+    if opts.no_checkpoints:
+        # A throughput smoke test has nothing to resume and the M20 step-0 checkpoint is more
+        # than 14 GiB. Removing the callback also prevents Trainer from starting its otherwise
+        # unconditional step-0 save, which can outlive a failed one-step diagnostic.
+        trainer_config.callbacks.pop("checkpointer", None)
+        log.warning(
+            "CHECKPOINTS DELIBERATELY DISABLED for this throughput-only run; it cannot resume "
+            "and must not be cited as checkpoint validation"
+        )
 
     # NO downstream_evaluator, AND THE EXAMPLE'S LM EVALUATOR IS STILL REFUSED. The example
     # reads a C4 validation shard from olmo-data.org and pulls HellaSwag from Hugging Face;
@@ -1601,6 +1610,12 @@ def train(config, opts=None) -> None:
     # this file restating 0.01 and 0.0 and becoming a second place they can drift.
     assertion_kwargs: Dict[str, Any] = {"vocab_size": config.model.vocab_size}
     if opts is not None:
+        if getattr(opts, "no_init_loss_band", False):
+            assertion_kwargs["assert_step0_loss"] = False
+            log.warning(
+                "STEP-0 LOSS BAND DELIBERATELY DISABLED for this throughput-only run; finite "
+                "loss and gradient checks remain active, but initialization is not certified"
+            )
         if getattr(opts, "no_balance_bands", False):
             assertion_kwargs["drop_frac_max"] = None
             assertion_kwargs["dead_expert_frac_max"] = None
@@ -1789,6 +1804,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sequence-length", type=int, default=2048)
     parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--save-interval", type=int, default=100)
+    parser.add_argument(
+        "--no-checkpoints",
+        action="store_true",
+        help="Remove the checkpointer callback for a disposable throughput run. This also skips "
+        "the otherwise unconditional step-0 checkpoint, so the run cannot resume and does not "
+        "validate checkpoint I/O.",
+    )
+    parser.add_argument(
+        "--no-init-loss-band",
+        action="store_true",
+        help="Disable only the step-0 CE-loss calibration band for a throughput diagnostic. "
+        "Finite loss/gradient and all other requested metric assertions remain active; the run "
+        "logs that initialization was not certified.",
+    )
     parser.add_argument(
         "--lr-schedule",
         choices=sorted(SCHEDULE_ALPHA_F),

@@ -305,6 +305,35 @@ def test_the_whole_config_builds_from_a_corpus_without_touching_s3(monkeypatch):
     assert config.as_config_dict()["dataset_version"] == "v1"
 
 
+def test_throughput_mode_can_remove_the_step0_checkpointer(monkeypatch):
+    monkeypatch.setattr(
+        entry,
+        "resolve_corpus",
+        lambda **kwargs: entry.corpus_from_manifest(
+            FakeManifest(),
+            dataset_id=kwargs["dataset_id"],
+            version=kwargs["version"],
+            tokenizer_id=kwargs["tokenizer_id"],
+        ),
+    )
+    opts, overrides = entry.build_parser().parse_known_args(
+        [
+            "throughput-run",
+            "--dataset-id=pretrain/regmix-10b",
+            "--dataset-version=v1",
+            "--dataset-tokenizer=tokenizer/dolma2-bpe",
+            "--save-folder=s3://outputs/throughput-run/checkpoints/",
+            "--no-checkpoints",
+            "--no-init-loss-band",
+        ]
+    )
+
+    config = entry.build_config(opts, overrides)
+
+    assert "checkpointer" not in config.trainer.callbacks
+    assert opts.no_init_loss_band is True
+
+
 def test_an_override_on_the_command_line_reaches_the_config(monkeypatch):
     # The escape hatch researchers actually use: everything after the flags is merged into the
     # config, so a person can change the learning rate without a new entry point.
