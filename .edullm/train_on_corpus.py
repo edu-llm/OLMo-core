@@ -62,15 +62,28 @@ the trainer reaches that step number again and refuses to write into a directory
 not empty.
 """
 
+# ruff: noqa: E402
+
+import os
+import sys
+
+# The block image carries an older installed copy of olmo_core. Prefer the library from the
+# branch mounted beside this entry point so throughput measurements exercise the requested code.
+_BRANCH_LIBRARY = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"
+)
+if os.path.isdir(_BRANCH_LIBRARY):
+    sys.path.insert(0, _BRANCH_LIBRARY)
+
+os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+
 import argparse
 import contextlib
 import copy
 import enum
 import json
 import logging
-import os
 import re
-import sys
 import time
 import traceback
 from dataclasses import dataclass, field, replace
@@ -121,6 +134,7 @@ from olmo_core.train.callbacks import (
 from olmo_core.train.checkpoint import Checkpointer
 from olmo_core.train.train_module import (
     TransformerDataParallelConfig,
+    TransformerExpertParallelConfig,
     TransformerTrainModuleConfig,
 )
 from olmo_core.utils import seed_all
@@ -477,13 +491,21 @@ def resolve_corpus(*, dataset_id: str, version: str, tokenizer_id: str) -> Corpu
     # Boto3S3.default() is the reader's own adapter and takes the credentials from the task
     # environment, which on Batch is the workload role.
     s3 = Boto3S3.default()
+    data_bucket = os.environ.get("EDULLM_DATA_BUCKET") or None
+    bucket_kwargs = {"data_bucket": data_bucket} if data_bucket else {}
+    log.info(
+        "reading %s/%s from bucket %s",
+        dataset_id,
+        version,
+        data_bucket or "the reader's own default",
+    )
 
     # "latest" resolves through the catalog rather than being an alias anybody can move. A
     # pinned version is the normal case and what the platform sends; this branch exists so a
     # person poking at the image by hand does not have to look one up first.
     if version in ("", "latest"):
         try:
-            resolved = resolve_latest(dataset_id, s3=s3)
+            resolved = resolve_latest(dataset_id, s3=s3, **bucket_kwargs)
         except Refusal:
             raise
         except BaseException as exc:
@@ -505,7 +527,7 @@ def resolve_corpus(*, dataset_id: str, version: str, tokenizer_id: str) -> Corpu
     # and a role without that grant and a registry entry pointing at an unpublished prefix
     # both arrive here as a failed read. read_failure separates them.
     try:
-        read = dataset_paths(dataset_id, version, s3=s3)
+        read = dataset_paths(dataset_id, version, s3=s3, **bucket_kwargs)
     except Refusal:
         raise
     except BaseException as exc:
@@ -840,6 +862,30 @@ def build_scheduler(opts):
 
 
 def build_config(opts, overrides: List[str]):
+    mesh_values = (opts.moe_shard_degree, opts.moe_num_replicas)
+    if any(value is not None for value in mesh_values):
+        if any(value is None or value <= 0 for value in mesh_values):
+            raise Refusal(
+                Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                "--moe-shard-degree and --moe-num-replicas must both be positive",
+            )
+        expected_world_size = opts.moe_shard_degree * opts.moe_num_replicas
+        world_size = os.environ.get("WORLD_SIZE")
+        if world_size is not None:
+            try:
+                world_size_int = int(world_size)
+            except ValueError:
+                raise Refusal(
+                    Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                    f"WORLD_SIZE must be an integer, got {world_size!r}",
+                ) from None
+            if world_size_int != expected_world_size:
+                raise Refusal(
+                    Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                    f"WORLD_SIZE={world_size_int} does not match --moe-num-replicas="
+                    f"{opts.moe_num_replicas} x --moe-shard-degree={opts.moe_shard_degree}",
+                )
+
     corpus = resolve_corpus(
         dataset_id=opts.dataset_id,
         version=opts.dataset_version,
@@ -941,6 +987,28 @@ def build_config(opts, overrides: List[str]):
         num_workers=4,
     )
 
+    if opts.moe_shard_degree is not None:
+        dp_config = TransformerDataParallelConfig(
+            name=DataParallelType.hsdp,
+            param_dtype=DType(opts.param_dtype),
+            reduce_dtype=DType.float32,
+            num_replicas=opts.moe_num_replicas,
+            shard_degree=opts.moe_shard_degree,
+        )
+        ep_config = TransformerExpertParallelConfig(degree=opts.moe_shard_degree)
+        log.info(
+            "MoE mesh: %d replicas x %d HSDP/expert-parallel ranks",
+            opts.moe_num_replicas,
+            opts.moe_shard_degree,
+        )
+    else:
+        dp_config = TransformerDataParallelConfig(
+            name=DataParallelType.fsdp,
+            param_dtype=DType(opts.param_dtype),
+            reduce_dtype=DType.float32,
+        )
+        ep_config = None
+
     train_module_config = TransformerTrainModuleConfig(
         rank_microbatch_size=opts.rank_microbatch_size,
         max_sequence_length=opts.sequence_length,
@@ -976,11 +1044,8 @@ def build_config(opts, overrides: List[str]):
         # reduce_dtype stays float32 and has no flag. It is the gradient reduction, fp32 is the
         # numerically safe answer at every scale this platform runs, and the dotted override
         # `train_module.dp_config.reduce_dtype=...` reaches it for anyone who disagrees.
-        dp_config=TransformerDataParallelConfig(
-            name=DataParallelType.fsdp,
-            param_dtype=DType(opts.param_dtype),
-            reduce_dtype=DType.float32,
-        ),
+        dp_config=dp_config,
+        ep_config=ep_config,
         max_grad_norm=1.0,
         scheduler=build_scheduler(opts),
         # Z-loss is a field on the TRAIN MODULE, not on the model and not on the trainer. The
@@ -1014,6 +1079,7 @@ def build_config(opts, overrides: List[str]):
             metrics_collect_interval=5,
             cancel_check_interval=5,
             max_duration=Duration.steps(opts.steps),
+            no_checkpoints=opts.no_checkpoints,
         )
         .with_callback("gpu_monitor", GPUMemoryMonitorCallback())
         # STEADY-STATE THROUGHPUT, BECAUSE NEITHER EXISTING MFU METRIC EXCLUDES WARMUP.
@@ -1107,7 +1173,7 @@ def build_config(opts, overrides: List[str]):
     # `{label}/CE loss` and `{label}/PPL` (eval/lm_evaluator.py:118-121), and no manifest
     # carries a UTF-8 byte denominator -- a .u32le.bin shard's `bytes` is 4x its tokens, the
     # storage width.
-    if corpus.val_paths:
+    if corpus.val_paths and not opts.no_evals:
         eval_steps = ladder_steps(opts.steps)
         # LOCAL paths, and this is load-bearing rather than an optimisation. `iter_document
         # _indices` only scans the array for EOS boundaries when the path is NOT a url
@@ -1167,6 +1233,10 @@ def build_config(opts, overrides: List[str]):
         )
         log.info(
             "held-out ladder at steps %s (from %d val shards)", eval_steps, len(corpus.val_paths)
+        )
+    elif opts.no_evals:
+        log.warning(
+            "HELD-OUT EVALUATION DELIBERATELY DISABLED for this throughput-only run"
         )
     else:
         # Not fatal, but it must not pass silently: without a ladder the run still trains and
@@ -1572,9 +1642,19 @@ def train(config, opts=None) -> None:
     # this file restating 0.01 and 0.0 and becoming a second place they can drift.
     assertion_kwargs: Dict[str, Any] = {"vocab_size": config.model.vocab_size}
     if opts is not None:
+        if getattr(opts, "no_init_loss_band", False):
+            assertion_kwargs["assert_step0_loss"] = False
+            log.warning(
+                "STEP-0 LOSS BAND DELIBERATELY DISABLED for this throughput-only run"
+            )
         if getattr(opts, "no_balance_bands", False):
             assertion_kwargs["drop_frac_max"] = None
             assertion_kwargs["dead_expert_frac_max"] = None
+            assertion_kwargs["require_present"] = (
+                "dead_expert_frac_global",
+                "gate_mass_mean",
+            )
+            assertion_kwargs["assert_instrumented"] = False
             # THE RAW-CV CEILING IS A BALANCE BAND AND `--no-balance-bands` MUST DISABLE IT. The
             # flag exists for "a run whose purpose is to observe routing imbalance past the
             # steady-state window", and a CV ceiling is the most direct possible way to kill exactly
@@ -1806,6 +1886,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--save-interval", type=int, default=100)
     parser.add_argument(
+        "--no-checkpoints",
+        action="store_true",
+        help="Disable checkpoint loading and saving for a disposable throughput run.",
+    )
+    parser.add_argument(
+        "--no-init-loss-band",
+        action="store_true",
+        help="Disable only the step-0 CE-loss calibration band for a throughput diagnostic.",
+    )
+    parser.add_argument(
+        "--no-evals",
+        action="store_true",
+        help="Disable held-out evaluation for a disposable throughput run.",
+    )
+    parser.add_argument(
         "--lr-schedule",
         choices=sorted(SCHEDULE_ALPHA_F),
         default="linear",
@@ -1906,6 +2001,18 @@ def build_parser() -> argparse.ArgumentParser:
         "NOTE this flag is not numerics-neutral for an MoE: expert_capacity is computed from it "
         "(parallel_mlp.py:388-408), so it changes WHICH tokens get expert compute. Hold it fixed "
         "across every arm of a comparison.",
+    )
+    parser.add_argument(
+        "--moe-shard-degree",
+        type=int,
+        default=None,
+        help="HSDP and expert-parallel shard degree supplied by the capacity-block launcher.",
+    )
+    parser.add_argument(
+        "--moe-num-replicas",
+        type=int,
+        default=None,
+        help="HSDP replica count supplied by the capacity-block launcher.",
     )
     parser.add_argument(
         "--lm-loss-implementation",
