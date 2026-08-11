@@ -22,9 +22,9 @@ edullm check --json --spec .edullm/run.hc-smoke.yaml \
   --team input-core --compute gpu-1xa10g --hours 1
 
 # 3. PUBLISH THE IMAGE. This is yours to do and nothing else in this list works without it.
-#    Pushing this exact commit to a branch under edullm/** is what builds the image. Wait for
-#    the build to go green in Actions -- about three to five minutes -- before step 4.
-git push origin 1ca04d68ee4128094e8a4dc3d97bfaa6cbadf2f4:refs/heads/edullm/hc-moe-stream-balance
+#    Pushing this commit to a branch under edullm/** is what builds the image. Wait for the
+#    build to go green in Actions -- about three to five minutes -- before step 4.
+git push origin HEAD:refs/heads/edullm/hc-moe-stream-balance
 
 # 4. The twenty-minute smoke, $2.01. Nothing else starts until this has printed a summary.
 edullm submit --spec .edullm/run.hc-smoke.yaml \
@@ -42,9 +42,10 @@ edullm submit --spec .edullm/run.hc-baseline.yaml \
   --team input-core --compute gpu-1xa10g --hours 20
 ```
 
-`1ca04d68ee4128094e8a4dc3d97bfaa6cbadf2f4` is the commit these numbers were checked against.
-If you have added commits, use `git rev-parse HEAD` and re-run step 2 — `edullm check` refuses
-a commit no remote branch contains, so it will tell you if you push the wrong one.
+`HEAD` rather than a literal SHA on purpose: `edullm check` prints the `commit_sha` it would
+submit, and it refuses a commit no remote branch contains, so step 2 tells you whether step 3
+pushed the right thing. The numbers below were checked at
+`__COMMIT__`.
 
 Do not submit `.edullm/run.hc-treatment.yaml` yet. Its header lists three things that have to
 report first, one of which is a four-cell mechanism pilot costing about $50 that decides whether
@@ -88,8 +89,8 @@ All three carry the same three deferred checks, which no laptop can make: `no_pu
 
 ```bash
 pip install -e '.[all]'
-pytest -q src/test/nn/ --ignore=src/test/nn/hf      # 553 passed
-python src/scripts/ablations/hc_gate1_check.py       # GATE_1 PASSED: 30 passed, 0 failed
+pytest -q src/test/nn/ --ignore=src/test/nn/hf      # 538 passed, 1206 skipped
+python src/scripts/ablations/hc_gate1_check.py       # GATE_1 PASSED: 63 passed, 0 failed
 python src/scripts/ablations/hc_launch_check.py      # 3 specs checked, 0 problems
 python src/scripts/ablations/hc_ablation.py --dry-run --model-size tiny
 python src/scripts/ablations/hc_power.py --sweep     # the MDE table; re-run with stage 1's sigma
@@ -179,10 +180,18 @@ attention output projection's, the largest absolute residual logit, the doubly-s
 error, the stream dispersion share, the stream usage entropy and imbalance, and the `H_res`
 matrices entry by entry at a slower interval.
 
-**NOT verified.** The callback has never run inside a `Trainer`. It is exercised only by the
-import and by its config's construction; the metric names and the interval logic are untested.
-**This is the weakest-tested thing in the deliverable and it carries the primary endpoint.** Run
-the smoke with `--monitor-interval 10` against the treatment entrypoint before trusting it.
+Two blockers were found here by the final audit and both are fixed. The mixer was being read
+**with the residual-logit dropout active**, so on an unchanged parameter successive reads
+differed from the initialisation by 0.44 to 1.17 in relative Frobenius norm — every displacement
+number the tranche would have produced was a draw from the dropout mask. And the initialisation
+snapshot was not in the callback's state, so the second attempt of any cell restarted
+displacement at exactly zero. Both are fixed; `residual_mixer(deterministic=True)` reads 0.0 on
+an unchanged parameter.
+
+**NOT verified.** The callback has never run inside a `Trainer`. It is exercised by the import,
+its config's construction and the deterministic-read check, and the metric names and the interval
+logic are untested. **This is still the weakest-tested thing in the deliverable and it carries
+the primary endpoint.** Run the four-cell pilot with `--monitor-interval 10` before trusting it.
 
 ### WP4 — the design
 
@@ -259,10 +268,11 @@ orders of magnitude below its neighbours, and loss is a secondary reported with 
    attempt is **not** retried — `RETRY_ONLY_WHAT_A_RETRY_FIXES` retries `Host EC2*` and exits on
    everything else. That is why `--hours` is 20 against an estimate of 12.
 
-4. **The monitor callback has never run in a trainer.** It carries the primary endpoint and its
-   only exercise is an import. A wrong metric name or an interval that never fires would leave the
-   tranche with a loss curve and nothing else, which is the one outcome the design says is
-   uninterpretable.
+4. **The monitor callback has never run in a trainer.** It carries the primary endpoint. Two
+   defects in it were caught by reading rather than by running — a mixer read through active
+   dropout, and a snapshot that reset on resume — and a third of the same kind would not be
+   surprising. A wrong metric name or an interval that never fires leaves the tranche with a loss
+   curve and nothing else, which is the one outcome the design calls uninterpretable.
 
 5. **FSDP over a four-dimensional residual.** Inherited from the dense prototype and untested
    there too. At one card per cell FSDP is a no-op, so this tranche does not exercise it — which
