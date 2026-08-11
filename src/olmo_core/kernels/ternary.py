@@ -82,7 +82,7 @@ def _logical_weight(weight: torch.Tensor, in_dim: int) -> Tuple[torch.Tensor, in
     return logical, experts, logical.shape[-2], logical.shape[-1]
 
 
-def pack_twn(weight: torch.Tensor, in_dim: int):
+def pack_twn(weight: torch.Tensor, in_dim: int, *, include_transpose: bool = True):
     """
     Pack a latent BF16 weight with exact FP32 row statistics.
 
@@ -116,17 +116,20 @@ def pack_twn(weight: torch.Tensor, in_dim: int):
         BLOCK_K=block_k,
         BLOCK_WORDS=block_k // 16,
     )
-    codes_t = torch.empty(
-        (experts, in_features, packed_out), device=weight.device, dtype=torch.uint32
-    )
-    _transpose_packed_kernel[(experts, in_features, packed_out)](
-        codes,
-        codes_t,
-        OUT_FEATURES=out_features,
-        IN_FEATURES=in_features,
-        PACKED_IN=packed_in,
-        PACKED_OUT=packed_out,
-    )
+    if include_transpose:
+        codes_t = torch.empty(
+            (experts, in_features, packed_out), device=weight.device, dtype=torch.uint32
+        )
+        _transpose_packed_kernel[(experts, in_features, packed_out)](
+            codes,
+            codes_t,
+            OUT_FEATURES=out_features,
+            IN_FEATURES=in_features,
+            PACKED_IN=packed_in,
+            PACKED_OUT=packed_out,
+        )
+    else:
+        codes_t = torch.empty(0, device=weight.device, dtype=torch.uint32)
     if logical.ndim == 2:
         codes = codes.squeeze(0)
         codes_t = codes_t.squeeze(0)
@@ -139,6 +142,11 @@ def pack_twn(weight: torch.Tensor, in_dim: int):
         out_features=out_features,
         num_experts=experts,
     )
+
+
+def pack_twn_forward_only(weight: torch.Tensor, in_dim: int):
+    """Pack without the transposed codes when backward reuses a BF16 materialization."""
+    return pack_twn(weight, in_dim, include_transpose=False)
 
 
 @triton.jit

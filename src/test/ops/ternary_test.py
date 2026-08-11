@@ -306,6 +306,10 @@ def test_triton_pack_is_bit_exact_to_reference():
     assert torch.equal(actual.codes, expected.codes)
     assert torch.equal(actual.codes_t, expected.codes_t)
     assert torch.equal(actual.alpha, expected.alpha)
+    forward_only = ternary_kernels.pack_twn_forward_only(weight, 2)
+    assert torch.equal(forward_only.codes, expected.codes)
+    assert torch.equal(forward_only.alpha, expected.alpha)
+    assert forward_only.codes_t.numel() == 0
 
     boundary_weight = torch.tensor([[7.0] * 8 + [13.0] * 8], device="cuda", dtype=torch.bfloat16)
     boundary_expected = pack_twn_reference(boundary_weight, -1)

@@ -339,12 +339,20 @@ class _NativePackedLinear(torch.autograd.Function):
     ) -> torch.Tensor:
         _require_native(weight, x)
         assert kernels is not None
-        packed = cache.get_or_pack(weight, in_dim=-1, orientation=orientation)
+        packed = cache.get_or_pack(
+            weight,
+            in_dim=-1,
+            orientation=orientation,
+            packer=kernels.pack_twn_forward_only,
+        )
         x2 = x.reshape(-1, x.shape[-1]).contiguous()
-        out = kernels.dense_packed_matmul(x2, packed.codes, packed.alpha, packed.in_features)
+        materialized = kernels.materialize_packed_twn(
+            packed.codes, packed.alpha, packed.in_features
+        )
+        out = x2 @ materialized.transpose(0, 1)
         if bias is not None:
             out = out + bias
-        ctx.save_for_backward(x, packed.codes_t, packed.alpha)
+        ctx.save_for_backward(x, materialized)
         ctx.weight_shape = weight.shape
         ctx.has_bias = bias is not None
         return out.reshape(*x.shape[:-1], packed.out_features)
@@ -352,13 +360,10 @@ class _NativePackedLinear(torch.autograd.Function):
     @staticmethod
     @torch.amp.custom_bwd(device_type="cuda")
     def backward(ctx, grad_output: torch.Tensor):  # type: ignore[override]
-        assert kernels is not None
-        x, codes_t, alpha = ctx.saved_tensors
+        x, materialized = ctx.saved_tensors
         grad2 = grad_output.reshape(-1, grad_output.shape[-1]).contiguous()
         x2 = x.reshape(-1, x.shape[-1]).contiguous()
-        grad_input = kernels.dense_packed_matmul_transpose(
-            grad2, codes_t, alpha, x.shape[-1]
-        ).reshape_as(x)
+        grad_input = (grad2 @ materialized).reshape_as(x)
         # Identity STE replication policy: dL/dW_latent is the ordinary linear dL/dW_q.
         grad_weight = (grad2.transpose(0, 1) @ x2).reshape(ctx.weight_shape)
         grad_bias = grad2.sum(dim=0) if ctx.has_bias else None
@@ -378,7 +383,12 @@ class _NativePackedFixedGroupedLinear(torch.autograd.Function):
     ) -> torch.Tensor:
         _require_native(weight, x)
         assert kernels is not None
-        packed = cache.get_or_pack(weight, in_dim=in_dim, orientation=orientation)
+        packed = cache.get_or_pack(
+            weight,
+            in_dim=in_dim,
+            orientation=orientation,
+            packer=kernels.pack_twn_forward_only,
+        )
         # M20's fine-grained experts make decode-inside-MMA substantially slower than decoding
         # each packed weight once and handing both GEMMs to cuBLAS. Keep the ephemeral packed
         # representation as the source of truth, then retain only its BF16 materialization until
