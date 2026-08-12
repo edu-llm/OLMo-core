@@ -36,11 +36,20 @@
 # gpu-8xa100 and olmo-core-train: a full 10B-token run, ~10-11h at the 25.4% MFU an equivalent
 # run measured, so roughly $240 of the profile's 24h ceiling.
 #
-# --rank-microbatch-size 16384 rather than the original's 32768, which ran on a B200. On
-# A100-40GB the loss path's five (N,V) fp32 tensors at N=32,768 against a 100,352 vocab come to
-# ~67 GiB against ~38 GiB usable (A100-MFU-PLAYBOOK.md B3/B4) and an OOM gets no Batch retry.
-# 786,432 / 8 ranks / 16,384 = 6 micro-steps. Gradient accumulation is mathematically equivalent,
-# so this moves step time and not the model.
+# --rank-microbatch-size 8192, AND 16,384 WAS ALREADY TRIED AND DIED. run_019ff4f4 failed at
+# 08:33:54 with exit 1 at 16,384, and the playbook had measured exactly that number: B3 records
+# the 16,384 default at 131-142% of usable A100-40GB memory and pins 8,192 at 78.6% (84.5% worst
+# case). I quoted that passage while choosing 16,384 anyway, reasoning from a GDN-2 run that saw
+# 13.6 GiB reserved at 8,192 -- their rung was larger than this one, so it was not a straight
+# contradiction, but it was a measured warning against the exact value.
+#
+# The original ran 32,768, on a B200. On A100-40GB the loss path's five (N,V) fp32 tensors at
+# N=32,768 against a 100,352 vocab come to ~67 GiB against ~38 GiB usable, and an OOM gets no
+# Batch retry -- B4 explains the five tensors and B3 explains the missing retry.
+#
+# 786,432 / 8 ranks / 8,192 = 12 micro-steps. That is slower than 6 would have been, and with
+# the gradient-sync fix absent from main each micro-step pays a full reduce-scatter. Gradient
+# accumulation is mathematically equivalent, so this costs step time and not the model.
 #
 # TRITON_F32_DEFAULT=ieee: the mixer is a Triton kernel and Triton lowers tl.dot to TF32 on
 # Ampere+ by its own default, which torch's allow_tf32=False does not reach. Playbook B9 measures
@@ -54,7 +63,7 @@ command: >-
   .edullm/train_gdn2.py "$EDULLM_RUN_ID" --save-folder "$EDULLM_CHECKPOINT_DIR"
   --mixer gdn --model-factory olmo3_370M
   --n-heads 16 --head-dim 32 --expand-v 1.0 --conv-size 4
-  --sequence-length 4096 --global-batch-size 786432 --rank-microbatch-size 16384
+  --sequence-length 4096 --global-batch-size 786432 --rank-microbatch-size 8192
   --learning-rate 7.965255828243755e-4 --warmup-steps 500 --steps 12716
   --save-interval 1000 --param-dtype bfloat16
   --mixture on --mixture-total 10000000000

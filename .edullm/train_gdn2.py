@@ -59,6 +59,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import train_on_corpus as toc  # noqa: E402
 from olmo_linear_attn import LinearAttentionConfig  # noqa: E402
+from torch.distributed.elastic.multiprocessing.errors import record  # noqa: E402
 
 from olmo_core.nn.attention import (  # noqa: E402
     GatedDeltaNet2Config,
@@ -518,5 +519,25 @@ toc.resolve_corpus = resolve_corpus
 toc.show = show
 
 
+@record
+def _main() -> int:
+    """`toc.cli`, wrapped so a distributed failure reports its own traceback.
+
+    WITHOUT @record, torchrun's summary for a crashed rank reads
+
+        rank : 4 (local_rank: 4)  exitcode : 1  error_file: <N/A>
+        traceback : To enable traceback see: .../elastic/errors.html
+
+    and the child's actual exception is somewhere above -- which on this platform means
+    outside the fifty lines `edullm logs` returns, because torchrun's own wrapper output fills
+    the window. run_019ff4f4 failed exactly that way and could not be attributed at all.
+
+    @record writes each rank's exception to an error file and torchrun then prints it IN the
+    summary, so the traceback lands inside the readable window. This is the whole diagnosis
+    fix; it changes nothing about what the run computes.
+    """
+    return toc.cli()
+
+
 if __name__ == "__main__":
-    sys.exit(toc.cli())
+    sys.exit(_main())
