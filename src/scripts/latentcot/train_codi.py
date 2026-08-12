@@ -160,6 +160,21 @@ def main() -> None:
         default=200,
         help="cap on validation examples scored per checkpoint (bounds A0's generation cost)",
     )
+    parser.add_argument(
+        "--max-seconds",
+        type=float,
+        default=None,
+        help="wall-clock budget for the training loop. On reaching it the loop stops CLEANLY "
+        "after the current step, saves, and returns, so model.pt and metrics.json are still "
+        "written and anything later in the same job still runs. Set this a little under the "
+        "platform's runtime bound: metrics.json is written last, so a run killed at the wall "
+        "reports nothing at all and an evaluation sharing the job never starts. Arms cost very "
+        "different amounts per step (A0/A1 do one forward per example, A2-A4 do K+2), so on a "
+        "shared budget the CODI arms are the ones that run out -- which is the half of the "
+        "experiment worth having. Ending at different step counts is a budget confound; pair this "
+        "with a small --save-every and compare arms at the largest step they all reached "
+        "(eval_arms_from_s3.py --match-steps).",
+    )
     parser.add_argument("--init-seed", type=int, default=0, help="SAME across arms (shared init)")
     parser.add_argument("--seed", type=int, default=0, help="data-shuffle seed (per run)")
     parser.add_argument("--init-checkpoint", default=None, help="optional shared base state_dict")
@@ -339,6 +354,7 @@ def main() -> None:
             precision=args.precision,
             remote_dir=remote_dir,
             on_log=tracker.log,
+            max_seconds=args.max_seconds,
         )
         best = None
         best_path = run_dir / "best.json"

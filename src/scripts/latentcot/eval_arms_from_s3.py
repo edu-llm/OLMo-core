@@ -45,7 +45,12 @@ from olmo_core.latentcot import tokens as T
 from olmo_core.latentcot.data.encode import encode_example
 from olmo_core.latentcot.data.graph_gen import Example
 from olmo_core.latentcot.evaluate import ARM_MODES, assemble_gates, eval_one_arm
-from olmo_core.latentcot.inventory import describe_inventory, take_inventory
+from olmo_core.latentcot.inventory import (
+    apply_common_step,
+    describe_inventory,
+    select_common_step,
+    take_inventory,
+)
 from olmo_core.latentcot.train_driver import (
     autocast_ctx,
     configure_precision,
@@ -168,6 +173,17 @@ def main() -> None:
         "raises at construction without flash-attn installed -- pass 'torch' there. Same "
         "attention math; the 4096 sliding window is a no-op at our ~430-token sequences.",
     )
+    parser.add_argument(
+        "--match-steps",
+        action="store_true",
+        help="evaluate every arm at the largest stepN.pt that ALL of them wrote, instead of each "
+        "arm's own latest. Use this whenever the arms may have stopped at different steps -- which "
+        "is the normal outcome under a wall-clock budget, because A0/A1 run one forward per "
+        "example and A2-A4 run K+2, so the CODI arms get through far fewer steps in the same time. "
+        "Comparing arms at different step counts puts a difference in optimization budget straight "
+        "into gate A, which is a confound on the exact comparison the gate is defined on. Falls "
+        "back to per-arm latest, loudly, if any arm wrote no stepN.pt.",
+    )
     parser.add_argument("--out", type=Path, default=Path("runs/latentcot/eval"))
     parser.add_argument(
         "--publish-to",
@@ -188,6 +204,26 @@ def main() -> None:
     # exist is what decides whether the gates are computable at all. Sorted for the reader; the
     # evaluation order below is deliberately not sorted.
     inventory = take_inventory(args.checkpoint_root, sorted(arms), args.seed)
+
+    if args.match_steps:
+        common = select_common_step(inventory)
+        if common is None:
+            print(
+                "** --match-steps asked for, but at least one arm wrote no stepN.pt, so there is "
+                "no common step. Falling back to each arm's own latest checkpoint -- the arms may "
+                "therefore have had DIFFERENT optimization budgets, which is a confound on gate A. "
+                "Read the inventory below before trusting any comparison.",
+                flush=True,
+            )
+        else:
+            print(
+                f"** --match-steps: evaluating every arm at step {common}, the largest all of "
+                "them reached. Each arm's own later checkpoints are ignored on purpose so the "
+                "arms are compared at an equal optimization budget.",
+                flush=True,
+            )
+            inventory = apply_common_step(inventory, common)
+
     print(describe_inventory(inventory), flush=True)
     write_report({"inventory": inventory, **assemble_gates({})}, args.out, args.publish_to)
 

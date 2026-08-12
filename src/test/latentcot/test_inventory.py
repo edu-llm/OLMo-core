@@ -149,6 +149,65 @@ def test_single_pass_matches_the_two_pass_figures(monkeypatch):
     assert overall == pytest.approx(3 / 5)
 
 
+@pytest.mark.parametrize(
+    "names,expected",
+    [
+        (["step100.pt", "model.pt"], [100]),
+        (["step100.pt", "step2000.pt", "step300.pt"], [100, 300, 2000]),  # numeric, not lexical
+        (["model.pt", "best.pt", "metrics.json"], []),
+    ],
+)
+def test_steps_available_reads_only_step_checkpoints(names, expected):
+    assert I.steps_available(names) == expected
+
+
+def _inv(**arms):
+    """Build an inventory shaped like take_inventory's output from {arm: [basenames]}."""
+    return {
+        arm: {
+            "prefix": f"s3://b/ck//{arm}/{arm}-seed1",
+            "files": sorted(names),
+            "selected": None,
+            "selected_path": None,
+            "notes": [],
+        }
+        for arm, names in arms.items()
+    }
+
+
+def test_select_common_step_is_the_largest_all_arms_reached():
+    # A0/A1 are cheap and got further; A2 is the CODI arm that ran out of wall clock.
+    inv = _inv(
+        A0=["step100.pt", "step200.pt", "step300.pt", "model.pt"],
+        A1=["step100.pt", "step200.pt", "step300.pt", "model.pt"],
+        A2=["step100.pt", "step200.pt"],
+    )
+    assert I.select_common_step(inv) == 200
+
+
+def test_select_common_step_is_none_when_an_arm_never_checkpointed():
+    # No matched budget is available, and the caller must say so rather than compare mismatched
+    # arms -- this is the case that produced a vacuous result once already.
+    inv = _inv(A0=["step100.pt", "model.pt"], A2=["best.pt"])
+    assert I.select_common_step(inv) is None
+    assert I.select_common_step({}) is None
+
+
+def test_apply_common_step_repoints_every_arm_and_refuses_to_substitute():
+    inv = _inv(
+        A0=["step100.pt", "step200.pt", "step300.pt"],
+        A2=["step100.pt", "step200.pt"],
+        A3=["step100.pt"],  # lacks 200 -> must NOT silently fall back to 100
+    )
+    out = I.apply_common_step(inv, 200)
+    assert out["A0"]["selected"] == "step200.pt"
+    assert out["A0"]["selected_path"] == "s3://b/ck//A0/A0-seed1/step200.pt"
+    assert out["A2"]["selected"] == "step200.pt"
+    assert out["A3"]["selected"] is None and out["A3"]["selected_path"] is None
+    # Input is not mutated.
+    assert inv["A0"]["selected"] is None
+
+
 def test_assemble_gates_omits_gate_a_without_both_arms():
     entry = {"mode": "codi", "overall_acc": 0.5, "solve_rate_by_depth": {2: 0.5}}
     from olmo_core.latentcot.evaluate import assemble_gates

@@ -205,6 +205,46 @@ def test_train_arm_checkpoint_policy(dataset, tmp_path):
     assert set(best) == {"step", "val_acc"} and 0.0 <= best["val_acc"] <= 1.0
 
 
+def test_train_arm_max_seconds_stops_early_and_still_saves(dataset, tmp_path):
+    """
+    A wall-clock budget must stop the loop cleanly AND leave a checkpoint behind.
+
+    This is the property the last GPU run needed and did not have: metrics.json is written after
+    training returns, so a loop killed at the runtime wall reports nothing and anything sharing
+    the job never runs. Stopping early has to be a normal return, not an exception, and it has to
+    save even when the step is not a multiple of save_every.
+    """
+    model = _tiny_model()
+    save_dir = tmp_path / "run"
+    # A budget of 0 is reached during the first step, so the loop should do exactly one and stop.
+    history = train_arm(
+        model,
+        ARMS["A2"],
+        dataset,
+        steps=500,
+        batch_size=2,
+        lr=1e-3,
+        warmup_steps=5,
+        seed=0,
+        log_every=1,
+        save_dir=save_dir,
+        save_every=400,  # deliberately never divides the step it stops on
+        keep_last=2,
+        max_seconds=0.0,
+    )
+    assert len(history) == 1, "budget should stop the loop after the first step"
+    assert sorted(p.name for p in save_dir.glob("step*.pt")) == ["step1.pt"]
+
+
+def test_train_arm_without_max_seconds_runs_every_step(dataset):
+    """The default is unchanged: no budget means no early stop."""
+    model = _tiny_model()
+    history = train_arm(
+        model, ARMS["A2"], dataset, steps=6, batch_size=2, seed=0, log_every=1, max_seconds=None
+    )
+    assert len(history) == 6
+
+
 def test_train_arm_no_checkpoints_without_save_dir(dataset, tmp_path):
     """Default (no save_dir) writes no checkpoint artifacts — the smoke/unit path is unchanged."""
     model = _tiny_model()

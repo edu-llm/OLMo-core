@@ -11,12 +11,16 @@ unit-tested without S3 -- the same reason :mod:`olmo_core.latentcot.train_driver
 """
 
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 __all__ = [
     "ARM_NAMES",
     "arm_prefixes",
     "select_latest",
+    "step_of",
+    "steps_available",
+    "select_common_step",
+    "apply_common_step",
     "discover_arm",
     "take_inventory",
     "describe_inventory",
@@ -74,6 +78,77 @@ def select_latest(files: Dict[str, str]) -> Optional[Tuple[str, str]]:
         return None
     _, name = max(steps)
     return name, files[name]
+
+
+def step_of(name: str) -> Optional[int]:
+    """
+    The step number in a ``stepN.pt`` basename, or ``None`` for anything else.
+
+    :param name: A checkpoint basename.
+    :returns: ``N``, or ``None`` for ``model.pt``/``best.pt``/a non-checkpoint.
+    """
+    match = _STEP_RE.match(name)
+    return int(match.group(1)) if match else None
+
+
+def steps_available(names: Iterable[str]) -> List[int]:
+    """
+    The sorted step numbers among a collection of checkpoint basenames.
+
+    :param names: Basenames -- a list, or the keys of a basename-to-path mapping.
+    :returns: Ascending step numbers; empty if none are ``stepN.pt``.
+    """
+    return sorted(step for name in names if (step := step_of(name)) is not None)
+
+
+def select_common_step(inventory: Dict[str, dict]) -> Optional[int]:
+    """
+    The largest ``stepN.pt`` that **every** arm in ``inventory`` wrote.
+
+    Arms cost wildly different amounts per step -- A0/A1 run one forward per example, A2-A4 run
+    ``K + 2`` -- so on a shared wall-clock budget they stop at different steps. Comparing them as
+    they stand puts a difference in optimization budget straight into the gates, which is a
+    confound on exactly the comparison gate A is defined on. Evaluating every arm at the same step
+    removes it, and the dense checkpoint ladder is what makes that recoverable after the fact
+    rather than something that had to be predicted before the run.
+
+    :param inventory: The mapping from :func:`take_inventory`.
+    :returns: The common step, or ``None`` if any arm has no ``stepN.pt`` (in which case there is
+        no matched budget to be had and the caller should say so rather than silently compare
+        mismatched arms).
+    """
+    if not inventory:
+        return None
+    per_arm = [set(steps_available(entry["files"])) for entry in inventory.values()]
+    if any(not steps for steps in per_arm):
+        return None
+    common = set.intersection(*per_arm)
+    return max(common) if common else None
+
+
+def apply_common_step(inventory: Dict[str, dict], step: int) -> Dict[str, dict]:
+    """
+    Re-point every arm's selection at ``stepN.pt`` for the given step.
+
+    :param inventory: The mapping from :func:`take_inventory`. Not mutated.
+    :param step: The step to select, normally from :func:`select_common_step`.
+
+    :returns: A new inventory whose ``selected``/``selected_path`` name that step. An arm lacking
+        it keeps ``selected = None`` rather than falling back to a different step, because a silent
+        fallback is the confound this function exists to remove.
+    """
+    name = f"step{step}.pt"
+    out: Dict[str, dict] = {}
+    for arm, entry in inventory.items():
+        new = dict(entry)
+        if name in entry["files"] and entry["prefix"] is not None:
+            new["selected"] = name
+            new["selected_path"] = f"{entry['prefix']}/{name}"
+        else:
+            new["selected"] = None
+            new["selected_path"] = None
+        out[arm] = new
+    return out
 
 
 def discover_arm(root: str, arm: str, seed: int) -> Tuple[Optional[str], Dict[str, str]]:

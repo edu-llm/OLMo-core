@@ -62,11 +62,9 @@ class _Indexable(Protocol):
     """The minimal dataset interface :func:`iter_batches` needs — a ``LatentCotDataset`` or a
     ``torch.utils.data.Subset`` of one (the driver carves a validation split off the train set)."""
 
-    def __len__(self) -> int:
-        ...
+    def __len__(self) -> int: ...
 
-    def __getitem__(self, index: int) -> dict:
-        ...
+    def __getitem__(self, index: int) -> dict: ...
 
 
 def resolve_device(device: str = "auto") -> str:
@@ -375,6 +373,7 @@ def train_arm(
     precision: str = "bf16",
     remote_dir: Optional[str] = None,
     on_log: Optional[Callable[[dict], None]] = None,
+    max_seconds: Optional[float] = None,
 ) -> List[dict]:
     """
     Train ``model`` on one arm; return a list of logged metric snapshots.
@@ -405,6 +404,23 @@ def train_arm(
     :param save_dir: Directory for rolling/best checkpoints; ``None`` disables checkpointing.
     :param save_every: Save a rolling checkpoint every N steps (0 disables).
     :param keep_last: Number of most-recent rolling checkpoints to retain.
+    :param max_seconds: Wall-clock budget for the loop. On reaching it the loop stops **cleanly**
+        after the current step, saves, and returns, so the caller still writes ``model.pt`` and
+        ``metrics.json`` and anything downstream in the same job still runs.
+
+        THIS EXISTS BECAUSE BEING KILLED AT THE RUNTIME WALL LOSES MORE THAN THE REMAINING STEPS.
+        ``metrics.json`` is written last, after training, so a run killed mid-loop reports nothing
+        at all -- and any evaluation sharing the job never starts. Arms differ enormously in cost
+        per step (A0/A1 do one forward per example; A2-A4 do ``K + 2``), so on a fixed budget the
+        CODI arms are the ones that run out, which is precisely the half of the experiment worth
+        having. Passing a budget a little under the platform's bound converts "killed with nothing
+        reported" into "stopped early, saved, evaluated, and said which step it reached".
+
+        A budget makes arms end at **different step counts**, which is a confound on optimization
+        budget if the arms are then compared as they stand. That is what ``save_every`` is for:
+        with a dense ladder mirrored to S3 and remote copies unpruned, the matched-budget
+        comparison is recoverable afterwards by evaluating every arm at the largest step *all*
+        of them reached -- see :func:`olmo_core.latentcot.inventory.select_common_step`.
     :param val_examples: Held-out (from train, not the test set) examples for best-selection.
     :param precision: ``bf16`` (default) runs forwards under bf16 autocast on CUDA and enables
         TF32; ``fp32`` is bit-identical to the pre-flag driver. Applied to the training forward
@@ -556,7 +572,18 @@ def train_arm(
                         f"[on_log] sink raised, continuing: {type(exc).__name__}: {exc}",
                         file=sys.stderr,
                     )
-        if checkpointing and ((step + 1) % save_every == 0 or step == steps - 1):
+        out_of_time = max_seconds is not None and (time.perf_counter() - started) >= max_seconds
+        if checkpointing and ((step + 1) % save_every == 0 or step == steps - 1 or out_of_time):
             _save_rolling(step + 1)
             _maybe_update_best(step + 1)
+        if out_of_time:
+            # Announced on stdout, not just returned: the step this stopped at is what a later
+            # matched-budget evaluation needs, and stdout is the one channel that survives a
+            # container whose local files do not.
+            print(
+                f"[{arm.name}] wall-clock budget of {max_seconds:.0f}s reached at step "
+                f"{step + 1}/{steps}; stopping cleanly so model.pt and metrics.json are written.",
+                flush=True,
+            )
+            break
     return history

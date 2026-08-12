@@ -153,7 +153,7 @@ def test_log_passes_step_separately_and_drops_non_numerics():
     run = _FakeRun()
     tracker = ArmTracker(run=run)
     tracker.log({"step": 40, "loss": 1.5, "grad_norm": 0.25, "arm": "A2_codi", "ok": True})
-    (step, values) = run.logged[0]
+    step, values = run.logged[0]
     assert step == 40
     assert values == {"loss": 1.5, "grad_norm": 0.25}  # 'step' is the axis; str and bool dropped
 

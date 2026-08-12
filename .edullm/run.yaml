@@ -71,11 +71,62 @@
 #
 # --attempts 1 at submit time: there is no --resume, so a second attempt restarts from the base
 # checkpoint and bills a second full run for one result.
+#
+# ============================ THE FOUR THINGS THAT MAKE THIS SURVIVABLE ======================
+#
+# 1. --max-seconds 27000 (7.5 h) AGAINST A 10 h BOUND. This is the fix for the failure mode that
+#    would otherwise have cost this run. train_arm had NO time budget: at the runtime wall the
+#    process is killed mid-loop, and because metrics.json is written *after* training returns, a
+#    killed run reports nothing at all AND the evaluation sharing this job never starts. With a
+#    budget the loop stops cleanly after the current step, saves, and returns -- so model.pt and
+#    metrics.json are written, the eval runs, and the log says which step each arm reached. The
+#    2.5 h of headroom covers data generation, preflight, the checkpoint verify, the eval, and the
+#    S3 uploads.
+#
+# 2. --save-every 100, NOT 500, WHICH IS WHY A2-A4 HAD NOTHING LAST TIME. The arms differ by an
+#    order of magnitude in cost per step: A0/A1 run ONE forward per example, A2-A4 run K+2 = 12,
+#    and --batch-size does not batch the GPU (the CODI student is processed one example at a time),
+#    so a CODI step is roughly 11x an anchor step. A0/A1 finished all 2,000 steps in run_019ff280;
+#    the CODI arms OOMed well before step 500 and so never hit a single save interval. At 100 the
+#    first safety net lands inside the first hour for every arm. Local disk stays bounded by
+#    --keep-last 2; the REMOTE copies are deliberately not pruned, so S3 accumulates the whole
+#    ladder and a later run can be pointed at any step.
+#
+# 3. --match-steps ON THE EVAL, because a wall-clock budget makes arms end at DIFFERENT steps and
+#    comparing them as they stand would put a difference in optimization budget straight into
+#    gate A -- a confound on the exact comparison the gate is defined on. The eval picks the
+#    largest stepN.pt that ALL arms wrote and evaluates every arm there, ignoring the anchors'
+#    later checkpoints on purpose. This is what makes the dense ladder in (2) do scientific work
+#    rather than just insure against loss: the matched budget is recovered AFTER the run instead
+#    of having to be predicted before it, which matters because the per-step cost ratio is
+#    estimated, not measured.
+#
+# 4. --batch-size 8 PLUS expandable_segments, FOR THE OOM. 38.51 GiB was allocated on a 40 GiB
+#    A100 at rope.py:528, where q and k are upcast to fp32 inside the forward. Activations scale
+#    linearly with batch because all examples' K-chains are held alive before one backward, so 8
+#    should land near 20 GB. Two things add margin: the repaired generator puts half the nodes on
+#    the decoy chain, so frontiers are narrower and sequences shorter (longest teacher trace 103
+#    -> 57 tokens), and expandable_segments addresses the fragmentation the OOM message itself
+#    pointed at. It does not fix a genuine 38.5 GiB requirement, which is what --batch-size is for.
+#
+# HONEST EXPECTATION, SO THE RESULT IS NOT A SURPRISE: calibrating from the one hard measurement
+# available -- A0/A1 completing 2,000 steps within run_019ff280's 2h48m at batch 16 -- a CODI step
+# at batch 8 is around 25-30 s, so the CODI arms should reach roughly 1,000 of the 2,000 steps
+# inside the budget while A0/A1 finish early. That is why --steps stays at 2,000 rather than being
+# cut to a guess: if the arms are faster than estimated they finish and --match-steps evaluates at
+# 2,000; if slower, they stop cleanly and --match-steps evaluates at whatever they all reached.
+# The run degrades gracefully in both directions instead of betting on one number.
+#
+# --best-eval-size 100, halved, because validation runs at EVERY save point and A0's validation
+# is generation-based. At --save-every 100 that is ~20 validation passes per arm, and 200 examples
+# of A0 generation each time would add over an hour to the cheapest arm for no scientific gain --
+# best.pt is not what --match-steps evaluates. Identical across arms, so not a confound.
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-8xa100
 command: >-
   bash -lc 'EDULLM_LAUNCH_CHECK=waived ; set -uo pipefail;
+  export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True;
   DATA=data/latentcot/graph-reachability-depth/conversations;
   BASE=s3://edullm-checkpoints/olmo-370m/olmo3-370m/run-10b-equal/step12716/;
   ARMS=(A0 A1 A2 A3 A4);
@@ -89,6 +140,7 @@ command: >-
   CUDA_VISIBLE_DEVICES=$i python src/scripts/latentcot/train_codi.py
   --arm ${ARMS[$i]} --rung olmo3_370M --init-checkpoint "$BASE"
   --steps 2000 --batch-size 8 --precision bf16 --lr 2e-5
+  --max-seconds 27000 --save-every 100 --keep-last 2 --best-eval-size 100
   --init-seed 0 --seed 1 --log-every 50
   --wandb-project latent-cot-superposition
   --train-data $DATA/train-00000.jsonl --test-data $DATA/heldout-00000.jsonl
@@ -100,7 +152,7 @@ command: >-
   for i in 0 1 2 3 4; do echo "===== A$i last 40 ====="; tail -n 40 "$LOGS/A$i.log"; done;
   echo "===== EVAL =====";
   python src/scripts/latentcot/eval_arms_from_s3.py
-  --checkpoint-root "$EDULLM_CHECKPOINT_DIR"
+  --checkpoint-root "$EDULLM_CHECKPOINT_DIR" --match-steps
   --test-data $DATA/heldout-00000.jsonl
   --model olmo3_370M --precision bf16 --num-continuous-thoughts 10 --seed 1
   --out runs/latentcot/eval --publish-to "$EDULLM_CHECKPOINT_DIR" || true;
