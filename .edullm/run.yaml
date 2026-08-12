@@ -1,101 +1,107 @@
-# Run spec for EVALUATING the latent-CoT arms that run_019ff280 left in S3.
+# Retrain all five arms on the REPAIRED dataset, then evaluate them, in one job.
 #
-# This replaces the 5-arm training command that used to live here. That command is not lost: it is
-# on origin/edullm/latent-cot-superposition-amy and in this branch's history. Four training runs
-# were submitted and none finished -- the last two died at 2h48m, the newest with CUDA OOM at
-# 38.51 GiB on a 40 GiB A100 -- but they trained well past --save-every 500, so checkpoints were
-# mirrored to S3 as they were written. metrics.json is written LAST, after the final eval, so no
-# run wrote one. eval regenerates every gate number from weights alone, which is exactly why
-# those partial checkpoints are still worth something.
+# WHY THIS SUPERSEDES EVERYTHING BEFORE IT. The eval of run_019ff280 (see
+# docs/latent-cot/eval-2026-08-12-run_019ff72e.md) found the dataset was solvable without any
+# search: unreachable targets were given no in-edges, so "does `> T` appear in the edge list" was
+# exactly the label and scored 1.000 at every depth, out-of-distribution depths included. That is
+# why the no-CoT lower anchor came back at a perfect 1.000 while the explicit-CoT upper anchor sat
+# at chance -- inverted anchors are what a shortcut looks like from outside. Every number from
+# every previous run is therefore vacuous, and re-running the CODI arms on that data would have
+# measured nothing. graph_gen.generate() now builds two equal-length layered chains per instance,
+# one rooted at the source and one at an in-degree-zero decoy root, and the classes differ ONLY in
+# which chain the target sits on. On the regenerated held-out split every surface rule tested is
+# at chance (0.500-0.517, was 1.000), and test_no_surface_heuristic_separates_the_classes is the
+# regression test.
 #
-# WHAT THIS RUN SETTLES, IN ORDER:
-#   1. WHICH ARMS HAVE CHECKPOINTS AT ALL. A0 and A1 are confirmed to hold full ladders; A2/A3/A4
-#      are unknown, and they are the ones that matter -- assemble_gates() computes gate A only
-#      from A2 AND A0, and gate B only from A2/A3/A4. An inventory of just the two anchors
-#      supports NO gate. The script lists the bucket and prints that verdict in its first seconds,
-#      before building a model, and publishes it before the first forward pass. So even if this
-#      run does nothing else, the log answers the question.
-#   2. THE GATE NUMBERS, for whichever arms are there.
+# A PROPERTY WORTH KNOWING WHEN READING THE RESULTS: nothing in the construction except the choice
+# of target consults `reachable`, so for a fixed seed both classes are the SAME GRAPH with a
+# different node named as the sink. The positive and negative of each pair are matched exactly,
+# which is a stronger confound control than the old construction had even in intent.
 #
-# WHY olmo-core-check AND NOT olmo-core-train. Those are the only two workload profiles registered
-# to this repository (olmo-eval-check and olmo-eval-sweep belong to olmo-eval-full and are refused
-# with workload_profile_repository_mismatch). This run trains nothing and has nothing to resume,
-# so the honest profile is the one with no checkpoint contract. Two consequences:
-#   - require_a_save_folder_a_retry_can_find returns before it reads the command at all, because
-#     that guard is driven by the profile's contract and this profile declares none. The command
-#     still names $EDULLM_CHECKPOINT_DIR below, but for a real reason rather than to satisfy a
-#     guard: it is the only way an artifact outlives the container.
-#   - The runtime bound is tighter and attempts are capped lower than on the train profile. Read
-#     the exact figures out of `edullm check --json`, not from this comment -- they live in
-#     reviewed configuration that changes without anybody being told.
+# --batch-size 8, NOT 16, AND THAT IS THE OOM FIX. run_019ff280 died at 2h48m with 38.51 GiB
+# allocated on a 40 GiB A100, at rope.py:528 where q and k are upcast to fp32 inside the forward.
+# Activations scale linearly with batch, so 8 should land near 20 GB. Two things make this
+# comfortable rather than marginal: the repaired generator puts half the nodes on the decoy chain,
+# so BFS frontiers from the source are narrower and sequences are shorter (the longest teacher
+# trace fell from 103 tokens to 57), and only the three CODI arms hold a K=10 chain alive at all.
+# The OOM took exactly A2/A3/A4 and left A0/A1 finishing all 2,000 steps, which is consistent.
 #
-# THAT RUNTIME BOUND IS THE CONSTRAINT THIS SPEC IS BUILT AROUND. Estimated eval compute is 18-37
-# min on this shape, plus image pull, ~1 min of seeded data regeneration and the checkpoint reads.
-# Three choices keep it there, and each is load-bearing:
-#   - --max-new-tokens 64. The explicit_cot arm (A0) greedy-generates its CoT with NO KV cache, so
-#     every generated token is a full forward over the growing sequence, and evaluate.py's default
-#     cap of 128 sets the worst case. The longest teacher CoT in the held-out set is 56 tokens, so
-#     64 cannot truncate a correct trace while halving that worst case. This is the single biggest
-#     lever on runtime in the whole command.
-#   - ONE PASS PER ARM. run_eval() used to call overall_accuracy and solve_rate_by_depth
-#     separately, predicting every example twice for two numbers that come from the same counts.
-#     solve_rates_and_overall() now does it in one walk. Without that this run is 30-66 min and
-#     the bound becomes a coin flip.
-#   - THE ARM ORDER IS A1, A2, A0, A3, A4, and the report is rewritten and mirrored to S3 after
-#     EACH arm. A1 is nearly free; A2 with A0 completes gate A; A3 with A4 completes gate B. So a
-#     run killed at the wall has published every arm it finished, and each arm it finished
-#     completed a gate rather than leaving one half-built. This is the lesson from four runs that
-#     died before writing their one summary file.
+# THE LR IS NOW LESS ANCHORED, NOT MORE, AND NOBODY SHOULD READ PAST THIS. --lr 2e-5 was never
+# screened, and halving the batch halves the effective step, so it is further from anything
+# justified than it was. Any separation this run shows between arms carries that caveat. It is
+# held identical across arms, so it cannot become a confound BETWEEN them -- it only limits what
+# an absolute number means.
 #
-# NO EDULLM_LAUNCH_CHECK=waived, AND THAT IS DELIBERATE. The training spec needed it: 5 processes
-# on 8 cards. This is one process on one GPU, so read_launch_plan() reads a launcher-less command
-# as processes=1, which equals shape.gpus, and require_a_process_for_every_device passes clean.
-# Carrying the waiver anyway would be inert AND would disarm a live guard for nothing.
+# THE BASE CHECKPOINT PATH IS philote-dev's, FROM d77fa255, AND IS NOT TO BE "TIDIED".
+# s3://edullm-olmo-370m-ckpts/... appears in this repo's own PRD and docs and does not exist; the
+# weights are under edullm-checkpoints/olmo-370m/. Three of my runs died on the invented path.
+# verify_checkpoint.py strict-loads it before any arm starts, so a wrong path or a missing grant
+# costs a minute and the queue slot rather than the run.
 #
-# ON PRECISION. --precision bf16 selects the autocast context the arms trained under, so eval
-# numerics match training numerics instead of approximating them: parameters stay fp32 and
-# autocast casts the ops, exactly as in training. It is also what makes flash_2 usable at all --
-# the olmo3_* factories hardcode that backend and it accepts only bf16/fp16, so an fp32 forward
-# through it raises, which is what killed run_019fecf1 before philote-dev's 81747ce5. Naming
-# bfloat16 here is free on an L40S (Ada has bf16 in hardware); the bfloat16_not_in_the_hardware
-# guard fires only on T4/Turing shapes, and it only ever refuses, never requires.
+# THREE PARTS ARE PINNED BY THE PLATFORM AND MUST NOT BE REQUOTED OR REORDERED:
+#   EDULLM_LAUNCH_CHECK=waived   5 processes on 8 cards. THE SPACE BEFORE THE SEMICOLON IS
+#                                LOAD-BEARING: carries_the_token matches an exact word after
+#                                shlex splitting, so `waived;` is a different word and never
+#                                matches. It is not silent -- the approver is told the run bills
+#                                for 8 and starts 5.
+#   "$EDULLM_CHECKPOINT_DIR/A$i" require_a_save_folder_a_retry_can_find reads the command TEXT
+#                                for this variable. It expands to an s3:// URI, which
+#                                train_codi.py handles by staging locally and mirroring each
+#                                artifact as it is written.
+#   --rung olmo3_370M            explicit, because train_codi.py still defaults to olmo2_370M,
+#                                and a forgotten flag trains one architecture and evaluates as
+#                                another.
 #
-# WHY gpu-1xl40s RATHER THAN A SMALLER CARD. Not VRAM: one 370M model resident is ~2 GB and arms
-# are loaded one at a time, so even a T4 would hold it. It is memory BANDWIDTH. Every forward here
-# is batch-1, so cost is dominated by streaming the parameters once per forward rather than by
-# arithmetic or sequence length, and there are ~88k-124k forwards. The L40S's 864 GB/s against an
-# A10G's 600 is close to a proportional wall-clock saving, and it buys the margin the runtime
-# bound needs. Because the run finishes well inside an hour either way, the absolute cost
-# difference is small; check --json prices it exactly.
+# THE ARM LOGS GO TO /tmp AND ARE TAILED TO STDOUT -- philote-dev's cadda1c6. Redirecting to
+# "$EDULLM_CHECKPOINT_DIR/A$i/train.log" writes to a LOCAL relative path ("s3:/bucket/...") that
+# dies with the container, which is how two runs failed with no visible cause. /tmp plus a tail
+# per arm puts every arm's progress in the run log, and the last 40 lines of each are dumped at
+# the end so a failure is legible without a second dispatch.
 #
-# THE DATA REGENERATION IS NOT OPTIONAL. data/ is gitignored, so a fresh clone of this commit has
-# no dataset and eval would have nothing to score. gen_graph_data.py is seeded, with disjoint seed
-# ranges for train and test and fixed defaults, so it reproduces the SAME 960 held-out examples --
-# 160 each at depths 2/3/4/5/6/8 -- that the arms were trained against. Regenerating is therefore
-# not a confound; skipping it would be a missing file.
+# THE EVAL RUNS IN THE SAME JOB, deliberately. It needs one GPU for ~25 min against ~5 h of
+# training, so a second submission and a second approval would cost more waiting than compute.
+# It reads $EDULLM_CHECKPOINT_DIR -- the arms' own mirrored checkpoints -- and republishes
+# report.json after every arm, so a run killed at the wall still has every arm it finished.
+# `|| true` on the eval: if it fails, the checkpoints are already in S3 and can be evaluated by a
+# cheap follow-up, so an eval bug must not mark five trained arms as a failed run.
 #
-# THE CHECKPOINT ROOT AND ITS DOUBLE SLASH. $EDULLM_CHECKPOINT_DIR already ends in "/" and the
-# training command appended "/A$i", so train_codi.py built ".../checkpoints//A0/A0-seed1", and
-# upload() strips only leading and trailing slashes -- so the interior "//" is part of the literal
-# S3 key. S3 keys are opaque bytes, so checkpoints//A0 and checkpoints/A0 name DIFFERENT objects.
-# The root below is written WITHOUT the doubled slash and inventory.arm_prefixes() probes both
-# spellings, so this works whether or not the writing run carried the defect. Do not "fix" the
-# root by hand to match what is in the bucket.
+# --max-new-tokens IS NOT PASSED, ON PURPOSE. eval_arms_from_s3.py derives it from the test data
+# (longest teacher trace + 8) and prints it. The first version of this hardcoded 64, taken from a
+# count of whitespace words rather than tokens, and silently truncated 226 of 960 examples.
 #
-# THE ROOT IS A DIFFERENT RUN ID FROM THIS ONE, ON PURPOSE: it is the run being read, and
-# $EDULLM_CHECKPOINT_DIR is where this run's own report goes.
+# --attempts 1 at submit time: there is no --resume, so a second attempt restarts from the base
+# checkpoint and bills a second full run for one result.
 schema_version: 1
-workload_profile: olmo-core-check
-suggested_compute: gpu-1xl40s
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
 command: >-
-  bash -lc 'set -uo pipefail;
+  bash -lc 'EDULLM_LAUNCH_CHECK=waived ; set -uo pipefail;
   DATA=data/latentcot/graph-reachability-depth/conversations;
-  CKPTS=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/run_019ff280-9798-70f4-9ba4-d10f0712fdee/checkpoints;
+  BASE=s3://edullm-checkpoints/olmo-370m/olmo3-370m/run-10b-equal/step12716/;
+  ARMS=(A0 A1 A2 A3 A4);
   python src/scripts/latentcot/gen_graph_data.py;
+  python src/scripts/latentcot/preflight.py --train-data $DATA/train-00000.jsonl
+  --test-data $DATA/heldout-00000.jsonl || exit 1;
+  python src/scripts/latentcot/verify_checkpoint.py --model olmo3_370M
+  --init-checkpoint "$BASE" || exit 1;
+  LOGS=/tmp/armlogs; mkdir -p "$LOGS";
+  pids=(); tails=(); for i in 0 1 2 3 4; do : > "$LOGS/A$i.log";
+  CUDA_VISIBLE_DEVICES=$i python src/scripts/latentcot/train_codi.py
+  --arm ${ARMS[$i]} --rung olmo3_370M --init-checkpoint "$BASE"
+  --steps 2000 --batch-size 8 --precision bf16 --lr 2e-5
+  --init-seed 0 --seed 1 --log-every 50
+  --wandb-project latent-cot-superposition
+  --train-data $DATA/train-00000.jsonl --test-data $DATA/heldout-00000.jsonl
+  --out "$EDULLM_CHECKPOINT_DIR/A$i"
+  > "$LOGS/A$i.log" 2>&1 & pids+=($!);
+  ( tail -n +1 -f "$LOGS/A$i.log" | sed -u "s|^|[A$i] |" ) & tails+=($!); done;
+  rc=0; for p in "${pids[@]}"; do wait "$p" || rc=1; done;
+  sleep 5; kill "${tails[@]}" 2>/dev/null || true;
+  for i in 0 1 2 3 4; do echo "===== A$i last 40 ====="; tail -n 40 "$LOGS/A$i.log"; done;
+  echo "===== EVAL =====";
   python src/scripts/latentcot/eval_arms_from_s3.py
-  --checkpoint-root "$CKPTS"
+  --checkpoint-root "$EDULLM_CHECKPOINT_DIR"
   --test-data $DATA/heldout-00000.jsonl
-  --model olmo3_370M --precision bf16 --num-continuous-thoughts 10
-  --seed 1 --max-new-tokens 64
-  --out runs/latentcot/eval
-  --publish-to "$EDULLM_CHECKPOINT_DIR"'
+  --model olmo3_370M --precision bf16 --num-continuous-thoughts 10 --seed 1
+  --out runs/latentcot/eval --publish-to "$EDULLM_CHECKPOINT_DIR" || true;
+  exit $rc'

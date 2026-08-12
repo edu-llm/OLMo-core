@@ -150,11 +150,15 @@ def main() -> None:
     parser.add_argument(
         "--max-new-tokens",
         type=int,
-        default=64,
-        help="generation cap for the explicit_cot arm. The longest teacher CoT in the held-out "
-        "set is 56 tokens, so 64 cannot truncate a correct trace, and it halves the worst case "
-        "against evaluate.py's default of 128. That arm has no KV cache, so every generated "
-        "token costs a full forward and this cap is the biggest single lever on runtime.",
+        default=None,
+        help="generation cap for the explicit_cot arm. Derived from the test data by default -- "
+        "the longest teacher trace in it plus a small margin -- and printed. Pass a number to "
+        "override. DO NOT hardcode one: this cap was first set to 64 from a count of "
+        "whitespace-separated words, but the tokenizer emits ~1.7x that for node ids and the "
+        "'|' frontier separators, so it silently truncated 226 of 960 examples and the arm's "
+        "accuracy was read at whatever position generation stopped at. The arm has no KV cache, "
+        "so every generated token is a full forward and this is the biggest single lever on "
+        "runtime -- which is exactly why the temptation to pick a small constant is there.",
     )
     parser.add_argument(
         "--attn-backend",
@@ -178,7 +182,7 @@ def main() -> None:
 
     device = resolve_device(args.device)
     configure_precision(args.precision, device)
-    print(f"device={device} precision={args.precision} max_new_tokens={args.max_new_tokens}")
+    print(f"device={device} precision={args.precision}")
 
     # Discovery first, and reported before anything expensive is built: whether the CODI arms
     # exist is what decides whether the gates are computable at all. Sorted for the reader; the
@@ -199,6 +203,15 @@ def main() -> None:
     examples = load_examples(args.test_data, args.num_continuous_thoughts)
     print(f"loaded {len(examples)} test examples; evaluating {evaluated}", flush=True)
 
+    # Derived, not hardcoded -- see the flag's help. The longest teacher trace in THIS test set is
+    # the most an arm could correctly need, so this cannot truncate a correct trace, and it moves
+    # with the data instead of silently going stale when the generator changes.
+    max_new_tokens = args.max_new_tokens
+    if max_new_tokens is None:
+        longest = max(ex["teacher_distill_pos"] - ex["teacher_bot_pos"] for ex in examples)
+        max_new_tokens = longest + 8
+        print(f"max_new_tokens derived from the data: {longest} + 8 = {max_new_tokens}", flush=True)
+
     per_arm: Dict[str, dict] = {}
     for arm in evaluated:
         checkpoint = inventory[arm]["selected_path"]
@@ -210,7 +223,7 @@ def main() -> None:
         model.to(device)
 
         with autocast_ctx(args.precision, device):
-            per_arm[arm] = eval_one_arm(model, examples, arm, max_new_tokens=args.max_new_tokens)
+            per_arm[arm] = eval_one_arm(model, examples, arm, max_new_tokens=max_new_tokens)
 
         # Freed before the next arm is built: one model resident instead of five.
         del model
