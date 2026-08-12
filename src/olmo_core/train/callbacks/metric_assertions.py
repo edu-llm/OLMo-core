@@ -77,20 +77,107 @@ class MetricAssertionError(OLMoError):
     """
 
 
-# The step-0 loss band, as a half-width above ln(V).
+# The step-0 loss band.
 #
-# Provenance, and it is measured rather than derived: the sibling probe
-# (run_019fd3eb-dd0a-70bf-ba71-1141eca2c2f8) logged step-0 train loss **11.718** and reached
-# **11.520** by step 3, against ln(100352) = 11.5164. A correct init gives *exactly* ln(V) only
-# for exactly-uniform logits; for iid logits of standard deviation s the loss is approximately
-# ln(V) + s^2/2, so the observed 0.2016-nat excess implies s ~ 0.63 -- an ordinary init, not a
-# defect, and it self-corrects within three steps.
+# THE EXCESS OVER ln(V) IS A FUNCTION OF MODEL WIDTH, AND A FIXED HALF-WIDTH IS THEREFORE THE
+# WRONG SHAPE FOR THIS CHECK. This is the corrected formula; the history is written out below
+# because it cost a 32-GPU run to find and the arithmetic is not obvious.
 #
-# THEREFORE THIS IS A BAND AND NOT AN EQUALITY. Asserting equality against ln(V) would have
-# failed the sibling's own healthy run. 0.3 is chosen to clear the measured 0.2016 with margin
-# while still rejecting the failures that matter: a wrong vocab (ln(151936) - ln(100352) = 0.415
-# nats, outside the band), a mis-tied embedding, or an init that has collapsed or exploded.
+# The mechanism, read off the init code rather than guessed. Under ``InitMethod.normal``,
+# ``InitMethod.init_final_w_out`` (``nn/transformer/init.py``) leaves ``std = init_std = 0.02``:
+# it overrides ``std`` to ``d_model ** -0.5`` for ``llama``, ``llama_depth``, ``normalized`` and
+# ``fan_in``, and for ``normal`` it does **not**, so the LM head's weight std does not scale with
+# width. ``LMHead.forward`` applies its RMSNorm *before* ``w_out``, and an RMSNorm's affine weight
+# initializes to ones, so the hidden state reaching the head has per-element RMS exactly 1 and
+# hence ``||h||_2 = sqrt(d)``. A logit is ``w_j . h`` with ``w_j`` iid of std ``init_std``, so
+#
+#     logit std  s = init_std * sqrt(d_model)
+#     excess       = s^2 / 2 = init_std^2 * d_model / 2        (= 0.0002 * d_model at std 0.02)
+#
+# using the standard ``loss ~ ln(V) + s^2/2`` expansion for iid logits (the true label's logit is
+# independent of the label at init, so ``E[z_y] = 0``). **The excess is therefore LINEAR IN d**,
+# and a constant band cannot hold across widths.
+#
+# MEASURED PROVENANCE -- two independent runs on real hardware, matching the closed form to within
+# 0.01 nats:
+#
+#   d_model  predicted ln(V) + 0.0002*d   measured step-0 loss   residual   run
+#   -------  -------------------------   --------------------   --------   ---------------------
+#   1024     11.7212                     **11.718**             -0.0032    sibling probe
+#                                                                          run_019fd3eb-dd0a-70bf
+#                                                                          -ba71-1141eca2c2f8
+#                                                                          (`edullm_moe_m1`, tied)
+#   1536     11.8236                     **11.8328**            +0.0092    maple-m7b-mfu-nb1,
+#                                                                          4x8 H100, `maple_m7b`
+#
+# The sibling reached 11.520 by step 3, so the band still describes an initialization and nothing
+# later. Tied vs untied does not change the law: under ``normal`` both ``init_embeddings`` and
+# ``init_final_w_out`` use ``std = init_std``, so the sibling (tied) and M7B (untied) obey the same
+# formula -- which is why two runs of different tying agree with it.
+#
+# WHAT THE OLD FIXED 0.3 GOT WRONG, AND WHY IT WAS NOT MERELY TIGHT. The old band was
+# ``[ln V, ln V + 0.3]``, calibrated on the sibling's 0.2016 excess at **d=1024** and applied at
+# every width. Consequences, both real:
+#
+#   * It **failed a correct `maple_m7b`** at d=1536, whose honest excess is 0.3072. That is the
+#     defect this rewrite fixes; the init was never wrong.
+#   * At d=2048 (`maple_m20`, the mission deliverable) the predicted excess is **0.4096**, which is
+#     within **0.005 nats** of the **0.4148** that ``ln(151936) - ln(100352)`` contributes for a
+#     wrong vocab. So under a fixed band M20 would not only fail while correct -- the band would be
+#     **unable to distinguish a correct M20 from a vocab error at all.** That is a broken
+#     discriminator, not a threshold in need of loosening, and widening 0.3 to clear M20 would have
+#     swallowed exactly the failure the band exists to catch.
+#
+# THE FIX: center the band on the geometry-predicted excess and bound the *deviation from the
+# prediction*. The vocab offset is width-independent while the init excess is now subtracted off,
+# so the discriminating power is restored **and is the same at every width** -- which a fixed band
+# could not be. See :data:`STEP0_EXCESS_TOLERANCE_NATS`.
 STEP0_LOSS_BAND_NATS = 0.3
+"""
+Legacy fixed half-width above ``ln(V)``, used **only** when ``d_model`` is unknown.
+
+Retained rather than deleted because the callback must still do something defensible when it is
+constructed without a width (older call sites, ad-hoc use). When it is in force the width-aware
+band is NOT, and :meth:`MetricAssertionCallback.pre_train` says so out loud -- a check that has
+silently fallen back to a formula known to be wrong at d != 1024 is the confidence-manufacturing
+failure this module exists to prevent.
+"""
+
+# Tolerance on the deviation of the measured step-0 loss from the geometry-predicted value.
+#
+# **THIS IS NOT THE OLD 0.3 UNDER A NEW NAME, AND IT IS NOT A RELAXATION.** The old number had to
+# absorb the entire init excess (0.2048 at d=1024, and it did not stretch to 0.3072 at d=1536).
+# This one only has to absorb the *model error* of the closed form, which is **measured at <= 0.01
+# nats** at both widths above. So the requirement it must satisfy is a two-sided one:
+#
+#   * LOOSE ENOUGH to pass a healthy init: needs > ~0.01. At 0.20 that is a **21.7x** margin over
+#     the worst measured residual (0.0092 at d=1536).
+#   * TIGHT ENOUGH to reject a wrong vocab at EVERY width: needs < 0.4148. At 0.20 that is a
+#     **2.07x** margin, and unlike the old band it does not decay as d grows, because the
+#     prediction moves with d and the vocab offset does not.
+#
+# **Why 0.20 and not 0.25, which was the first value here.** 0.25 satisfied both bounds above, but
+# 0.20 **strictly dominates** it: it additionally catches a fully collapsed init at **d=1024**,
+# where the expected excess is 0.2048 -- inside a 0.25 tolerance, outside a 0.20 one. So the tighter
+# value buys a real check at no cost to any measured healthy value. That is the one circumstance in
+# which tightening is unambiguously right, and it is worth naming because the opposite mistake is
+# also recorded in this file (the ``expert_load_cv`` ceiling was once "corrected" from 0.55 to 0.50
+# and thereby moved *into* a band where the plan prescribes continuing -- **tighter is not
+# automatically safer**; it is safer here only because nothing measured sits between 0.20 and 0.25).
+#
+# Not tighter still (0.12, 0.15) because the closed form is verified at exactly two widths and the
+# sub-leading terms are real if small: ``trunc_normal_`` at +/-3 sigma carries ~97.3% of the nominal
+# variance, so the prediction is ~2.7% high (about -0.011 nats of deviation at d=2048, biased the
+# safe way for the upper bound), and bf16 logit rounding is unquantified. A tolerance that assumed
+# the formula exact would fail a healthy run over a second-order effect nobody has measured.
+#
+# It also **gains** a check the old band could not express at any width. A collapsed or badly
+# under-scaled init reads an excess near **zero**, which sat comfortably inside
+# ``[ln V, ln V + 0.3]`` and was therefore invisible. Centered on the prediction it is a deviation
+# of ``-init_std^2*d/2``, which exceeds 0.20 at every rung width (0.2048 / 0.3072 / 0.4096) and
+# fails. The floor is additionally clamped at ``ln V`` -- below that is unreachable for an
+# honestly-initialized model at any width, so it stays a hard bound in its own right.
+STEP0_EXCESS_TOLERANCE_NATS = 0.20
 
 # Gate mass tolerance around 1.0. The failure this catches is not a small drift -- it is
 # `normalize_expert_weights=None`, measured at **0.161**, a 6.2x error. So the tolerance only has
@@ -139,7 +226,55 @@ class MetricAssertionCallback(Callback):
     """
 
     step0_loss_band_nats: float = STEP0_LOSS_BAND_NATS
-    """Width of the step-0 loss band above ``ln(vocab_size)``."""
+    """
+    Legacy fixed half-width above ``ln(vocab_size)``. **Used only when :data:`d_model` is None.**
+
+    When ``d_model`` is supplied the band comes from the geometry instead -- see
+    :data:`STEP0_LOSS_BAND_NATS` for why a fixed half-width is the wrong shape for this check, and
+    :meth:`step0_loss_bounds` for the band actually applied.
+    """
+
+    d_model: Optional[int] = None
+    """
+    Model width, which is what makes the step-0 band correct at more than one width.
+
+    The init excess over ``ln V`` is ``init_std^2 * d_model / 2`` -- **linear in d** -- so without
+    this the band is only right at the width it was calibrated on (d=1024) and is wrong at both
+    ``maple_m7b`` (1536) and ``maple_m20`` (2048). Supplied by the caller from
+    ``config.model.d_model``. ``None`` falls back to :data:`step0_loss_band_nats` and
+    :meth:`pre_train` reports the fallback loudly.
+    """
+
+    init_std: float = 0.02
+    """
+    The LM head's weight init std, i.e. ``TransformerConfig.init_std``.
+
+    A field rather than a hard-coded 0.02 because it is the *other* half of the prediction: the
+    excess is ``init_std^2 * d_model / 2``, so a run that deliberately changed ``init_std`` would be
+    failed by a band that assumed the default. **Only valid for** ``InitMethod.normal`` -- see
+    :data:`init_scales_with_width`.
+    """
+
+    step0_excess_tolerance_nats: float = STEP0_EXCESS_TOLERANCE_NATS
+    """
+    Allowed deviation of the measured step-0 loss from the geometry-predicted value, when
+    :data:`d_model` is known. See :data:`STEP0_EXCESS_TOLERANCE_NATS` -- it bounds the *model error*
+    of the closed form (measured <= 0.01 nats), not the init excess itself.
+    """
+
+    init_scales_with_width: bool = False
+    """
+    Whether the init method scales the LM head std by ``d_model ** -0.5`` (``llama``,
+    ``llama_depth``, ``normalized``, ``fan_in``), rather than leaving it at ``init_std``
+    (``normal``).
+
+    **This is not a hypothetical branch.** ``InitMethod.init_final_w_out`` overrides ``std`` to
+    ``d_model ** -0.5`` for those four methods, which makes the logit std ``1.0`` and the expected
+    excess a constant ``0.5`` **at every width** -- a different formula, not a different number. Our
+    ladder is ``normal`` (the ``TransformerConfig`` default), so the default here is ``False``;
+    getting it wrong in either direction produces a band centered on the wrong value, so it is read
+    from the config rather than assumed.
+    """
 
     step0_max_step: int = 5
     """
@@ -595,7 +730,30 @@ class MetricAssertionCallback(Callback):
 
         if self.assert_step0_loss and self.vocab_size is not None:
             lo, hi = self.step0_loss_bounds
-            active.append(f"step-0 CE loss in [{lo:.4f}, {hi:.4f}] (ln V = {lo:.4f})")
+            ln_v = math.log(self.vocab_size)
+            predicted = self.step0_predicted_excess
+            if predicted is None:
+                # A band known to be wrong away from d=1024 must not be applied quietly. WARNING
+                # rather than a line in the INFO block, for the same reason the disabled balance
+                # bands are: this one changes what the assertion means.
+                active.append(
+                    f"step-0 CE loss in [{lo:.4f}, {hi:.4f}] (ln V = {ln_v:.4f}) -- LEGACY FIXED "
+                    "BAND, only correct at d=1024"
+                )
+                log.warning(
+                    "MetricAssertionCallback: `d_model` was not supplied, so the step-0 loss band "
+                    "is the LEGACY FIXED [ln V, ln V + %.2f]. That form is only correct at "
+                    "d_model=1024: the init excess is init_std^2*d/2, so it is 0.3072 at d=1536 "
+                    "and 0.4096 at d=2048, and this band WILL FAIL a correct model at either "
+                    "width. Pass `d_model` (and `init_std`) to get the width-aware band.",
+                    self.step0_loss_band_nats,
+                )
+            else:
+                active.append(
+                    f"step-0 CE loss in [{lo:.4f}, {hi:.4f}] = ln V + {predicted:.4f} "
+                    f"+/-{self.step0_excess_tolerance_nats} (ln V = {ln_v:.4f}, predicted excess "
+                    f"init_std^2*d/2 for d_model={self.d_model}, init_std={self.init_std})"
+                )
         elif self.assert_step0_loss:
             skipped.append(
                 "step-0 CE loss band -- SKIPPED because vocab_size was not supplied. This is the "
@@ -704,10 +862,46 @@ class MetricAssertionCallback(Callback):
             )
 
     @property
+    def step0_predicted_excess(self) -> Optional[float]:
+        """
+        The geometry-predicted excess of step-0 CE loss over ``ln V``, in nats, or ``None`` if
+        :data:`d_model` was not supplied.
+
+        ``init_std^2 * d_model / 2`` for ``InitMethod.normal``, because the head's std does not
+        scale with width there; ``0.5`` for the width-scaling methods, where the logit std is 1.0 by
+        construction. Derivation and the two measurements that confirm it are in
+        :data:`STEP0_LOSS_BAND_NATS`.
+        """
+        if self.d_model is None:
+            return None
+        s = 1.0 if self.init_scales_with_width else self.init_std * math.sqrt(self.d_model)
+        return s * s / 2.0
+
+    @property
     def step0_loss_bounds(self) -> Tuple[float, float]:
+        """
+        The band applied to the first logged step: ``ln V + predicted_excess +/- tolerance``,
+        floored at ``ln V``.
+
+        Width-aware whenever :data:`d_model` is known, which is the whole point -- the fixed
+        ``[ln V, ln V + 0.3]`` form was calibrated at d=1024 and both fails a correct d=1536 model
+        and cannot separate a correct d=2048 model from a wrong vocab. See
+        :data:`STEP0_LOSS_BAND_NATS`.
+
+        The lower bound is clamped at ``ln V`` because a loss below the entropy of a uniform
+        distribution over the vocab is not reachable by an honestly-initialized model at any width,
+        whatever the prediction says.
+        """
         assert self.vocab_size is not None
-        lo = math.log(self.vocab_size)
-        return lo, lo + self.step0_loss_band_nats
+        ln_v = math.log(self.vocab_size)
+        excess = self.step0_predicted_excess
+        if excess is None:
+            # No width: the legacy fixed band, and `pre_train` announces the fallback.
+            return ln_v, ln_v + self.step0_loss_band_nats
+        center = ln_v + excess
+        return max(ln_v, center - self.step0_excess_tolerance_nats), (
+            center + self.step0_excess_tolerance_nats
+        )
 
     def pre_log_metrics(self, step: int, metrics: Dict[str, float]):
         # `pre_log_metrics` rather than `log_metrics`, so the aggregates below are visible to
@@ -948,26 +1142,75 @@ class MetricAssertionCallback(Callback):
             return
 
         lo, hi = self.step0_loss_bounds
+        ln_v = math.log(self.vocab_size)
+        predicted = self.step0_predicted_excess
+        observed_excess = loss - ln_v
+
         if not (lo <= loss <= hi):
-            direction = (
-                "BELOW ln(V), which is not reachable by an honestly-initialised model -- suspect "
-                "a leaked label, a mis-tied embedding, or a resumed checkpoint that was not "
-                "detected as one"
-                if loss < lo
-                else "above the band. For iid init logits of std s the loss is ~ln(V) + s^2/2, "
-                "so this implies an unusually large init scale; a wrong vocab is the other "
-                "candidate (ln(151936) - ln(100352) = 0.415 nats)"
-            )
+            if loss < ln_v:
+                direction = (
+                    "BELOW ln(V), which is not reachable by an honestly-initialised model at any "
+                    "width -- suspect a leaked label, a mis-tied embedding, or a resumed "
+                    "checkpoint that was not detected as one"
+                )
+            elif predicted is None:
+                direction = (
+                    "above the band. For iid init logits of std s the loss is ~ln(V) + s^2/2, so "
+                    "this implies an unusually large init scale; a wrong vocab is the other "
+                    "candidate (ln(151936) - ln(100352) = 0.415 nats). NOTE: `d_model` was NOT "
+                    "supplied, so this is the legacy fixed band, which is only correct at d=1024 "
+                    "-- pass `d_model` to get the width-aware band before concluding anything is "
+                    "wrong with this model"
+                )
+            else:
+                # With the prediction subtracted off, the remaining deviation is diagnostic in a way
+                # the fixed band's raw excess never was. Name the candidates by which side it is on.
+                deviation = observed_excess - predicted
+                if deviation > 0:
+                    cause = (
+                        "The init scale is larger than the config implies, or the vocab is wrong: "
+                        f"a Qwen-151,936 head against this ln V contributes +0.4148 nats, and the "
+                        f"deviation here is {deviation:+.4f}. Unlike the old fixed band this "
+                        "comparison is width-independent, so 0.4148 means the same thing at every d"
+                    )
+                else:
+                    cause = (
+                        "The logits are FLATTER than the geometry predicts, i.e. the init is "
+                        "under-scaled or has collapsed (a fully collapsed head reads deviation "
+                        f"{-predicted:+.4f}), or the head's init method scales with width while "
+                        "`init_scales_with_width={} was assumed".format(self.init_scales_with_width)
+                    )
+                direction = (
+                    f"outside the WIDTH-AWARE band. Predicted excess for d_model={self.d_model} at "
+                    f"init_std={self.init_std} is init_std^2*d/2 = {predicted:.4f} nats, and the "
+                    f"observed excess is {observed_excess:.4f} -- a deviation of "
+                    f"{observed_excess - predicted:+.4f} against a tolerance of "
+                    f"+/-{self.step0_excess_tolerance_nats}. {cause}"
+                )
             self._failures.append(
                 f"step-0 CE loss {loss:.4f} is outside [{lo:.4f}, {hi:.4f}] for vocab "
-                f"{self.vocab_size:,d} (ln V = {lo:.4f}) -- {direction}. Sibling measured 11.718 "
-                "falling to 11.520 by step 3, so the band is deliberately 0.3 nats wide."
+                f"{self.vocab_size:,d} (ln V = {ln_v:.4f}) -- {direction}. The band is centered on "
+                "the geometry-predicted excess, NOT on ln V: measured provenance is d=1024 -> "
+                "11.718 (sibling) and d=1536 -> 11.8328 (maple-m7b-mfu-nb1), both within 0.01 nats "
+                "of init_std^2*d/2. Do NOT widen this band to make a run pass -- at d=2048 the "
+                "predicted excess (0.4096) and a wrong vocab (0.4148) differ by 0.005 nats, which "
+                "is exactly why the fixed 0.3-nat band was replaced rather than loosened."
             )
         else:
-            log.info(
-                f"step-0 CE loss {loss:.4f} is in band [{lo:.4f}, {hi:.4f}] "
-                f"(ln V = {lo:.4f}, excess {loss - lo:+.4f} nats)."
-            )
+            if predicted is None:
+                log.info(
+                    f"step-0 CE loss {loss:.4f} is in the LEGACY fixed band [{lo:.4f}, {hi:.4f}] "
+                    f"(ln V = {ln_v:.4f}, excess {observed_excess:+.4f} nats). `d_model` was not "
+                    "supplied, so this band is only correct at d=1024."
+                )
+            else:
+                log.info(
+                    f"step-0 CE loss {loss:.4f} is in band [{lo:.4f}, {hi:.4f}] (ln V = "
+                    f"{ln_v:.4f}, observed excess {observed_excess:+.4f} nats against a predicted "
+                    f"{predicted:.4f} for d_model={self.d_model} -- deviation "
+                    f"{observed_excess - predicted:+.4f}, tolerance "
+                    f"+/-{self.step0_excess_tolerance_nats})."
+                )
 
     def _check_bands(self, metrics: Dict[str, float]):
         # Asserted on the per-block series, NOT on the cross-block aggregate. A ceiling checked

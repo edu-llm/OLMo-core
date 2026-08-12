@@ -25,6 +25,8 @@ Runs on CPU: `compute_metrics` is driven off a hand-set histogram, so no Triton 
 no forward pass are involved.
 """
 
+import math
+
 import pytest
 import torch
 
@@ -740,4 +742,211 @@ def test_cv_glob_does_not_leak_between_the_three_cv_metrics():
     )
     assert not is_block_key(
         "train/block 00/expert_load_cv_excess_per_micro_batch", "expert_load_cv_excess"
+    )
+
+
+# ---------------------------------------------------------------------------------------------
+# THE WIDTH-AWARE STEP-0 LOSS BAND.
+#
+# These tests exist because the fixed 0.3-nat band FAILED A CORRECT MODEL on real hardware:
+# `maple-m7b-mfu-nb1` (4x8 H100, `maple_m7b`, d=1536) logged step-0 CE loss **11.8328** against a
+# ceiling of 11.8164 and died with `MetricAssertionError`, exit 72, at step 1. The init was fine;
+# the band was calibrated at d=1024 and never width-scaled.
+#
+# The excess over ln(V) is `init_std^2 * d_model / 2` -- LINEAR IN d -- because
+# `InitMethod.init_final_w_out` leaves the LM head's std at `init_std` for `InitMethod.normal`, and
+# `LMHead.forward` RMSNorms before `w_out` so `||h||_2 = sqrt(d)`. Two real runs confirm it to
+# within 0.01 nats: d=1024 -> 11.718, d=1536 -> 11.8328.
+# ---------------------------------------------------------------------------------------------
+
+LN_V_100352 = math.log(100352)
+"""ln(100,352), the padded dolma2 vocab. 11.5164."""
+
+WRONG_VOCAB_OFFSET = math.log(151936) - math.log(100352)
+"""0.4148 nats. Maple's Qwen vocab against ours -- the error the band must reject at every width."""
+
+
+def _step0_band_check(callback: MetricAssertionCallback, loss: float) -> list:
+    """Run only the step-0 band and return the failures, without the other bands' noise."""
+    callback._failures = []
+    callback._checked_step0 = False
+    callback._check_step0_loss(1, {"train/CE loss": loss})
+    return callback._failures
+
+
+@pytest.mark.parametrize(
+    "d_model, healthy_loss",
+    [
+        # d, and the loss a CORRECT model of that width produces. The first two are MEASURED on real
+        # hardware; the third is the closed form, which the first two validate.
+        (1024, 11.718),  # sibling probe run_019fd3eb, 8xA100 (measured)
+        (1536, 11.8328),  # maple-m7b-mfu-nb1, 4x8 H100 (measured) -- the run the old band killed
+        (2048, LN_V_100352 + 0.4096),  # maple_m20, predicted (UNTESTED: never constructed)
+    ],
+)
+def test_step0_band_passes_a_healthy_init_at_every_ladder_width(d_model, healthy_loss):
+    """A correct model must pass at d=1024, 1536 AND 2048. The old fixed band failed two of three."""
+    callback = MetricAssertionCallback(vocab_size=100352, d_model=d_model)
+
+    predicted = callback.step0_predicted_excess
+    assert predicted is not None
+    # The prediction is the formula, asserted as a magnitude rather than trusted.
+    assert predicted == pytest.approx(0.02**2 * d_model / 2, rel=1e-12), (
+        "the predicted excess must be exactly init_std^2*d/2; if this drifts the band is centered "
+        "on the wrong value and every width is wrong at once"
+    )
+    # And it must agree with what the hardware actually did, to the 0.01 nats measured.
+    assert healthy_loss - LN_V_100352 == pytest.approx(predicted, abs=0.01), (
+        f"the closed form predicts {predicted:.4f} nats of excess at d={d_model} but the "
+        f"healthy loss implies {healthy_loss - LN_V_100352:.4f}. Two runs matched to 0.01 nats, so "
+        "a larger residual means the mechanism is not what this band assumes."
+    )
+
+    assert not _step0_band_check(callback, healthy_loss), (
+        f"the step-0 band fires on {healthy_loss} at d_model={d_model}, which is a HEALTHY init. "
+        "This is exactly the defect that killed maple-m7b-mfu-nb1 (11.8328 at d=1536 against a "
+        "fixed 11.8164 ceiling) and it must not come back."
+    )
+
+
+@pytest.mark.parametrize("d_model", [1024, 1536, 2048])
+def test_step0_band_still_rejects_a_wrong_vocab_at_every_width(d_model):
+    """
+    THE POINT OF THE REWRITE. A width-scaled band must not buy its width-tolerance by going blind
+    to the error it exists to catch.
+
+    A wrong vocab (Qwen 151,936 head, ln V computed at 100,352) adds a FIXED 0.4148 nats at every
+    width, while the init excess grows with d. Under the old fixed band those two collided at
+    d=2048 -- predicted excess 0.4096 vs 0.4148, a 0.005-nat gap -- so no fixed threshold could
+    separate a correct M20 from a vocab error. Centering on the prediction restores the separation
+    and makes it width-independent.
+    """
+    callback = MetricAssertionCallback(vocab_size=100352, d_model=d_model)
+    predicted = callback.step0_predicted_excess
+    assert predicted is not None
+
+    wrong_vocab_loss = LN_V_100352 + predicted + WRONG_VOCAB_OFFSET
+    failures = _step0_band_check(callback, wrong_vocab_loss)
+    assert failures, (
+        f"a wrong-vocab loss of {wrong_vocab_loss:.4f} PASSED at d_model={d_model}. The band has "
+        f"gone blind to a {WRONG_VOCAB_OFFSET:.4f}-nat error, which is the failure it exists to "
+        "catch. Do not fix this by widening the tolerance."
+    )
+    # A magnitude, not just existence: the tolerance must stay strictly inside the vocab offset, or
+    # the rejection above is luck rather than design.
+    assert callback.step0_excess_tolerance_nats < WRONG_VOCAB_OFFSET, (
+        f"the tolerance {callback.step0_excess_tolerance_nats} is not smaller than the "
+        f"{WRONG_VOCAB_OFFSET:.4f}-nat wrong-vocab offset, so a vocab error is inside the band at "
+        "EVERY width."
+    )
+
+
+@pytest.mark.parametrize("d_model", [1024, 1536, 2048])
+def test_step0_band_rejects_a_loss_below_ln_v_at_every_width(d_model):
+    """
+    Below ln(V) is unreachable for an honest init at any width -- a leaked label, a mis-tied
+    embedding, or an undetected resume. The floor is clamped at ln(V) precisely so that centering
+    the band on a prediction cannot open a hole underneath it.
+    """
+    callback = MetricAssertionCallback(vocab_size=100352, d_model=d_model)
+    lo, _ = callback.step0_loss_bounds
+    assert lo >= LN_V_100352, (
+        f"the lower bound {lo:.4f} is below ln V = {LN_V_100352:.4f} at d_model={d_model}; a loss "
+        "under the uniform-distribution entropy must never be in band"
+    )
+    assert _step0_band_check(callback, LN_V_100352 - 0.05), (
+        f"a loss below ln V passed at d_model={d_model}"
+    )
+    # A mis-tied embedding at d=2048's magnitude: still caught.
+    assert _step0_band_check(callback, 4.4), "a partly-trained loss of 4.4 passed the init band"
+
+
+def test_step0_band_rejects_an_exploded_init_at_every_width():
+    """An init hot enough to matter must fail, and the threshold must scale rather than be absolute."""
+    for d_model in (1024, 1536, 2048):
+        callback = MetricAssertionCallback(vocab_size=100352, d_model=d_model)
+        predicted = callback.step0_predicted_excess
+        assert predicted is not None
+        # 2x the intended init_std is 4x the excess -- a real defect at every width.
+        exploded = LN_V_100352 + 4 * predicted
+        assert _step0_band_check(callback, exploded), (
+            f"an init at 2x the intended std (excess {4 * predicted:.4f} against a predicted "
+            f"{predicted:.4f}) passed at d_model={d_model}"
+        )
+
+
+@pytest.mark.parametrize("d_model", [1024, 1536, 2048])
+def test_step0_band_catches_a_collapsed_init_where_the_old_band_could_not(d_model):
+    """
+    A NEW capability the fixed band could not express at ANY width.
+
+    A collapsed init reads an excess near ZERO, which sat comfortably inside the old
+    `[ln V, ln V + 0.3]` and was therefore invisible. Centered on the prediction it is a deviation
+    of `-predicted`, and since `predicted` (0.2048 / 0.3072 / 0.4096) exceeds the 0.20 tolerance at
+    every rung width, it now fails everywhere.
+
+    This is also why the tolerance is 0.20 rather than the 0.25 first written: at d=1024 the
+    expected excess is 0.2048, so a 0.25 tolerance would have swallowed a total collapse there.
+    """
+    callback = MetricAssertionCallback(vocab_size=100352, d_model=d_model)
+    predicted = callback.step0_predicted_excess
+    assert predicted is not None
+    assert predicted > callback.step0_excess_tolerance_nats, (
+        f"at d={d_model} the predicted excess {predicted:.4f} does not exceed the tolerance "
+        f"{callback.step0_excess_tolerance_nats}, so a collapsed init is INSIDE the band and this "
+        "test cannot hold. Tightening the tolerance is the fix, not deleting the case."
+    )
+    assert _step0_band_check(callback, LN_V_100352 + 0.001), (
+        f"a collapsed init at d={d_model} (excess ~0, deviation {-predicted:+.4f}) passed"
+    )
+
+
+def test_step0_band_falls_back_loudly_without_d_model_and_the_legacy_form_is_unchanged():
+    """
+    Without `d_model` the legacy fixed band is used, and it must be EXACTLY the old one -- the
+    fallback is for compatibility, not a second calibration that can drift.
+    """
+    callback = MetricAssertionCallback(vocab_size=100352)
+    assert callback.step0_predicted_excess is None, "no width means no prediction"
+    lo, hi = callback.step0_loss_bounds
+    assert lo == pytest.approx(LN_V_100352, abs=1e-9)
+    assert hi == pytest.approx(LN_V_100352 + 0.3, abs=1e-9)
+    # And it reproduces the historical failure, which is the proof it is the same band: M7B's
+    # measured-healthy 11.8328 fails under it.
+    assert _step0_band_check(callback, 11.8328), (
+        "the legacy fallback must still reject 11.8328 -- that is what it did on real hardware, "
+        "and a fallback that quietly behaved differently would hide the reason d_model matters"
+    )
+
+
+def test_step0_band_handles_a_width_scaling_init_method():
+    """
+    `llama`/`normalized`/`fan_in` override the head's std to `d_model ** -0.5`, making the logit std
+    1.0 and the predicted excess a CONSTANT 0.5 at every width -- a different formula, not a
+    different number. Getting this branch wrong centers the band on the wrong value.
+    """
+    for d_model in (1024, 1536, 2048):
+        callback = MetricAssertionCallback(
+            vocab_size=100352, d_model=d_model, init_scales_with_width=True
+        )
+        assert callback.step0_predicted_excess == pytest.approx(0.5, rel=1e-12), (
+            "a width-scaling init method predicts a constant 0.5-nat excess; it must not reuse the "
+            "init_std^2*d/2 form"
+        )
+        assert not _step0_band_check(callback, LN_V_100352 + 0.5), (
+            f"the healthy value for a width-scaling init failed at d_model={d_model}"
+        )
+
+
+def test_step0_band_respects_a_non_default_init_std():
+    """
+    `init_std` is a field because a run that changed it would otherwise be failed by a band that
+    assumed 0.02. The excess is quadratic in it.
+    """
+    callback = MetricAssertionCallback(vocab_size=100352, d_model=1536, init_std=0.01)
+    assert callback.step0_predicted_excess == pytest.approx(0.01**2 * 1536 / 2, rel=1e-12)
+    # And the d=1536 default-init value must now FAIL, because it is no longer the prediction.
+    assert _step0_band_check(callback, 11.8328), (
+        "at init_std=0.01 the predicted excess is 0.0768, so 11.8328 (excess 0.3164) is a 4x-hot "
+        "init and must fail"
     )

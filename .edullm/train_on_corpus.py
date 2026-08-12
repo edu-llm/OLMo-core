@@ -135,7 +135,7 @@ from olmo_core.distributed.utils import barrier, get_rank
 from olmo_core.io import clear_directory, list_directory, normalize_path
 from olmo_core.nn.lm_head import LMLossImplementation
 from olmo_core.nn.quantization import audit_quantization
-from olmo_core.nn.transformer import TransformerConfig
+from olmo_core.nn.transformer import InitMethod, TransformerConfig
 from olmo_core.optim import (
     AdamWConfig,
     CosWithWarmup,
@@ -1774,7 +1774,31 @@ def train(config, opts=None) -> None:
     #
     # Built as a kwargs dict so an unset flag leaves the callback's own default in force, rather than
     # this file restating 0.01 and 0.0 and becoming a second place they can drift.
-    assertion_kwargs: Dict[str, Any] = {"vocab_size": config.model.vocab_size}
+    #
+    # `d_model`, `init_std` and the init method go with the vocab because THE STEP-0 BAND IS
+    # WIDTH-DEPENDENT AND IS WRONG WITHOUT THEM. The init excess over `ln V` is `init_std^2*d/2`
+    # (`InitMethod.normal` does not scale the LM head's std with width -- see
+    # `metric_assertions.STEP0_LOSS_BAND_NATS`), so it is 0.2048 at d=1024, 0.3072 at d=1536 and
+    # 0.4096 at d=2048. The old fixed 0.3-nat band FAILED THE FIRST REAL `maple_m7b` RUN
+    # (`maple-m7b-mfu-nb1`, 4x8 H100, step-0 loss 11.8328 against a ceiling of 11.8164) on a model
+    # whose init was correct. Passing the geometry is what makes the band mean the same thing at
+    # every rung; omitting it silently reinstates the d=1024-only form.
+    assertion_kwargs: Dict[str, Any] = {
+        "vocab_size": config.model.vocab_size,
+        "d_model": config.model.d_model,
+        "init_std": config.model.init_std,
+        # `init_final_w_out` overrides the head's std to `d_model ** -0.5` for these four methods,
+        # which makes the logit std 1.0 and the predicted excess a constant 0.5 at every width --
+        # a different formula, not a different number. Read from the config rather than assumed,
+        # because assuming either way centers the band on the wrong value.
+        "init_scales_with_width": config.model.init_method
+        in (
+            InitMethod.llama,
+            InitMethod.llama_depth,
+            InitMethod.normalized,
+            InitMethod.fan_in,
+        ),
+    }
     if opts is not None:
         if getattr(opts, "no_balance_bands", False):
             assertion_kwargs["drop_frac_max"] = None
