@@ -1,0 +1,53 @@
+# THREE-WAY EVAL: PLAIN LINEAR ATTENTION vs GATED DELTANET vs GATED DELTANET-2.
+#
+#   edullm check  --spec .edullm/run-eval.yaml --experiment gdn-family-eval --dataset none
+#   edullm submit --spec .edullm/run-eval.yaml --experiment gdn-family-eval --dataset none
+#
+# --dataset none is correct and is a statement: this run reads no REGISTERED corpus. Its eval
+# shards and its checkpoints are both staged under outputs/teams/*/runs/*, which the GPU workload
+# role may read, and naming a dataset release here would claim it opened one of the sealed
+# corpora when it did not.
+#
+# WHY THE CHECKPOINTS ARE UNDER outputs/ AND NOT WHERE THEY WERE TRAINED. The linear and GDN
+# checkpoints live in s3://edullm-checkpoints, which is in none of the GPU workload role's three
+# policies -- the role reads edullm-data and sbsandbox-intern-edullm-outputs and nothing else. So
+# they were copied into staging prefixes first. GDN-2 needs no copy: it was trained on this
+# platform, so its checkpoints are already under its own run's outputs prefix.
+#
+# ONE PROCESS, THREE ARMS, SEQUENTIALLY. Container start, the S3 dataset open and the CUDA
+# context are paid once and shared, so they cancel out of the arm-vs-arm contrast rather than
+# adding unpaired jitter per arm -- A100-MFU-PLAYBOOK.md B8 measured that jitter as LARGER than
+# the effect in a comparable setup. It is also one queue wait instead of three.
+#
+# THE EVAL SHARDS ARE THE THREE THE PUBLISHED RESULT USED: arxiv, finemath-3plus and wikipedia,
+# the same part-* files named in the baseline's own _longctx_deploy.sh. That is what makes these
+# numbers comparable to the longctx_eval.json sitting beside each checkpoint, which is the
+# cheapest available check that this harness reproduces a known answer before anyone reads a new
+# one off it.
+#
+# gpu-1xl40s at 45,776 MiB: the largest single card this account can start, and the length sweep
+# wants headroom -- 65,536-token windows against a 100,352 vocab is where the smaller cards stop.
+# One card, because nothing here is distributed and extra ranks would only add collectives.
+#
+# olmo-core-check rather than olmo-core-train: this trains nothing and writes no checkpoint, so
+# it should promise neither. The upload of the results JSON goes to EDULLM_OUTPUT_PREFIX, which
+# the checkpoint contract does not cover and does not need to.
+#
+# TRITON_F32_DEFAULT=ieee because every arm's mixer is a Triton kernel (fla.ops.linear_attn,
+# fla.ops.gated_delta_rule, fla.ops.gdn2) and Triton lowers tl.dot to TF32 on Ampere+ by its own
+# default, which torch's allow_tf32=False does not reach. Playbook B9 measures 166x of relative
+# error from that one variable. On an eval it would silently bias every number reported here, and
+# it would bias the three arms unequally because their kernels differ.
+schema_version: 1
+workload_profile: olmo-core-check
+suggested_compute: gpu-1xl40s
+command: >-
+  bash -lc 'export TRITON_F32_DEFAULT=ieee &&
+  S=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs &&
+  python .edullm/eval_arms.py "$EDULLM_RUN_ID"
+  --arms "linear=$S/stage-linear/checkpoints/step12716,gdn=$S/stage-gdn/checkpoints/step12716,gdn2=$S/run_019fdfe0-01d2-7092-bdae-dfce5f5d4f19/checkpoints/step19073"
+  --eval-data "$S/stage-evaldata/arxiv/part-00-00000.npy,$S/stage-evaldata/finemath-3plus/part-000-00000.npy,$S/stage-evaldata/wikipedia/part-00-00000.npy"
+  --seq-lens 4096,8192,16384,32768,65536
+  --niah-lens 1024,2048,4096,8192,16384
+  --niah-keys 1,4 --niah-items 32 --max-windows 48
+  --upload-to "$EDULLM_OUTPUT_PREFIX/eval_arms.json"'
