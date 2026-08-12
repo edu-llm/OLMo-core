@@ -1,0 +1,29 @@
+# The smoke cell for the in-context endpoint, which no other smoke cell reaches.
+#
+# `<ctxmano>` items are 256 tokens against `<mano>`'s 8-24, they carry a freshly randomised operator table
+# per item, and they are padded to tile the 512-token instance exactly. None of that had ever run outside a
+# CPU test, and all of it is load-bearing for the confirmatory endpoint -- so it is worth the seconds this
+# takes before a submission spends 11B tokens on the calibration sweep.
+#
+# Not a scientific cell. The demand is 0.005 to keep the entity table near 1,000 and the run at seconds.
+cell_id: smoke_13m_ctx
+row: 13M
+sweep: count
+demand_bits_per_param: 0.005
+exposures: 2
+sequence_length: 512
+global_batch_size: 8192
+learning_rate: 0.003
+weight_decay: 0.1
+warmup_steps: 2
+decay_fraction: 0.2
+mano_variant: both
+ctxmano_length: 4
+ctxmano_alphabet: 10
+ctxmano_pad_to: 256
+mano_length: 4
+mano_pad_to: 32
+reasoning_tokens: 20480
+related_reasoning_tokens: 20480
+seed: 1234
+notes: Smoke cell carrying both reasoning endpoints. Proves the in-context path, proves nothing about capacity.

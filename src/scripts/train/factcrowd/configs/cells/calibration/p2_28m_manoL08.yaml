@@ -8,6 +8,7 @@ exposures: 200
 global_batch_size: 262144
 learning_rate: 0.003
 mano_length: 8
+mano_pad_to: 32
 mano_variant: memorised
 n_entities: 2
 notes: 'memorised mano calibration in the entropy architecture: reasoning only, expression

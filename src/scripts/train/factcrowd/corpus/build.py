@@ -193,6 +193,7 @@ class BuiltCorpus:
                         self.vocabulary,
                         domain_token="<mano>",
                         length=resolved.spec.mano_length,
+                        pad_to=resolved.spec.mano_pad_to,
                         seed=spec.seed + self.mano_seed_offset,
                         split=split,
                     )

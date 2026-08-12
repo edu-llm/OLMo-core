@@ -180,6 +180,50 @@ class TaskItem:
         return self.tokens[self.answer_start : self.answer_end]
 
 
+def resolve_padding(pad_to: Optional[int], natural: int, *, what: str) -> int:
+    """
+    Validate an instance-alignment width and return the padded item width.
+
+    **Why any of this exists.** The trainer concatenates a reasoning slice and chunks it into
+    :data:`_MAX_INSTANCE_TOKENS`-token instances, so an item whose width does not *divide* that is cut by a
+    boundary. Over one period there are ``w/gcd(w, 512)`` boundaries and only those landing on an item start
+    are harmless, which works out at 3.12% of 24-token ``<mano>`` items and 52% of 266-token in-context ones.
+
+    A cut item is worse than a missing one: it opens mid-expression, or loses the answer, or keeps an answer
+    whose question is in the previous instance.
+
+    **The second reason, and the one that made this necessary rather than tidy.** A depth sweep holds the
+    token budget fixed while item width grows with depth, so the arms get *different item counts* -- 125M at
+    length 2 against 41.7M at length 10, a factor of three. "Accuracy falls with depth" then conflates the
+    task getting harder with the arm getting a third of the examples. Padding every depth to one width makes
+    items, tokens and steps all equal across the sweep and leaves depth as the only thing that moves. It
+    costs no compute at all: the budget is in tokens either way, so padding trades item count for
+    comparability rather than buying it with FLOPs.
+
+    :param pad_to: The requested width, or ``None`` for no padding.
+    :param natural: The item's unpadded width.
+    :param what: Names the task, for the message.
+
+    :returns: The width an item occupies, which is ``natural`` when ``pad_to`` is ``None``.
+
+    :raises OLMoConfigurationError: If the width is below ``natural`` or does not divide the instance.
+    """
+    if pad_to is None:
+        return natural
+    if pad_to < natural:
+        raise OLMoConfigurationError(
+            f"'pad_to' is {pad_to} but a {what} item is already {natural} tokens"
+        )
+    if _MAX_INSTANCE_TOKENS % pad_to:
+        options = [n for n in (8, 16, 32, 64, 128, 256, 512) if n >= natural]
+        raise OLMoConfigurationError(
+            f"'pad_to' must divide the {_MAX_INSTANCE_TOKENS}-token instance, and {pad_to} does not. "
+            f"Padding to a width that does not divide it moves the cut rate without removing it, which is "
+            f"the worst of both -- try one of {options}."
+        )
+    return pad_to
+
+
 class ReasoningTask(ABC):
     """
     A generated reasoning slice: fixed width, regenerated per index, answer span known.
@@ -450,9 +494,16 @@ class ManoTask(ReasoningTask):
         its own degenerate policy at 13M-28M, failing the 20-80% admission band; at 10 Physics 4.1
         reports 47.8 to 66.0 from scratch at our exact 12 layers, moving 18.2 points across the
         parameter range.
+    :param pad_to: Pad each item to this width, which must divide the 512-token instance. **Wanted on any
+        config that sweeps ``length``**, and not for the reason it looks like: a sweep holds the token
+        budget fixed while an item's width grows with depth, so length 2 gets 125M items and length 10 gets
+        41.7M -- a factor of three, in the one experiment whose job is to compare depths. Padding every
+        depth to 32 gives all of them 31.25M items, equal steps, equal tokens and a zero cut rate, and costs
+        no compute because the budget was in tokens all along. See :func:`resolve_padding`.
     :param seed: Seeds expression generation.
 
-    :raises OLMoConfigurationError: If ``length`` is below two or the vocabulary is missing a word.
+    :raises OLMoConfigurationError: If ``length`` is below two, the vocabulary is missing a word, or
+        ``pad_to`` is below the natural width or does not divide the instance.
     """
 
     name = "mano"
@@ -463,6 +514,7 @@ class ManoTask(ReasoningTask):
         *,
         domain_token: str,
         length: int = 10,
+        pad_to: Optional[int] = None,
         seed: int = 0,
         split: str = "train",
     ) -> None:
@@ -488,7 +540,10 @@ class ManoTask(ReasoningTask):
         self._equals = np.array([vocabulary.id_of("<equals>")], dtype=_TOKEN_DTYPE)
         self._eos = np.array([vocabulary.eos_id], dtype=_TOKEN_DTYPE)
         # domain + bos + length residues + (length - 1) operators + equals + answer + eos
-        self._width = 2 + length + (length - 1) + 1 + 1 + 1
+        self._natural_width = 2 + length + (length - 1) + 1 + 1 + 1
+        self._pad_to = pad_to
+        self._width = resolve_padding(pad_to, self._natural_width, what="mano")
+        self._pad_id = _TOKEN_DTYPE(vocabulary.id_of(PAD))
 
     @property
     def tokens_per_item(self) -> int:
@@ -627,8 +682,22 @@ class ManoTask(ReasoningTask):
         tokens[cursor] = self._residue_ids[total]
         cursor += 1
         tokens[cursor] = self._eos[0]
+        # After the eos, so the answer's offset is unchanged. `PAD` and not `EOS`: the document-boundary
+        # machinery sizes its per-instance array by counting eos occurrences.
+        if cursor + 1 < self._width:
+            tokens[cursor + 1 :] = self._pad_id
 
         return TaskItem(tokens, answer_start, answer_start + 1, (f"<n{total}>",))
+
+    @property
+    def natural_width(self) -> int:
+        """Tokens an item needs before any instance-alignment padding."""
+        return self._natural_width
+
+    @property
+    def padding(self) -> int:
+        """Padding tokens per item; zero when unpadded or already aligned."""
+        return self._width - self._natural_width
 
     def fingerprint(self) -> str:
         digest = hashlib.sha256()
@@ -637,6 +706,7 @@ class ManoTask(ReasoningTask):
             self._vocabulary.fingerprint(),
             self._domain_token,
             str(self._length),
+            str(self._pad_to),
             str(self._seed),
             self._split,
             str(MANO_MODULUS),
@@ -799,20 +869,7 @@ class InContextManoTask(ReasoningTask):
         # costs a few percent of tokens and takes the cut rate to zero.
         self._natural_width = self._width
         self._pad_to = pad_to
-        if pad_to is not None:
-            if pad_to < self._width:
-                raise OLMoConfigurationError(
-                    f"'pad_to' is {pad_to} but an item at alphabet={alphabet} and length={length} is "
-                    f"already {self._width} tokens"
-                )
-            if _MAX_INSTANCE_TOKENS % pad_to:
-                raise OLMoConfigurationError(
-                    f"'pad_to' must divide the {_MAX_INSTANCE_TOKENS}-token instance, and {pad_to} does "
-                    f"not. Padding to a width that does not divide it moves the cut rate without "
-                    f"removing it, which is the worst of both -- try "
-                    f"{[n for n in (128, 256, 512) if n >= self._width]}"
-                )
-            self._width = pad_to
+        self._width = resolve_padding(pad_to, self._natural_width, what="in-context mano")
         self._pad_id = _TOKEN_DTYPE(vocabulary.id_of(PAD))
         # Cells to draw per item. Named because the fingerprint and the draw both need it.
         self._cells = 2 * alphabet * alphabet

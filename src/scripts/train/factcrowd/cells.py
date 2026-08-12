@@ -38,6 +38,8 @@ __all__ = [
     "dilution_ladder_cells",
     "mano_calibration_cells",
     "MANO_CALIBRATION_LENGTHS",
+    "MANO_PAD_TO",
+    "IN_CONTEXT_PAD_TO",
     "IN_CONTEXT_CALIBRATION_LENGTHS",
     "replicate_block",
     "grid_summary",
@@ -127,6 +129,23 @@ _DOMAIN_TOKENS: Tuple[str, ...] = ("<facts>", "<mano>", "<compare>")
 """One per corpus slice, and the same tuple ``train_cell`` builds from."""
 
 
+MANO_PAD_TO: int = 32
+"""
+The width every ``<mano>`` item is padded to on a phase-2 config.
+
+Smallest divisor of the 512-token instance that fits the whole calibration ladder: natural widths run 8 at
+length 2 to 24 at length 10, and the divisors of 512 are powers of two, so 32 is forced. Equalises item
+count across depths (31,250,000 per arm), takes the boundary-cut rate to zero, and costs nothing -- the
+budget was in tokens either way, so this trades items for comparability rather than buying it with compute.
+
+Padding overhead falls as depth rises, from 75% at length 2 to 25% at length 10, which points the same way
+G1 already does: prefer the *hardest* depth that clears the admission band.
+"""
+
+IN_CONTEXT_PAD_TO: int = 256
+"""The width every ``<ctxmano>`` item is padded to. See :data:`MANO_PAD_TO`; 256 fits lengths 2 to 5."""
+
+
 @dataclass(frozen=True)
 class CellSpec:
     """
@@ -170,6 +189,12 @@ class CellSpec:
         same step would be silently treated as duplicate runs of one cell, and the wrong one could win.
         :attr:`qualified_id` carries it, so the two cannot collide in a filename or a checkpoint prefix
         either.
+    :param mano_pad_to: Pad ``<mano>`` items to this width, which must divide ``sequence_length``.
+        ``None`` keeps phase 1's behaviour and is wrong for anything that sweeps ``mano_length``: the token
+        budget is fixed, so item width growing with depth hands length 2 three times the items length 10
+        gets (125M against 41.7M) and lets a depth response be an example-count response. 32 covers lengths
+        2 to 10 and equalises items, steps, tokens and the boundary-cut rate at once. See
+        :data:`MANO_PAD_TO`.
     :param mano_variant: Which reasoning endpoint the unrelated slice carries. ``"memorised"`` is mod-23
         :class:`~factcrowd.corpus.tasks.ManoTask`, whose operator tables must live in the weights;
         ``"in_context"`` is :class:`~factcrowd.corpus.tasks.InContextManoTask`, whose tables are in the
@@ -235,10 +260,11 @@ class CellSpec:
     warmup_steps: Optional[int] = None
     decay_fraction: float = 0.1
     mano_length: int = 10
+    mano_pad_to: Optional[int] = None
     mano_variant: str = "memorised"
     ctxmano_length: int = 10
     ctxmano_alphabet: int = 10
-    ctxmano_pad_to: Optional[int] = 256
+    ctxmano_pad_to: Optional[int] = IN_CONTEXT_PAD_TO
     phase: str = "p1"
     reasoning_tokens: int = 0
     related_reasoning_tokens: int = 0
@@ -1038,6 +1064,11 @@ def mano_calibration_cells(
         # No facts, so no orderable attribute and therefore no `<compare>` slice either.
         "related_reasoning_tokens": 0,
         "mano_variant": variant,
+        # ONE ITEM WIDTH ACROSS THE WHOLE SWEEP, WHICH IS THE POINT OF A SWEEP. Without it the budget is
+        # in tokens while the width grows with depth, so length 2 trains on 125M items and length 10 on
+        # 41.7M -- and a decline across depths is then partly a decline in examples.
+        "mano_pad_to": MANO_PAD_TO,
+        "ctxmano_pad_to": IN_CONTEXT_PAD_TO,
         **overrides,
     }
     tag = "ctx" if in_context else ""

@@ -976,20 +976,29 @@ def test_every_calibration_config_builds_its_streams():
         "p2_28m_manoL10",
     ], "the fanout index maps by filename, so this ordering IS the submission"
 
-    widths = {}
+    seen: Dict[str, Dict[str, set]] = {}
     for cell in cells:
         resolved = cell.resolve()
         with tempfile.TemporaryDirectory() as raw:
             corpus = BuiltCorpus(resolved, Path(raw), split="train", with_streams=True)
             (task,) = corpus.tasks
-            widths[cell.qualified_id] = task.tokens_per_item
-            # Every in-context item must tile the instance, or half of them are cut by a boundary.
-            if task.name == "ctxmano":
-                assert cell.sequence_length % task.tokens_per_item == 0
-                assert task.tokens_per_item == 256
+            (stream,) = corpus.task_streams
+            # EVERY ITEM MUST TILE THE INSTANCE. The trainer chunks the concatenated slice into
+            # `sequence_length` windows, so an item whose width does not divide it is cut by a boundary --
+            # 3.12% of unpadded 24-token <mano> items and 52% of 266-token in-context ones.
+            assert cell.sequence_length % task.tokens_per_item == 0, task.name
+            record = seen.setdefault(task.name, {"width": set(), "items": set()})
+            record["width"].add(task.tokens_per_item)
+            record["items"].add(int(stream.num_tokens) // task.tokens_per_item)
             # Iso-token across the sweep: a depth response must not also be a length response.
-            assert 0.999e9 < sum(s.num_tokens for s in corpus.task_streams) <= 1.0e9
-    assert set(widths.values()) == {256, 8, 10, 12, 14, 16, 20, 24}
+            assert 0.999e9 < stream.num_tokens <= 1.0e9
+
+    # ONE WIDTH AND ONE ITEM COUNT PER ENDPOINT, WHICH IS THE POINT OF PADDING. Unpadded, the budget is in
+    # tokens while an item's width grows with depth, so length 2 trained on 125,000,000 items and length 10
+    # on 41,666,666 -- and "accuracy falls with depth" would be partly "the arm got a third of the
+    # examples", in the one experiment whose whole job is to compare depths.
+    assert seen["ctxmano"] == {"width": {256}, "items": {3_906_250}}, seen["ctxmano"]
+    assert seen["mano"] == {"width": {32}, "items": {31_250_000}}, seen["mano"]
 
 
 def test_the_compare_pools_are_disjoint_across_splits():

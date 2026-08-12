@@ -101,6 +101,19 @@ Deliberately *not* including the replicate or the demand: a gate report is a sta
 works at this configuration, and it is meant to admit every arm of the sweep it was gathered for.
 """
 
+_PER_ENDPOINT_IDENTITY = {
+    "mano": ("mano_length", "mano_pad_to"),
+    "ctxmano": ("ctxmano_length", "ctxmano_pad_to"),
+}
+"""
+Identity fields that belong to one endpoint only.
+
+The depth, and **the padded item width**, because the second decides how many items a fixed token budget
+buys: an unpadded length-10 ``<mano>`` arm trains on 41.7M items and a 32-padded one on 31.25M. A gate
+report gathered on the padded configuration is not evidence about the unpadded one, and the two are one
+config key apart.
+"""
+
 _DEPTH_FIELD_FOR_ENDPOINT = {"mano": "mano_length", "ctxmano": "ctxmano_length"}
 
 _CONTROL_SUFFIX = "_ctrl"
@@ -465,10 +478,7 @@ def _identity_of(entry: ScoredCheckpoint, *, endpoint: str) -> Dict[str, str]:
 
     :returns: The identity fields, as strings. A field the cell does not state is omitted.
     """
-    fields = list(IDENTITY_FIELDS)
-    depth = _DEPTH_FIELD_FOR_ENDPOINT.get(endpoint)
-    if depth is not None:
-        fields.append(depth)
+    fields = list(IDENTITY_FIELDS) + list(_PER_ENDPOINT_IDENTITY.get(endpoint, ()))
     identity: Dict[str, str] = {}
     for key in fields:
         value = entry.stated(key)

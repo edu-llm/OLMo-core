@@ -99,6 +99,44 @@ run §5.2 first.
 
 ---
 
+### The depth sweep gave shallow arms three times the examples of deep ones
+
+The worst of the defects found, because it was in the experiment that gates every other one.
+
+A reasoning slice gets a **token** budget, and a `<mano>` item's width grows with depth — 8 tokens at length
+2, 24 at length 10. So 1.0B tokens buys:
+
+| L | width | items | vs L2 | cut by an instance boundary |
+|---|---|---|---|---|
+| 2 | 8 | 125,000,000 | 1.00× | 0.00% |
+| 3 | 10 | 100,000,000 | 0.80× | 1.56% |
+| 4 | 12 | 83,333,333 | 0.67× | 1.56% |
+| 5 | 14 | 71,428,571 | 0.57× | 2.34% |
+| 6 | 16 | 62,500,000 | 0.50× | 0.00% |
+| 8 | 20 | 50,000,000 | 0.40× | 3.12% |
+| 10 | 24 | 41,666,666 | 0.33× | 3.12% |
+
+**A threefold difference in training examples, moving monotonically with the thing being swept.** "Accuracy
+falls with depth" would have been partly "the deep arm got a third of the examples", and G1's ≥15 pp spread
+requirement would have been partly satisfied by that. The cut rate moves with depth too, from 0% to 3.12%,
+so the deep arms also lose more items to truncation.
+
+`ManoTask` now takes `pad_to`, and every phase-2 config sets it to **32** — the smallest divisor of the
+512-token instance that fits widths 8 through 24, since the divisors of 512 are powers of two. Every arm then
+trains on **31,250,000 items, 1.000B tokens and 3,814 steps, with a zero cut rate**, and depth is the only
+thing that moves. It costs no compute at all: the budget was in tokens either way, so padding trades item
+count for comparability rather than buying it with FLOPs.
+
+The in-context sweep never had this, because `pad_to=256` was there from the start for the boundary reason —
+so all four of its arms already sat at 3,906,250 items. Padding overhead falls as depth rises (75% at length
+2, 25% at length 10), which points the same way G1 already does: prefer the *hardest* depth that clears the
+band. `mano_pad_to` and `ctxmano_pad_to` are both in the gate report's identity, so a report gathered on the
+padded configuration cannot admit an unpadded one.
+
+`<compare>` keeps its 3.52% cut rate. Its width is 19 in every cell, so the loss is a constant across arms
+rather than a confound with anything, and padding it to 32 would spend 41% of its tokens to remove noise
+that cancels. Stated rather than fixed.
+
 ### The degenerate-baseline estimator reported a maximum, not a rate
 
 Found by building `InContextManoTask`, whose floor came back at **11.1%** against an analytic 10.45%.
@@ -294,7 +332,8 @@ the working tree**. The shape:
 
 ```yaml
 suggested_compute: gpu-4xa10g        # 4x was proven available; 8x returned 1.06x of it
-fanout: {size: 11, index_parameter: cell}
+fanout_size: 11
+fanout_index_parameter: cell
 command: >-
   bash -lc 'python src/scripts/train/factcrowd/train_cell.py "$EDULLM_RUN_ID"
   --config-dir src/scripts/train/factcrowd/configs/cells/calibration
