@@ -1,0 +1,20 @@
+# Run spec. Path is fixed: <repo-root>/.edullm/run.yaml
+#
+# Deliberately NOT here (extra="forbid" rejects unknown keys by name): team,
+# experiment, dataset, compute_profile. Those are submit-time flags, because one
+# commit run by two people belongs to two teams.
+schema_version: 1
+workload_profile: memsplit-hop-train
+suggested_compute: gpu-1xa10g
+
+# `bash -lc` is mandatory: without a shell, $EDULLM_RUN_ID arrives as 14 literal
+# characters. "$EDULLM_CHECKPOINT_DIR" must be in DOUBLE quotes -- single quotes,
+# a backslash, or a position after `#` all count as absent and earn
+# checkpoint_path_not_in_command.
+#
+# MEMSPLIT_CONDITION / MEMSPLIT_SEED are read from the environment by
+# .edullm/train.py so the same spec serves all 12 cells.
+command: >-
+  bash -lc 'python .edullm/train.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --data-root s3://sbsandbox-intern-edullm-outputs/teams/memory-split/datasets/memsplit-hop-v1/'

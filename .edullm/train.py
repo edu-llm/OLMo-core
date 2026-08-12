@@ -45,6 +45,8 @@ def main() -> int:
     ]
     if args.data_root:
         cmd += ["--data-root", args.data_root]
+    # Instance storage, not the (small) container filesystem.
+    cmd += ["--stage-dir", os.environ.get("MEMSPLIT_STAGE_DIR", "/tmp/memsplit-corpus")]
     print("+", " ".join(cmd), flush=True)
     return subprocess.call(cmd, cwd=ROOT)
 

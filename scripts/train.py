@@ -20,6 +20,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from memsplit import checkpoint_io as cio  # noqa: E402
 from memsplit.masking import CONDITIONS  # noqa: E402
 from memsplit.trainer import TrainConfig, Trainer  # noqa: E402
 
@@ -39,6 +40,8 @@ def main() -> int:
     ap.add_argument("--run-id", default=None)
     ap.add_argument("--max-steps", type=int, default=None)
     ap.add_argument("--device", default=None)
+    ap.add_argument("--stage-dir", default="/tmp/memsplit-corpus",
+                    help="local dir to stage an s3:// corpus into")
     ap.add_argument(
         "--no-resume-required",
         action="store_true",
@@ -58,6 +61,17 @@ def main() -> int:
         if val is not None:
             raw[key] = val
     raw.setdefault("out_dir", f"outputs/{run_id}")
+
+    # A corpus given as an s3:// prefix must be staged to local disk: np.memmap
+    # cannot read S3. Only this arm's sidecar is fetched, not all four.
+    if cio.is_s3(raw["data_root"]):
+        staged = cio.stage_files(
+            raw["data_root"],
+            args.stage_dir,
+            ["tokens.bin", f"weights.{args.condition}.bin"],
+        )
+        print(f"staged corpus -> {staged}")
+        raw["data_root"] = str(staged)
 
     cfg = TrainConfig(
         run_id=run_id,

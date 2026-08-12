@@ -10,9 +10,11 @@ row in the execution targets, an entry in `CONTAINER_SHAPES`, and a `provisioned
 flag). A profile present in the catalog but absent from `CONTAINER_SHAPES` is
 rejected at admission.
 
-So the real choice is **Colab A100 vs a platform L4-class shape** (`gpu-1xl4`,
-$0.8048/hr, the scaffold's default for training because it screens for bfloat16
-support and so declines to hand you a T4).
+So the real choice is **Colab A100 vs a platform A10G** (`gpu-1xa10g`, ~$1.01/hr).
+That shape is the right pick rather than the scaffold's `gpu-1xl4` default: it has
+bfloat16, and it sits on **its own compute stack at `MaxvCpus: 384` = 96 concurrent
+single-GPU jobs**, against 24 for the shared-stack shapes. See `RUNBOOK.md` for the
+submission plan; this file is the choice-of-backend argument only.
 
 ## OLMo integration is not required
 
@@ -53,15 +55,16 @@ context*. Scaling by bandwidth (A100 1555 GB/s, L40S 864, L4 300):
 | d40m, 2B tokens | tok/s | hours/run | 12 runs | cost |
 |---|---:|---:|---:|---:|
 | Colab A100 | ~258,000 (est.) | 2.2 | 26 h | subscription |
-| Platform L4 | ~64,000 (est.) | 8.7 | 104 h | **~$84** |
+| Platform A10G | ~128,000 (est.) | 4.3 | 52 h wall-parallel | **~$52** |
 
-At the longer 8.17B budget the crowding stage needs: A100 ~105 h total, L4 ~425 h
-= **~$342**.
+At the longer 8.17B budget the crowding stage needs: A100 ~105 h total, A10G ~177 h
+= **~$179**.
 
-**The L4 numbers are estimated by bandwidth scaling, not measured.** First action
-either way is a 1-hour check-profile job that trains ~50 steps and reports
-`tok_s`, so the estimate is replaced by a measurement before anything large is
-committed. `scripts/train.py` prints `tok_s` per log line already.
+**Both non-L40S numbers are estimated by bandwidth scaling, not measured** (A10G
+600 GB/s, A100 1555, L40S 864, against the measured L40S `d40m` figure of 184,671
+tok/s). Replace them with a measurement before committing the matrix -- Job 0 in the
+runbook is a ~5-minute, ~$0.10 submission that reports `tok_s`, since walltime is a
+cap billed for actual time rather than a reservation.
 
 ## Recommendation: platform for the matrix, Colab for iteration
 
@@ -87,16 +90,19 @@ Use Colab for: the calibration gate (it needs **no GPU at all** -- pure CPU, and
 it is the thing that must run first), interactive debugging, and single pilot runs
 where turnaround matters more than durability.
 
-### The one thing that would change this
+### Resolved: concurrency is not a constraint
 
-**Max concurrent job quota is unknown.** If the platform allows only one or two
-concurrent GPU jobs, the parallelism argument collapses and the A100's 4x starts to
-dominate. Check that before committing to the matrix, because it is the only input
-that flips the recommendation.
+`gpu-1xa10g` supports **96 concurrent single-GPU jobs**, and 12 runs is 48 of the
+768-vCPU G quota. G and P are separate pools, so P jobs cannot starve us. There is
+no per-user or per-team job cap anywhere in the config. This was the one open input
+that could have flipped the recommendation; it doesn't.
 
-Two smaller unknowns: per-profile walltime caps (the one train profile with a
-visible limit is 10 h, which a 2B-token L4 run fits at ~8.7 h but an 8.17B run does
-not -- that one needs ~4 attempts with resume), and whether jobs are preemptible.
+Two related facts worth carrying: **jobs are not preemptible** (every compute
+environment is `Type: EC2`, not SPOT, so retries fire only for a lost host), which
+means resume is insurance against a walltime overrun rather than the normal path.
+And an *unplaceable* job sits in `RUNNABLE` under a state the submitter cannot read,
+with a **1800-second auto-cancel** -- so a submission that disappears after ~30
+minutes was over-quota, not failed.
 
 ## Practical notes
 

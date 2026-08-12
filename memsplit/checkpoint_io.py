@@ -151,3 +151,37 @@ class ResumeGuard:
             )
         write_text(self.marker, str(prior + 1))
         return prior + 1
+
+
+def stage_files(src_prefix: str, dest_dir: str | Path, names: list[str]) -> Path:
+    """Download named files from an s3:// prefix to a local directory.
+
+    `np.memmap` cannot read S3, so a corpus given as an `s3://` prefix has to land
+    on the node's disk before training. Only the files this arm needs are fetched:
+    `tokens.bin` plus the single `weights.<condition>.bin` sidecar, which is about
+    half the corpus rather than all four sidecars.
+
+    Idempotent by size: a file already present with the right byte count is left
+    alone, so a resumed attempt does not re-download gigabytes.
+    """
+    dest = Path(dest_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    if not is_s3(src_prefix):
+        return Path(src_prefix)
+
+    client = _client()
+    bucket, key_prefix = _split_s3(src_prefix.rstrip("/"))
+    for name in names:
+        key = f"{key_prefix}/{name}"
+        target = dest / name
+        head = client.head_object(Bucket=bucket, Key=key)
+        remote_size = int(head["ContentLength"])
+        if target.exists() and target.stat().st_size == remote_size:
+            continue
+        tmp = target.with_suffix(target.suffix + ".part")
+        client.download_file(bucket, key, str(tmp))
+        os.replace(tmp, target)
+        got = target.stat().st_size
+        if got != remote_size:
+            raise RuntimeError(f"{name}: staged {got} bytes, expected {remote_size}")
+    return dest
