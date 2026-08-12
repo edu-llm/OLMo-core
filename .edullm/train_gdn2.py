@@ -55,7 +55,20 @@ from typing import Any, Dict, Iterator, List
 
 # Both files live in `.edullm/`, which is not a package. Insert the directory so that
 # `train_on_corpus` imports here and also re-imports cleanly in a dataloader worker.
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+
+# AND experiments/linear-attn-vs-gdn, WHICH IS WHERE olmo_linear_attn LIVES. Its absence is what
+# killed run_019ff4f4 on all eight ranks with ModuleNotFoundError: No module named
+# 'olmo_linear_attn' -- the --mixer linear option imports LinearAttentionConfig from it, and this
+# file only ever put .edullm/ on the path. It is also the path a checkpoint needs resolvable to
+# deserialize, because a linear config serializes as the class path
+# `olmo_linear_attn.LinearAttentionConfig` rather than as a registry name.
+#
+# MY LOCAL CHECK MISSED IT BECAUSE THE CHECK INSERTED THE PATH ITSELF. Validating the parser by
+# importing this module after a sys.path.insert in the test is validating a doctored environment;
+# the container runs `python .edullm/train_gdn2.py`, with nothing but this file's own inserts.
+sys.path.insert(0, os.path.join(_HERE, "..", "experiments", "linear-attn-vs-gdn"))
 
 import train_on_corpus as toc  # noqa: E402
 from olmo_linear_attn import LinearAttentionConfig  # noqa: E402
