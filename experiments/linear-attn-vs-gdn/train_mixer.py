@@ -48,6 +48,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # NOT modify OLMo-core source or any training numerics. Must import before the
 # dataset is built. See s3_io_robustness.py for details.
 import s3_io_robustness  # noqa: E402,F401
+from olmo_linear_attn import (  # noqa: E402  (needs sys.path insert above)
+    LinearAttentionConfig,
+)
 
 from olmo_core.config import Config, DType
 from olmo_core.data import (
@@ -83,8 +86,6 @@ from olmo_core.train.train_module import (
     TransformerTrainModuleConfig,
 )
 from olmo_core.utils import seed_all
-
-from olmo_linear_attn import LinearAttentionConfig  # noqa: E402  (needs sys.path insert above)
 
 log = logging.getLogger(__name__)
 
@@ -325,60 +326,138 @@ def parse_args():
         description="Compare plain linear attention vs Gated DeltaNet at 370M.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("run_name", type=str, help="Name of the run (used for W&B + checkpoint dir).")
-    parser.add_argument("--mixer", type=str, default="gdn", choices=["attention", "gdn", "linear"],
-                        help="Sequence mixer: stock softmax attention, Gated DeltaNet, or plain linear attention.")
+    parser.add_argument(
+        "run_name", type=str, help="Name of the run (used for W&B + checkpoint dir)."
+    )
+    parser.add_argument(
+        "--mixer",
+        type=str,
+        default="gdn",
+        choices=["attention", "gdn", "linear"],
+        help="Sequence mixer: stock softmax attention, Gated DeltaNet, or plain linear attention.",
+    )
     parser.add_argument("--model-factory", type=str, default="olmo3_370M")
-    parser.add_argument("--attn-backend", type=str, default=None,
-                        help="Override the base attention backend (only relevant for --mixer attention).")
+    parser.add_argument(
+        "--attn-backend",
+        type=str,
+        default=None,
+        help="Override the base attention backend (only relevant for --mixer attention).",
+    )
     # Matched head geometry for the recurrent mixers (defaults follow d_model=1024, 16 heads).
     parser.add_argument("--n-heads", type=int, default=16)
-    parser.add_argument("--n-v-heads", type=int, default=16,
-                        help="Value heads for the recurrent mixers (state = n_v_heads*head_dim*head_v_dim).")
+    parser.add_argument(
+        "--n-v-heads",
+        type=int,
+        default=16,
+        help="Value heads for the recurrent mixers (state = n_v_heads*head_dim*head_v_dim).",
+    )
     parser.add_argument("--head-dim", type=int, default=64)
-    parser.add_argument("--expand-v", type=float, default=1.0,
-                        help="Value expansion for the recurrent mixers. Default 1.0 keeps the model "
-                             "at the ~370M rung (value_dim=d_model); GDN canonical is 2.0.")
+    parser.add_argument(
+        "--expand-v",
+        type=float,
+        default=1.0,
+        help="Value expansion for the recurrent mixers. Default 1.0 keeps the model "
+        "at the ~370M rung (value_dim=d_model); GDN canonical is 2.0.",
+    )
     parser.add_argument("--conv-size", type=int, default=4)
-    parser.add_argument("--dp-type", type=str, default="fsdp", choices=["fsdp", "hsdp", "ddp"],
-                        help="Data-parallel strategy. Default fsdp (works at world-size 1 = one GPU/run).")
-    parser.add_argument("--linear-normalize", action="store_true", default=False,
-                        help="Use the linear-attention denominator normalization (default: off = pure "
-                             "ungated cumulative sum, the honest GDN gate/delta ablation).")
-    parser.add_argument("--data-config", type=str, default=DEFAULT_DATA_CONFIG,
-                        help="SourceMixtureList YAML (local path or s3://). Default: the 10B water-fill mix.")
+    parser.add_argument(
+        "--dp-type",
+        type=str,
+        default="fsdp",
+        choices=["fsdp", "hsdp", "ddp"],
+        help="Data-parallel strategy. Default fsdp (works at world-size 1 = one GPU/run).",
+    )
+    parser.add_argument(
+        "--linear-normalize",
+        action="store_true",
+        default=False,
+        help="Use the linear-attention denominator normalization (default: off = pure "
+        "ungated cumulative sum, the honest GDN gate/delta ablation).",
+    )
+    parser.add_argument(
+        "--data-config",
+        type=str,
+        default=DEFAULT_DATA_CONFIG,
+        help="SourceMixtureList YAML (local path or s3://). Default: the 10B water-fill mix.",
+    )
     parser.add_argument("--sequence-length", type=int, default=DEFAULT_SEQUENCE_LENGTH)
-    parser.add_argument("--global-batch-size", type=int, default=DEFAULT_GLOBAL_BATCH_SIZE,
-                        help="Global batch size IN TOKENS (must be a multiple of sequence-length).")
-    parser.add_argument("--rank-microbatch-size", type=int, default=DEFAULT_RANK_MICROBATCH_SIZE,
-                        help="Per-rank microbatch IN TOKENS.")
-    parser.add_argument("--token-budget", type=int, default=DEFAULT_TOKEN_BUDGET,
-                        help="Total tokens to train on (also caps how much of the mix is drawn).")
+    parser.add_argument(
+        "--global-batch-size",
+        type=int,
+        default=DEFAULT_GLOBAL_BATCH_SIZE,
+        help="Global batch size IN TOKENS (must be a multiple of sequence-length).",
+    )
+    parser.add_argument(
+        "--rank-microbatch-size",
+        type=int,
+        default=DEFAULT_RANK_MICROBATCH_SIZE,
+        help="Per-rank microbatch IN TOKENS.",
+    )
+    parser.add_argument(
+        "--token-budget",
+        type=int,
+        default=DEFAULT_TOKEN_BUDGET,
+        help="Total tokens to train on (also caps how much of the mix is drawn).",
+    )
     parser.add_argument("--checkpoint-tokens", type=int, default=DEFAULT_CHECKPOINT_TOKENS)
-    parser.add_argument("--lr", type=float, default=None,
-                        help="Override LR. Default: OLMo ladder formula (~7.8e-4 for 370M @ seq4096).")
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=None,
+        help="Override LR. Default: OLMo ladder formula (~7.8e-4 for 370M @ seq4096).",
+    )
     parser.add_argument("--warmup-steps", type=int, default=DEFAULT_WARMUP_STEPS)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    parser.add_argument("--eval-data", type=str, default=None,
-                        help="Comma-separated held-out .npy paths/globs for a COMMON validation set "
-                             "(use the SAME value for both runs to compare fairly).")
-    parser.add_argument("--eval-tasks", type=str, default=None,
-                        help="Comma-separated downstream task names (e.g. hellaswag,arc_easy).")
+    parser.add_argument(
+        "--eval-data",
+        type=str,
+        default=None,
+        help="Comma-separated held-out .npy paths/globs for a COMMON validation set "
+        "(use the SAME value for both runs to compare fairly).",
+    )
+    parser.add_argument(
+        "--eval-tasks",
+        type=str,
+        default=None,
+        help="Comma-separated downstream task names (e.g. hellaswag,arc_easy).",
+    )
     parser.add_argument("--eval-interval", type=int, default=1000)
-    parser.add_argument("--save-folder", type=str, default=None,
-                        help="Where to write checkpoints. Must be s3://... for real runs (box is ephemeral).")
-    parser.add_argument("--allow-local-save", action="store_true",
-                        help="Permit a non-remote --save-folder (NOT durable; discouraged).")
-    parser.add_argument("--work-dir", type=str, default=None,
-                        help="Local scratch dir for dataset index/cache (e.g. /mnt/nvme/olmo-work).")
+    parser.add_argument(
+        "--save-folder",
+        type=str,
+        default=None,
+        help="Where to write checkpoints. Must be s3://... for real runs (box is ephemeral).",
+    )
+    parser.add_argument(
+        "--allow-local-save",
+        action="store_true",
+        help="Permit a non-remote --save-folder (NOT durable; discouraged).",
+    )
+    parser.add_argument(
+        "--work-dir",
+        type=str,
+        default=None,
+        help="Local scratch dir for dataset index/cache (e.g. /mnt/nvme/olmo-work).",
+    )
     parser.add_argument("--load-path", type=str, default=None)
-    parser.add_argument("--compile", dest="compile", action="store_true", default=True,
-                        help="torch.compile the model (default: on).")
-    parser.add_argument("--no-compile", dest="compile", action="store_false",
-                        help="Disable torch.compile (use if a recurrent kernel won't compile).")
+    parser.add_argument(
+        "--compile",
+        dest="compile",
+        action="store_true",
+        default=True,
+        help="torch.compile the model (default: on).",
+    )
+    parser.add_argument(
+        "--no-compile",
+        dest="compile",
+        action="store_false",
+        help="Disable torch.compile (use if a recurrent kernel won't compile).",
+    )
     parser.add_argument("--wandb", dest="wandb", action="store_true", default=True)
     parser.add_argument("--no-wandb", dest="wandb", action="store_false")
-    parser.add_argument("--dry-run", action="store_true", help="Build and print the config, then exit.")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Build and print the config, then exit."
+    )
     opts, overrides = parser.parse_known_args()
 
     if opts.work_dir is None:
