@@ -1,0 +1,28 @@
+# WHAT PRETRAINED CHECKPOINTS CAN THIS PLATFORM ACTUALLY OPEN?
+#
+#   edullm check  --spec .edullm/run-inventory.yaml --experiment gdn-family-eval --dataset none
+#   edullm submit --spec .edullm/run-inventory.yaml --experiment gdn-family-eval --dataset none
+#
+# A four-way evaluation of plain linear attention, GDN, KDA and GDN-2 needs four checkpoints.
+# Committed IAM says two of them are in a bucket no workload role may read, one is on the wrong
+# backbone, and the fourth was never trained. Every one of those claims is about a bucket a
+# laptop cannot list, so this settles the whole set by asking the account once, for pennies,
+# before anything expensive is designed around a guess.
+#
+# --dataset none, and the word matters: this run reads no corpus, and `none` is a statement
+# where an absent flag is an omission.
+#
+# gpu-1xt4 FOR A JOB WITH NO TENSORS IN IT. The GPU workload role is the only one holding
+# s3:GetObject under teams/*/runs/* -- the CPU role has PutObject there and deliberately not
+# GetObject -- so a CPU profile cannot read a checkpoint however cheap it is. This is the
+# cheapest shape that carries the right identity. T4's missing bfloat16 cannot matter to a run
+# that never builds a model, and the command names no dtype, so the precision guard has nothing
+# to refuse.
+#
+# olmo-core-check rather than olmo-core-train: nothing here is worth resuming, and a run that
+# writes no checkpoint should not promise one.
+schema_version: 1
+workload_profile: olmo-core-check
+suggested_compute: gpu-1xt4
+command: >-
+  bash -lc 'python .edullm/probe_checkpoints.py'
