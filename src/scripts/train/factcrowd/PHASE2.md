@@ -20,7 +20,7 @@ for those shapes is an extrapolation, labelled as one.
 |---|---|
 | cells scored | 18 (12 count, 6 entropy; 13M and 28M) |
 | accuracy range | 4.127% – 4.610% |
-| best-constant floor | 4.695% |
+| best-constant floor | 4.695% as measured then; **4.348% is the analytic value** (§2) |
 | cells at or above floor | **0 of 18** |
 
 Eleven of those cells scored *exactly* 1342/30000, which is the number of eval items answered `<n0>`; one
@@ -250,7 +250,7 @@ sweep is iso-token, so a depth response cannot be a training-length response. Th
 configs carried `n_entities: 1`, which passed every structural check and died in `BioStream`; a test now
 builds all eleven **with streams**.
 
-If nothing clears 23.8%, §6 applies instead of §4.B.
+If neither endpoint clears its bound, §6 applies instead of §4.B.
 
 #### `<mano>` is partly a memory task, and the probe says how much
 

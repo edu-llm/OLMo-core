@@ -1676,7 +1676,8 @@ redraws when a draw lands in the wrong one: 0.00% overlap at every length, answe
 
 **The exit rule was the wrong threshold.** "Floor + 10 pp" is G4's *range* requirement. G1 binds harder: its
 in-band lower bound is 20% of the floor-to-100 range, so at a ~4.65% floor the endpoint needs **≥ 23.8%
-absolute accuracy**, not 14.7%. Corrected, along with the target architecture — the committed calibration is
+absolute accuracy**, not 14.7%. (§16.14 later corrected that floor to the analytic `1/23 = 4.348%`, which
+moves the bound to **23.5%**; the in-context endpoint's own bound is 28.4%, off a 10.45% floor.) Corrected, along with the target architecture — the committed calibration is
 13M/113M on the count vocabulary while the treatment is 28M on the entropy union vocabulary, a different
 softmax width and 31.43M against 29.71M parameters, so "at least one row passes" could have been satisfied
 by a row that is not the treatment.
