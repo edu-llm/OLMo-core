@@ -49,6 +49,7 @@ class PackedDataset:
         ctx: int,
         micro_batch_size: int,
         require_weights: bool = False,
+        vocab_size: int | None = None,
     ) -> None:
         self.ctx = ctx
         self.micro_batch_size = micro_batch_size
@@ -63,6 +64,19 @@ class PackedDataset:
                 )
         elif require_weights:
             raise FileNotFoundError(f"no sidecar found at {paths.weights}")
+        # Fail here, with the offending id, rather than deep inside an embedding
+        # lookup a thousand steps in. A corpus tokenised with control tokens at
+        # 50257+ against a model with a 512-token vocabulary is a configuration
+        # error, and the IndexError it otherwise raises says nothing useful.
+        if vocab_size is not None and len(self.tokens):
+            hi = int(np.asarray(self.tokens[: min(len(self.tokens), 1 << 22)]).max())
+            hi = max(hi, int(np.asarray(self.tokens[-min(len(self.tokens), 1 << 22):]).max()))
+            if hi >= vocab_size:
+                raise ValueError(
+                    f"corpus contains token id {hi} but the model vocabulary is "
+                    f"{vocab_size}. Set TrainConfig.vocab_size to match the "
+                    "tokenizer that built this corpus."
+                )
         self.cursor = 0
         self.epoch = 0
 

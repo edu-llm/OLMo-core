@@ -57,6 +57,9 @@ class TrainConfig:
     condition: str = "dense"
     preset: str = "d40m"
     ctx: int = 1024
+    # Override the preset vocabulary. Needed for a domain tokenizer, and for
+    # running a small preset against a real corpus.
+    vocab_size: int | None = None
     micro_batch_size: int = 8
     tokens_per_step: int = 524288
     total_tokens: int = 1_000_000_000
@@ -125,7 +128,10 @@ class Trainer:
         random.seed(cfg.seed)
         np.random.seed(cfg.seed % (2**32))
 
-        self.model = build_model(cfg.preset, ctx=cfg.ctx).to(self.device)
+        overrides = {"ctx": cfg.ctx}
+        if cfg.vocab_size is not None:
+            overrides["vocab_size"] = cfg.vocab_size
+        self.model = build_model(cfg.preset, **overrides).to(self.device)
         if cfg.compile and self.device.type == "cuda":
             self.model = torch.compile(self.model)
         self.opt = torch.optim.AdamW(
@@ -138,6 +144,7 @@ class Trainer:
             ShardPaths.for_condition(cfg.data_root, cfg.condition),
             ctx=cfg.ctx,
             micro_batch_size=cfg.micro_batch_size,
+            vocab_size=self.model.cfg.vocab_size,
         )
         self.step = 0
         self.snapshot_steps = cfg.snapshot_steps or log_spaced_steps(cfg.total_steps)
