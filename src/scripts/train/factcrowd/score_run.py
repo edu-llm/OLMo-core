@@ -351,7 +351,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="Score only each cell's final checkpoint. Ten times less work, and enough for every "
         "endpoint number: accuracy, achieved bits and template reconstruction are all read at the end "
         "of training. The trajectory is what the other nine give you, and a first read does not need it. "
-        "A gate report only ever reads the last checkpoint anyway, so this changes nothing for one.",
+        "NOT free for a gate report: G2 reads the untrained model, which is the step-0 checkpoint this "
+        "drops, so combining the two leaves G2 owed and warns that it has.",
     )
     parser.add_argument(
         "--gate-report",
@@ -392,6 +393,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         log.warning(
             "no gate report given, so every row is marked confirmatory=False. An endpoint that has not "
             "passed G1-G8 can be plotted but not claimed (PRD 8.6)."
+        )
+
+    if args.write_gate_report and args.last_only:
+        # WARNED, NOT REFUSED: scoring only the end of each run is the right default for a first read, and
+        # a gate report is still worth having with G2 owed. But the combination silently forecloses the
+        # cheapest gate in the design -- G2 wants the untrained model, `pre_train_checkpoint` writes it at
+        # step 0, and `--last-only` keeps the max step per cell and drops it. Someone re-scoring
+        # specifically to close G2 would get a report that cannot, and nothing would say why.
+        log.warning(
+            "--last-only drops the step-0 checkpoint, which is G2's only evidence, so the report will "
+            "mark G2 owed however many runs it sees. Drop --last-only to close it; the extra cost is one "
+            "forward pass per cell."
         )
 
     # BEFORE ANY CHECKPOINT IS TOUCHED. An argument that cannot succeed should cost nothing, and on the

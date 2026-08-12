@@ -371,7 +371,11 @@ B and C show an effect to scale. The 113M rung is defined in `ladder/sizes.py` a
   reads G2's untrained model from the **step-0 checkpoint every run has always written**, taken off the raw
   sequence rather than the per-cell last checkpoint, which is where it was being discarded.
 
-  So G1 closes when §4.A is scored, and G2 costs nothing at all. Verified end to end: on a synthetic
+  So G1 closes when §4.A is scored, and G2 costs nothing at all — **except that `--last-only` drops the
+  step-0 checkpoint, which is G2's only evidence.** The M0 re-score command still in `.edullm/run.yaml`
+  uses that flag, so re-running it as written would leave G2 owed for a reason nothing in the output
+  explained. `score_run` now warns when the two are combined, and the flag's own help no longer claims a
+  gate report reads the last checkpoint only. Verified end to end: on a synthetic
   scored sweep both gates return verdicts **on the merits** rather than `no evidence`, and G3 — which
   genuinely has none — still says so.
 - **A gate report now binds itself to what it measured.** The endpoint name was the only thing ever
