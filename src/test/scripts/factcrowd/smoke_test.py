@@ -517,7 +517,9 @@ def test_a_trained_checkpoint_scores_end_to_end_into_a_table():
 
     # Two endpoints at every checkpoint, and the identity travels with the numbers.
     assert rows, scored.stdout[-2000:]
-    assert {row["endpoint"] for row in rows} == {"mano", "compare"}
+    # `mano_table` beside them, not instead of them: the operator-table probe is scored at every
+    # checkpoint so a decline in `<mano>` can be attributed to composition or to table eviction.
+    assert {row["endpoint"] for row in rows} == {"mano", "compare", "mano_table"}
     assert all(row["cell_id"] == "smoke_13m_reason" for row in rows)
     steps = sorted({int(row["step"]) for row in rows})
     assert len(steps) >= 3, steps
@@ -611,9 +613,14 @@ def test_the_entropy_axis_scores_end_to_end_too():
     assert rows
     # No gate report was supplied, so nothing may be read as confirmatory (PRD 8.6).
     assert all(row["confirmatory"] == "False" for row in rows)
-    assert all("no gate report" in row["admission"] for row in rows)
-    # Mano alone: this axis has no orderable attribute, so the related slice is absent by construction.
-    assert {row["endpoint"] for row in rows} == {"mano"}
+    # A diagnostic says it is one. Reading "no gate report" on the probe row would suggest the admission
+    # machinery had failed, where in fact `mano_table` is not an admissible endpoint and never will be.
+    for row in rows:
+        expected = "diagnostic" if row["endpoint"] in ("mano_table",) else "no gate report"
+        assert expected in row["admission"], row
+    # Mano alone plus its probe: this axis has no orderable attribute, so `<compare>` is absent by
+    # construction.
+    assert {row["endpoint"] for row in rows} == {"mano", "mano_table"}
     for row in rows:
         assert 0.0 <= float(row["unparseable_rate"]) <= 1.0
         # Six attributes of eight bits each: the prior is the schema's own, not a guess.
@@ -757,8 +764,16 @@ def test_the_gate_report_is_produced_from_real_runs_and_gates_real_admission():
     assert len(last_rows) == len({r["endpoint"] for r in rows})  # one row per endpoint, one step
 
     assert admitted_rows and len(admitted_rows) == len(rows)
-    assert all(row["confirmatory"] == "True" for row in admitted_rows)
-    assert all("0ddba11" in row["admission"] for row in admitted_rows)
+    # Admission is per endpoint, and the probe is not an endpoint: a report for `mano` admits the `mano`
+    # rows and says of `mano_table` that it is a diagnostic, rather than that it failed anything.
+    admissible = [row for row in admitted_rows if row["endpoint"] != "mano_table"]
+    assert admissible, admitted_rows
+    assert all(row["confirmatory"] == "True" for row in admissible)
+    assert all("0ddba11" in row["admission"] for row in admissible)
+    probe_rows = [row for row in admitted_rows if row["endpoint"] == "mano_table"]
+    assert probe_rows, "the probe must be scored beside the endpoint it disambiguates"
+    assert all(row["confirmatory"] == "False" for row in probe_rows)
+    assert all("diagnostic" in row["admission"] for row in probe_rows)
 
     # A failing report is refused too, and says which gate: the middle state between "no report" and
     # "admitted" is the one a reader is most likely to misread as either.

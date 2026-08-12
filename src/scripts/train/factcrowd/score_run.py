@@ -135,6 +135,20 @@ def _slug(prefix: str) -> str:
     return "".join(char if char.isalnum() or char in "-_" else "_" for char in prefix)[-80:]
 
 
+DIAGNOSTIC_ENDPOINTS = frozenset({"mano_table"})
+"""
+Endpoints that are reported but can never be admitted.
+
+The operator-table probe measures whether ``<mano>``'s memorised tables survived the fact load -- it
+separates "facts crowded out reasoning" from "facts crowded out the arithmetic tables" and is read beside
+the endpoint, not in place of it. No gate consumes it, and none should: a gate on an unregistered threshold
+is a gate nobody pre-registered.
+
+Named here rather than inferred from a suffix, so adding a second diagnostic is one line and a typo is a
+row that quietly asks to be admitted.
+"""
+
+
 def score_checkpoint(
     ref: checkpoint_module.CheckpointRef,
     *,
@@ -380,6 +394,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "passed G1-G8 can be plotted but not claimed (PRD 8.6)."
         )
 
+    # BEFORE ANY CHECKPOINT IS TOUCHED. An argument that cannot succeed should cost nothing, and on the
+    # platform this function's next act is to load and score ten checkpoints on a billed GPU.
+    if args.write_gate_report and args.gate_endpoint in DIAGNOSTIC_ENDPOINTS:
+        raise OLMoConfigurationError(
+            f"'{args.gate_endpoint}' is a diagnostic, so there is no gate report to write for it. The "
+            f"operator-table probe is read beside an endpoint to say whether a decline was composition or "
+            f"table eviction; it has no pre-registered threshold, and building a report for it would "
+            f"invent one. Pass --gate-endpoint with a real endpoint, e.g. 'ctxmano' or 'mano'."
+        )
+
     wanted = {int(step) for step in args.steps.split(",") if step.strip()}
     prefixes: List[str] = []
     for root in args.prefix:
@@ -480,7 +504,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     for row in rows:
         endpoint = str(row.get("endpoint") or "")
         report = reports.get(endpoint)
-        if report is None:
+        if endpoint in DIAGNOSTIC_ENDPOINTS:
+            # A DIAGNOSTIC IS NOT AN UNADMITTED ENDPOINT, AND THE DIFFERENCE IS WORTH A DISTINCT STRING.
+            # `mano_table` answers "did the operator tables survive?", which no gate consumes and none
+            # should -- adding a threshold for it would be inventing a gate. Left at `confirmatory=False`
+            # with "no gate report for 'mano_table'" it reads as the admission machinery having failed,
+            # which is the misreading this whole column exists to prevent.
+            row["confirmatory"] = False
+            row["admission"] = f"diagnostic: '{endpoint}' is not an admissible endpoint"
+        elif report is None:
             row["confirmatory"] = False
             row["admission"] = f"no gate report for '{endpoint}'" if endpoint else "no endpoint"
         elif not report.passed:

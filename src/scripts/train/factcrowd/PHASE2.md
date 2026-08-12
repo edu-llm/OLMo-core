@@ -273,7 +273,10 @@ nothing else, so:
 | falls | flat | incoherent; suspect the harness |
 
 It is a diagnostic, not a gate: no gate consumes it, and adding an unregistered threshold would be
-inventing one. It costs one extra 4,000-item eval pass per checkpoint and it converts the confound into a
+inventing one. That is now enforced in two places rather than left as a convention — `mano_table` rows carry
+`admission: diagnostic: 'mano_table' is not an admissible endpoint` instead of `no gate report`, which would
+read as the admission machinery having failed, and `--write-gate-report --gate-endpoint mano_table` is
+**refused before a single checkpoint is loaded**. It costs one extra 4,000-item eval pass per checkpoint and it converts the confound into a
 row of the results table. **The train split and length 2 are both deliberate** -- this probe wants the
 memorised case, which is why it does not go through the eval-split guard the endpoint does.
 
