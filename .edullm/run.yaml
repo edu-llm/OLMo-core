@@ -3,18 +3,22 @@
 # Deliberately NOT here (extra="forbid" rejects unknown keys by name): team,
 # experiment, dataset, compute_profile. Those are submit-time flags, because one
 # commit run by two people belongs to two teams.
+#
+# PRIMARY shape is gpu-8xa100: 8 A100s, one independent arm per GPU, so 8 cells of
+# the matrix finish in the wall-clock time of one. There is no single-GPU A100
+# shape, which is why the entrypoint spawns its own processes.
+#
+# EDULLM_LAUNCH_CHECK=waived is required and precedent-backed: GPUs > 1 with no
+# recognised launcher is otherwise refused as `process_per_device`, and the guard
+# reads command text so it cannot see the processes .edullm/train.py starts.
+#
+# MEMSPLIT_CELLS selects the arms; --compute at submit time selects the shape. On a
+# single-GPU shape drop the waiver and set MEMSPLIT_CONDITION/MEMSPLIT_SEED instead.
 schema_version: 1
 workload_profile: memsplit-hop-train
-suggested_compute: gpu-1xa10g
+suggested_compute: gpu-8xa100
 
-# `bash -lc` is mandatory: without a shell, $EDULLM_RUN_ID arrives as 14 literal
-# characters. "$EDULLM_CHECKPOINT_DIR" must be in DOUBLE quotes -- single quotes,
-# a backslash, or a position after `#` all count as absent and earn
-# checkpoint_path_not_in_command.
-#
-# MEMSPLIT_CONDITION / MEMSPLIT_SEED are read from the environment by
-# .edullm/train.py so the same spec serves all 12 cells.
 command: >-
-  bash -lc 'python .edullm/train.py "$EDULLM_RUN_ID"
+  bash -lc 'EDULLM_LAUNCH_CHECK=waived python .edullm/train.py "$EDULLM_RUN_ID"
   --save-folder "$EDULLM_CHECKPOINT_DIR"
   --data-root s3://sbsandbox-intern-edullm-outputs/teams/memory-split/datasets/memsplit-hop-v1/'

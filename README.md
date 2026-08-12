@@ -79,9 +79,9 @@ Landed, with tests:
 
 Not yet written: the corpus builder that materialises `.bin` + sidecars, the eval
 driver, and the mid-training/replay arm. Design is in the audit document, sections
-4 and 5. Where to run it: `docs/COMPUTE.md` -- note there is **no H100 option** on
-the platform, so the real choice is Colab A100 vs an L4-class shape, and OLMo-core
-integration is *not* required.
+4 and 5. Where to run it: **`docs/RUNBOOK.md`** for the job-by-job plan and commands,
+`docs/COMPUTE.md` for the backend argument. Two things to know: both H100 shapes are
+`provisioned: false` so they cannot run, and OLMo-core integration is *not* required.
 
 ## The one thing to keep in mind
 

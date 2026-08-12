@@ -1,0 +1,16 @@
+# Smoke config: ~50 steps. Proves the submission path and measures tok_s.
+name: smoke_d40m
+preset: d40m
+ctx: 1024
+micro_batch_size: 8
+tokens_per_step: 524288
+total_tokens: 26_214_400        # 50 steps
+lr: 1.5e-3
+warmup_steps: 5
+weight_decay: 0.1
+grad_clip: 1.0
+checkpoint_minutes: 1
+log_every: 5
+data_root: data/nhop_v1
+device: auto
+compile: false

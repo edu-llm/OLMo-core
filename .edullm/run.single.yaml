@@ -1,0 +1,15 @@
+# Fallback spec: one arm on one GPU. Use when gpu-8xa100 is unavailable or when
+# only a single cell is wanted (e.g. the smoke job).
+#
+# No launcher waiver: one GPU means the process_per_device guard does not fire.
+# gpu-1xl40s is the safety default rather than gpu-1xa10g because the L40S is the
+# card the d40m throughput figure (184,671 tok/s) was actually measured on -- the
+# A10G number is an estimate.
+schema_version: 1
+workload_profile: memsplit-hop-train
+suggested_compute: gpu-1xl40s
+
+command: >-
+  bash -lc 'python .edullm/train.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --data-root s3://sbsandbox-intern-edullm-outputs/teams/memory-split/datasets/memsplit-hop-v1/'

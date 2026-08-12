@@ -10,11 +10,15 @@ row in the execution targets, an entry in `CONTAINER_SHAPES`, and a `provisioned
 flag). A profile present in the catalog but absent from `CONTAINER_SHAPES` is
 rejected at admission.
 
-So the real choice is **Colab A100 vs a platform A10G** (`gpu-1xa10g`, ~$1.01/hr).
-That shape is the right pick rather than the scaffold's `gpu-1xl4` default: it has
-bfloat16, and it sits on **its own compute stack at `MaxvCpus: 384` = 96 concurrent
-single-GPU jobs**, against 24 for the shared-stack shapes. See `RUNBOOK.md` for the
-submission plan; this file is the choice-of-backend argument only.
+**But A100 is available**, as `gpu-8xa100` ($21.9576/hr, 8 GPUs, provisioned). There
+is no single-GPU A100 shape, so using A100s means one independent arm per GPU on an
+8-GPU node. Shapes, costs and the submission plan live in `RUNBOOK.md`; this file is
+the choice-of-backend argument only.
+
+The headline correction: **for wall-clock, Colab is the worst option, not the best.**
+One interactive session runs 12 arms in series (~26 h); the platform runs them in
+parallel (~1.7 h on two 8xA100 nodes, ~3.0 h on twelve L40S). Per-GPU speed is not the
+binding constraint -- concurrency is.
 
 ## OLMo integration is not required
 
