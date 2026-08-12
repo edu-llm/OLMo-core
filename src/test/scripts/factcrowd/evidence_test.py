@@ -46,10 +46,21 @@ def scored(
     *,
     step: int = 3_814,
     name: str = "mano",
+    floor: Optional[float] = None,
 ) -> ScoredCheckpoint:
-    """One scored checkpoint of a cell, carrying the resolved record the assembler reads."""
+    """
+    One scored checkpoint of a cell, carrying the resolved record the assembler reads.
+
+    The floor follows the endpoint unless overridden, because passing mano's 4.59% for a ``ctxmano`` result
+    makes G2 refuse a perfectly good untrained checkpoint -- a score is only "at the floor" relative to its
+    own endpoint's floor, and the two differ by 6pp here.
+    """
     resolved = cell.resolve()
-    results: Sequence[EndpointResult] = () if accuracy is None else (endpoint(accuracy, name=name),)
+    if floor is None:
+        floor = 0.1045 if name == "ctxmano" else 0.0459
+    results: Sequence[EndpointResult] = (
+        () if accuracy is None else (endpoint(accuracy, name=name, floor=floor),)
+    )
     return ScoredCheckpoint(
         ref=CheckpointRef(step=step, path=f"/tmp/{cell.qualified_id}/step{step}"),
         cell=cell.to_dict(),
@@ -324,3 +335,124 @@ def test_the_width_sweep_and_the_ceiling_average_over_their_replicates():
     assert assignment.ceiling == pytest.approx(0.47, abs=1e-9)
     assert any("3 replicate(s) each" in note for note in assignment.notes)
     assert any("mean of 3" in note for note in assignment.notes)
+
+
+# --- G1 and G2: the two gates that had evidence all along and no way to reach it ------------------
+
+
+def calibration(variant: str, accuracies) -> list:
+    """The committed 28M calibration sweep for one variant, scored at the given accuracies."""
+    arms = C.mano_calibration_cells(("28M",), variant=variant, architecture="entropy")
+    name = "ctxmano" if variant == "in_context" else "mano"
+    return [scored(cell, acc, name=name) for cell, acc in zip(arms, accuracies)]
+
+
+def test_the_calibration_sweep_supplies_g1s_depth_curve():
+    """
+    **G1 was unreachable for the silliest of reasons.** ``run_gates`` has taken ``depth_scores`` since it
+    was written and nothing ever supplied it, so a fully scored calibration sweep would have left the gate
+    reporting "no evidence" however many arms sat in the CSV.
+
+    Keyed by depth, and the depth comes off the cell id, so the ids one function generates and the pattern
+    that reads them cannot drift without a test failing.
+    """
+    rows = calibration("in_context", (0.62, 0.48, 0.35, 0.24))
+    assignment = E.assign_roles(rows, endpoint="ctxmano")
+    assert assignment.depths == {2: 0.62, 3: 0.48, 4: 0.35, 5: 0.24}
+    assert any("G1: depth sweep" in note for note in assignment.notes)
+
+    memorised = E.assign_roles(calibration("memorised", (0.3,) * 7), endpoint="mano")
+    assert sorted(memorised.depths or {}) == list(C.MANO_CALIBRATION_LENGTHS)
+
+
+def test_the_two_variants_depth_curves_are_never_mixed():
+    """
+    They are different instruments -- a 10.45% floor against 4.35%, 256-token items against 24 -- so one
+    curve built from both would be two curves averaged, and G1's spread would be measuring the difference
+    between the tasks rather than between depths.
+    """
+    both = calibration("in_context", (0.62, 0.48, 0.35, 0.24)) + calibration(
+        "memorised", (0.30, 0.22, 0.14, 0.09, 0.07, 0.06, 0.05)
+    )
+    assert E.assign_roles(both, endpoint="ctxmano").depths == {2: 0.62, 3: 0.48, 4: 0.35, 5: 0.24}
+    assert sorted(E.assign_roles(both, endpoint="mano").depths or {}) == list(
+        C.MANO_CALIBRATION_LENGTHS
+    )
+    # An endpoint with no depth sweep of its own gets none, rather than borrowing another's.
+    assert E.assign_roles(both, endpoint="compare").depths is None
+    assert E.assign_roles(both, endpoint="mano_table").depths is None
+
+
+def test_a_depth_sweep_spanning_two_rows_is_refused():
+    """Two widths interleaved by depth would let a wider row's success stand in for the treatment's."""
+    spanning = calibration("in_context", (0.62, 0.48, 0.35, 0.24)) + [
+        scored(cell, 0.9, name="ctxmano")
+        for cell in C.mano_calibration_cells(
+            ("113M",), variant="in_context", architecture="entropy"
+        )
+    ]
+    with pytest.raises(OLMoConfigurationError, match="depth sweep spans rows"):
+        E.assign_roles(spanning, endpoint="ctxmano")
+
+
+def test_a_calibration_arm_is_evidence_and_never_the_cell_under_test():
+    """It carries no facts, so admitting on one would admit a demand-0 run as though it were a treatment."""
+    rows = calibration("in_context", (0.62, 0.48, 0.35, 0.24))
+    assert E.assign_roles(rows, endpoint="ctxmano").result is None
+
+
+def test_the_step_zero_checkpoint_supplies_g2():
+    """
+    **G2 asks for an untrained model, and every run has written one at step 0 all along.**
+    ``CheckpointerCallback.pre_train_checkpoint`` writes it. The reason it never reached the gate is that
+    the assembler reads the *last* checkpoint per cell, which discards step 0 wherever a run trained.
+    """
+    cell = C.dilution_ladder_cells("13M")[0]
+    untrained = scored(cell, 0.0461, step=0)  # a hair off the 4.59% floor, as a random model is
+    trained = scored(cell, 0.35, step=3_814)
+
+    assignment = E.assign_roles([untrained, trained], endpoint="mano")
+    assert assignment.random_init is not None
+    assert assignment.random_init.accuracy == pytest.approx(0.0461, abs=1e-4)
+    # And the trained one is still what the other gates read.
+    assert assignment.dilution == {100: pytest.approx(0.35, abs=1e-4)}
+    assert any("G2: untrained checkpoint" in note for note in assignment.notes)
+
+    without = E.assign_roles([trained], endpoint="mano")
+    assert without.random_init is None
+    assert any("G2: no step-0 checkpoint" in note for note in without.notes)
+
+
+def test_g1_and_g2_reach_the_report_rather_than_stopping_at_the_assignment():
+    """
+    The assignment is not the deliverable; the report is. A field populated here and dropped on the way to
+    ``run_gates`` would look correct in every test above and change nothing about admission.
+    """
+    rows = calibration("in_context", (0.62, 0.48, 0.35, 0.24))
+    treatment = C.CellSpec(
+        cell_id="28m_b8",
+        row="28M",
+        sweep="entropy",
+        bits_per_attribute=8,
+        n_entities=100_000,
+        reasoning_tokens=C.REASONING_TOKENS,
+        mano_variant="in_context",
+        ctxmano_length=4,
+    )
+    rows += [
+        # 10.5% is the in-context floor, which is where an untrained network lands.
+        scored(treatment, 0.105, step=0, name="ctxmano"),
+        scored(treatment, 0.55, name="ctxmano"),
+    ]
+
+    report, assignment = E.assemble(rows, endpoint="ctxmano", commit="cafe")
+    verdicts = {one.gate: one for one in report.results}
+    assert tuple(verdicts) == gates.GATES
+    # Both now refuse or pass ON THE MERITS -- the string that must not appear is "no evidence".
+    assert "no evidence" not in verdicts["G1"].detail, verdicts["G1"].detail
+    assert "no evidence" not in verdicts["G2"].detail, verdicts["G2"].detail
+    assert verdicts["G1"].passed, verdicts["G1"].detail  # 55% is in band with a 15pp+ spread
+    assert verdicts["G2"].passed, verdicts["G2"].detail  # 10.5% is its floor
+    # G3 is the one that genuinely has no evidence, and it must still say so.
+    assert "no evidence" in verdicts["G3"].detail
+    assert assignment.depths and assignment.random_init is not None

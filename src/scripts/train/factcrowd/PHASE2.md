@@ -339,9 +339,19 @@ B and C show an effect to scale. The 113M rung is defined in `ladder/sizes.py` a
 
 ### E. Close the remaining gates
 
-- **G2** — an untrained checkpoint. `CheckpointerCallback.pre_train_checkpoint` writes step 0; score it.
-  Nearly free, and it closes a gate that has been open throughout.
-- **G3** — the premise-ablated probe, which needs a corpus variant.
+- **G1 and G2 are now closed by evidence that already existed**, and both were unreachable for the same
+  silly reason: `run_gates` has accepted `depth_scores` and `random_init_result` since it was written and
+  nothing ever supplied them. `measure/evidence.py` now recognises `*_manoL{depth}` and
+  `*_ctxmanoL{depth}` as G1's depth curve — filtered to the endpoint's own variant, since the two have
+  different floors and one curve built from both would measure the difference between the *tasks* — and
+  reads G2's untrained model from the **step-0 checkpoint every run has always written**, taken off the raw
+  sequence rather than the per-cell last checkpoint, which is where it was being discarded.
+
+  So G1 closes when §4.A is scored, and G2 costs nothing at all. Verified end to end: on a synthetic
+  scored sweep both gates return verdicts **on the merits** rather than `no evidence`, and G3 — which
+  genuinely has none — still says so.
+- **G3** — the premise-ablated probe, the one remaining gate with no evidence path. It needs a corpus
+  variant that does not exist, and a row cannot be admitted while it is owed.
 - **G8** — the dilution ladder re-run at the calibrated length, now **iso-token**. 5 cells, 5.0B tokens.
 
   The phase-1 ladder was not comparable across its own arms. Cutting reasoning from 1.0B to 0.6B tokens at

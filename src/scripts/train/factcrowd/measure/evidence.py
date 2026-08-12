@@ -13,11 +13,14 @@ anything; the gates do. Evidence it cannot find is not filled in with a default 
 own refusal naming the arm still owed, which is the behaviour that makes an early report a useful
 checklist instead of a false clean bill.
 
-**Which gates this can currently feed.** Four, from configs that exist:
+**Which gates this can currently feed.** Six of seven:
 
 ===== ============================================= ==================================================
 gate  evidence                                       where it comes from
 ===== ============================================= ==================================================
+G1    accuracy against expression depth              ``*_manoL{depth}`` / ``*_ctxmanoL{depth}``, from
+                                                     :func:`factcrowd.cells.mano_calibration_cells`
+G2    an untrained checkpoint                        the step-0 checkpoint every run already writes
 G4    the achievable ceiling                         the reasoning-only control, ``*_ctrl``
 G6    accuracy against parameters at fixed depth     the controls across ladder rows
 G7    run-to-run sigma                               replicates of one cell
@@ -25,9 +28,17 @@ G8    the reasoning-token dilution ladder            ``*_dil{dose}``, from
                                                      :func:`factcrowd.cells.dilution_ladder_cells`
 ===== ============================================= ==================================================
 
-G1 (task-depth sweep), G2 (untrained checkpoint) and G3 (premise-ablated probe) need corpus or task
-variants that are not built yet. They will report as owed, and a row cannot be admitted while they do.
-That is the honest state of the design and not a gap this module should paper over.
+**G1 and G2 were the two cheapest gates in the design and both were unreachable for the silliest of
+reasons.** ``run_gates`` has accepted ``depth_scores`` and ``random_init_result`` from the beginning and
+nothing ever supplied them, so a scored calibration sweep would have left G1 reporting as owed however
+much evidence sat in the CSV -- and G2 asks for an untrained checkpoint, which
+``CheckpointerCallback.pre_train_checkpoint`` has written at step 0 on every run there has ever been. The
+step-0 rows are read from the raw sequence rather than from the per-cell last checkpoint, which is where
+they were being discarded.
+
+Only **G3** (the premise-ablated probe) still needs a corpus variant that does not exist. It will report as
+owed, and a row cannot be admitted while it does. That is the honest state of the design and not a gap this
+module should paper over.
 """
 
 import re
@@ -41,6 +52,7 @@ from .gates import GATE_REPORT_VERSION, GateReport, run_gates
 
 __all__ = [
     "DILUTION_CELL_PATTERN",
+    "DEPTH_CELL_PATTERN",
     "RoleAssignment",
     "assign_roles",
     "assemble",
@@ -55,6 +67,24 @@ Recognising the ladder by name rather than by a flag in the config is deliberate
 by one function and the pattern is pinned by a test, so the two cannot drift. A cell hand-named into
 this shape would be picked up, which is why :func:`assign_roles` also checks that what it found is a
 complete ladder over one row before handing it to G8.
+"""
+
+DEPTH_CELL_PATTERN = re.compile(r"^(?P<row>[^_]+)_(?P<prefix>ctx)?manoL(?P<depth>\d+)$")
+"""
+Matches the calibration ids :func:`factcrowd.cells.mano_calibration_cells` writes -- ``28m_manoL10`` for
+the memorised endpoint and ``28m_ctxmanoL04`` for the in-context one.
+
+``prefix`` is what keeps the two apart, and it has to: they are different instruments with different
+floors, so a depth curve mixing ``manoL04`` with ``ctxmanoL04`` would be two curves averaged into one.
+:func:`assign_roles` reads only the cells whose prefix matches the endpoint being admitted.
+"""
+
+_DEPTH_PREFIX_FOR_ENDPOINT = {"mano": None, "ctxmano": "ctx"}
+"""
+Which calibration prefix feeds which endpoint's G1.
+
+An endpoint absent from this mapping -- ``compare``, or the ``mano_table`` probe -- has no depth sweep and
+G1 reports as owed for it, which is correct rather than a gap: no ladder over its depth exists.
 """
 
 _CONTROL_SUFFIX = "_ctrl"
@@ -112,6 +142,8 @@ class RoleAssignment:
     :param replicates: G7's per-replicate results. **Results, not accuracies**: G7 also caps the
         unparseable rate of its worst replicate, and a bare fraction carries no such count, so half
         the gate would silently have no evidence to fail on.
+    :param depths: G1's task-depth sweep, keyed by expression depth.
+    :param random_init: G2's untrained checkpoint, the step-0 one every run writes.
     :param notes: What was recognised and what was skipped, for the caller to log.
     """
 
@@ -124,6 +156,8 @@ class RoleAssignment:
         ceiling: Optional[float] = None,
         by_params: Optional[Mapping[int, float]] = None,
         replicates: Optional[Sequence[EndpointResult]] = None,
+        depths: Optional[Mapping[int, float]] = None,
+        random_init: Optional[EndpointResult] = None,
         notes: Sequence[str] = (),
     ) -> None:
         self.endpoint = endpoint
@@ -132,13 +166,16 @@ class RoleAssignment:
         self.ceiling = ceiling
         self.by_params = dict(by_params) if by_params else None
         self.replicates = tuple(replicates) if replicates else None
+        self.depths = dict(depths) if depths else None
+        self.random_init = random_init
         self.notes = tuple(notes)
 
     def __repr__(self) -> str:  # pragma: no cover - diagnostic only
         return (
             f"RoleAssignment(endpoint={self.endpoint!r}, dilution={self.dilution!r}, "
             f"ceiling={self.ceiling!r}, by_params={self.by_params!r}, "
-            f"replicates={self.replicates!r})"
+            f"replicates={self.replicates!r}, depths={self.depths!r}, "
+            f"random_init={self.random_init is not None})"
         )
 
 
@@ -161,7 +198,8 @@ def assign_roles(
     """
     from .gates import DILUTION_DOSES_PCT
 
-    final = _final(scored)
+    scored_list = list(scored)
+    final = _final(scored_list)
     notes: List[str] = []
 
     # --- G8: the dilution ladder -------------------------------------------------------------------
@@ -243,14 +281,68 @@ def assign_roles(
                 f"sigma is reported for one configuration at a time"
             )
 
+    # --- G1: the task-depth sweep ------------------------------------------------------------------
+    # This is what `configs/cells/calibration` is for, and until this block existed running that sweep
+    # would not have closed the gate: `run_gates` has taken `depth_scores` all along and nothing supplied
+    # it, so G1 reported as owed however much calibration evidence sat in the CSV.
+    wanted_prefix = _DEPTH_PREFIX_FOR_ENDPOINT.get(endpoint, ...)
+    depths: Dict[int, float] = {}
+    depth_rows = set()
+    if wanted_prefix is not ...:
+        for (cell_id, _), entry in sorted(final.items()):
+            match = DEPTH_CELL_PATTERN.match(cell_id)
+            if match is None or match.group("prefix") != wanted_prefix:
+                continue
+            accuracy = _accuracy(entry, endpoint)
+            if accuracy is None:
+                notes.append(
+                    f"{cell_id} looks like a depth arm but has no {endpoint!r} score; skipped"
+                )
+                continue
+            depth_rows.add(entry.stated("row"))
+            depths[int(match.group("depth"))] = accuracy
+    if len(depth_rows) > 1:
+        raise OLMoConfigurationError(
+            f"the depth sweep spans rows {sorted(depth_rows)}. G1 reads one accuracy-against-depth "
+            f"curve, and arms from two widths interleaved by depth is two curves averaged into one -- "
+            f"which is also what would let a wider row's success stand in for the treatment's."
+        )
+    if depths:
+        notes.append(
+            f"G1: depth sweep on row {next(iter(depth_rows))} at depths "
+            f"{sorted(depths)} ({endpoint!r})"
+        )
+    elif wanted_prefix is not ...:
+        notes.append(f"G1: no depth sweep found for {endpoint!r}; the gate will report it as owed")
+
+    # --- G2: the untrained checkpoint --------------------------------------------------------------
+    # Read from the raw sequence rather than `final`, which keeps the *last* checkpoint per cell and so
+    # discards step 0 wherever a run trained at all. Nearly free evidence that was overlooked throughout:
+    # `CheckpointerCallback.pre_train_checkpoint` writes step 0 on every run there has ever been.
+    random_init: Optional[EndpointResult] = None
+    for entry in sorted(scored_list, key=lambda e: (e.stated("cell_id", ""), e.ref.step)):
+        if entry.ref.step != 0:
+            continue
+        candidate = _result(entry, endpoint)
+        if candidate is not None:
+            random_init = candidate
+            notes.append(f"G2: untrained checkpoint from {entry.stated('cell_id')} at step 0")
+            break
+    if random_init is None:
+        notes.append(
+            "G2: no step-0 checkpoint carries this endpoint; the gate will report it as owed"
+        )
+
     # --- the cell under test ----------------------------------------------------------------------
     # The highest-demand non-ladder, non-control cell on the row: the gates ask whether the endpoint can
     # resolve an effect where the design most needs it to.
     candidates = [
         entry
         for (cell_id, _), entry in sorted(final.items())
-        if not cell_id.endswith(_CONTROL_SUFFIX)
-        and DILUTION_CELL_PATTERN.match(cell_id) is None
+        if not cell_id.endswith(_CONTROL_SUFFIX) and DILUTION_CELL_PATTERN.match(cell_id) is None
+        # A calibration arm is evidence *for* the gates, never the cell they admit: it carries no facts,
+        # so admitting on one would be admitting a demand-0 run as though it were a treatment.
+        and DEPTH_CELL_PATTERN.match(cell_id) is None
         and (row is None or entry.stated("row") == row)
         and _accuracy(entry, endpoint) is not None
     ]
@@ -276,6 +368,8 @@ def assign_roles(
         ceiling=ceiling,
         by_params=by_params or None,
         replicates=replicates,
+        depths=depths or None,
+        random_init=random_init,
         notes=notes,
     )
 
@@ -308,6 +402,8 @@ def assemble(
         )
     results = run_gates(
         assignment.result,
+        depth_scores=assignment.depths,
+        random_init_result=assignment.random_init,
         achievable_ceiling=assignment.ceiling,
         scores_by_params=assignment.by_params,
         replicates=assignment.replicates,
