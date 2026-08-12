@@ -142,6 +142,7 @@ def score_checkpoint(
     work_dir: Path,
     device: str,
     eval_items: int,
+    floor_sample: int = reasoning_module.FLOOR_SAMPLE,
     bit_entities: int,
     bit_offset: int = 0,
     batch_size: int,
@@ -154,6 +155,9 @@ def score_checkpoint(
     :param work_dir: Local scratch.
     :param device: Where to run the model.
     :param eval_items: Held-out items per reasoning endpoint.
+    :param floor_sample: Items drawn to measure each endpoint's degenerate floor. See
+        :data:`factcrowd.measure.reasoning.FLOOR_SAMPLE` for why the default is as large as it is; lower it
+        only for a smoke test, where the floor's precision is not what is under test.
     :param bit_entities: Entities sampled for the bit count and the recall probe.
     :param batch_size: Sequences per forward pass.
 
@@ -165,7 +169,9 @@ def score_checkpoint(
     forward = checkpoint_module.forward_fn(loaded.model, device=device)
 
     endpoints = [
-        reasoning_module.score_reasoning(task, forward, n_items=eval_items, batch_size=batch_size)
+        reasoning_module.score_reasoning(
+            task, forward, n_items=eval_items, batch_size=batch_size, floor_sample=floor_sample
+        )
         for task in loaded.corpus.tasks
     ]
     # THE OPERATOR-TABLE PROBE, BESIDE THE ENDPOINT AND AT THE SAME CHECKPOINT. `<mano>` needs the mod-23
@@ -181,7 +187,11 @@ def score_checkpoint(
     if any(task.name == "mano" for task in loaded.corpus.tasks):
         endpoints.append(
             reasoning_module.score_table_probe(
-                loaded.corpus, forward, n_items=min(4_000, eval_items), batch_size=batch_size
+                loaded.corpus,
+                forward,
+                n_items=min(4_000, eval_items),
+                batch_size=batch_size,
+                floor_sample=floor_sample,
             )
         )
     achieved = bits_module.score_checkpoint(
@@ -234,6 +244,7 @@ def score_checkpoint(
                     :16
                 ],
                 "eval_items": eval_items,
+                "floor_sample": floor_sample,
                 "bit_entities": bit_entities,
                 "bit_offset": bit_offset,
                 "capacity_warning": warning or "",
@@ -305,6 +316,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "attribute is 1.1x. Pass 25000 for an uncontaminated cohort from the same checkpoints.",
     )
     parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument(
+        "--floor-sample",
+        type=int,
+        default=reasoning_module.FLOOR_SAMPLE,
+        help=(
+            "Items drawn per endpoint to measure its degenerate floor. The default is large because the "
+            "estimator scores a held-out half; it is paid once per run, not per checkpoint. Lower it only "
+            "for a smoke test."
+        ),
+    )
     parser.add_argument(
         "--steps",
         default="",
@@ -397,6 +418,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 work_dir=cell_dir,
                 device=args.device,
                 eval_items=args.eval_items,
+                floor_sample=args.floor_sample,
                 bit_entities=args.bit_entities,
                 bit_offset=args.bit_offset,
                 batch_size=args.batch_size,

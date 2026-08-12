@@ -1729,3 +1729,70 @@ sweep, and running it is §4.A of `PHASE2.md`. **G2 is nearly free** and was ove
 gate asks for. Only **G3's premise-ablated probe** still needs a corpus variant that does not exist. Each is cheap to run once
 built — the expense is the variant, not the compute — and until they exist `score_run` will mark every
 row `confirmatory=False`, which is the correct answer rather than a defect to work around.
+
+### 16.14 The endpoint is no longer a memory task, and three defects that finding exposed
+
+A collaborator's argument, and it is right: `<mano>` requires its mod-23 operator tables in the weights, so
+a decline under fact load is explained equally well by "the facts evicted the arithmetic tables" — which is
+knowledge-versus-knowledge, established years ago in Physics 3.3, and not this project's claim. The tables
+are two 23×23 grids and a unary map, 1,058 entries at `log2(23)` bits: **4,786 bits against 114.3 Mbit** of
+demanded fact content at `b=32`, so 0.0042% of it. That looks like a reason to dismiss the confound and is
+in fact the reason to take it seriously — the design runs about 4× oversubscribed, and the marginal thing is
+what gets evicted there.
+
+Two changes, in order of strength:
+
+- **`InContextManoTask` is the confirmatory endpoint.** Both operator tables are stated in the prompt and
+  redrawn every item, so there is nothing memorisable: a model that had stored every table it ever saw
+  cannot answer, because this item's table is new. A decline cannot be table eviction. Verified by replaying
+  each answer from the *rendered prompt* rather than the generator's bookkeeping. The construct changes to
+  **read-then-compute**, which says nothing about stored procedural knowledge and is closer to the
+  chained-inference-over-context claim that motivated the project.
+- **`measure.reasoning.score_table_probe` keeps the memorised reading available.** A length-2 train-split
+  task — one operation, so a memorised lookup — scored beside the endpoint at every checkpoint as
+  `mano_table`. Length 2 holding while length 10 falls is reasoning; both falling is table eviction. It is a
+  diagnostic, not a gate input: no gate consumes it and adding an unregistered threshold would be inventing
+  one. Every treatment cell carries `mano_variant: both`, so one run yields the confirmatory endpoint, the
+  secondary and the probe for one extra reasoning slice.
+
+Building it exposed three defects, two of them mine:
+
+1. **The in-context floor is 10.45% at k=10, not `1/k`.** Answers are exactly uniform — a row of a uniform
+   table is k iid uniform values, so `total <- T[op][total][operand]` is uniform whatever `total` was — but a
+   fixed-offset copy is right whenever its cell equals the answer, and once in `2k**2` items that offset *is*
+   the answer's cell. My first docstring asserted 10.0% as a property. The measurement contradicted it.
+2. **`degenerate_baseline` reported a maximum rather than a rate.** It scored the winning copy offset on the
+   sample that selected it, biased upward by about `2.5 * sqrt(p(1-p)/n)`. At the ~20 offsets every task had
+   until now that is a rounding error, which is why a flat three-standard-error bar sufficed; at the ~240 an
+   in-context item has it is 0.6pp, and it **scaled with `tokens_per_item`**, so a wide endpoint and a narrow
+   one could not have their floors compared — precisely what these two variants need from each other. Both
+   families now select and score on disjoint halves, `degenerate_answer` included so the invariant between
+   them holds. This also moved `<mano>`'s L10 floor from 4.695% to 4.277% against the analytic
+   `1/23 = 4.348%`, so **every floor quoted before §16.14 was about 0.35pp high.** The cost is variance, paid
+   by raising the production floor sample to 60,000 — once per run, not per checkpoint, and exposed as
+   `score_run.py --floor-sample`.
+3. **Half the in-context items would have been cut by an instance boundary.** The trainer concatenates a
+   slice and chunks it into 512-token windows, so an item of width `w` is cut unless `w` divides 512: 3.1% at
+   `<mano>`'s 24 tokens, the figure already recorded on `TaskStream.num_tokens`, but **52% at 266** — most of
+   those losing the answer or part of the table they were meant to read. `pad_to` fixes it. At k=10 the
+   natural widths at lengths 2–5 are 250, 252, 254 and 256, so one aligned width of 256 covers the ladder for
+   at most 2.3% of tokens; length 6 is 258 and is refused rather than run unaligned. That caps the in-context
+   ladder at four depths, tight for G1's ≥15pp spread, and the recorded fallback is k=6, where `pad_to=128`
+   aligns depths 2–13 at a 17.82% floor.
+
+**G8's ladder was also not comparable across its own arms**, and this is separate from the endpoint. Cutting
+reasoning from 1.0B to 0.6B tokens at demand 0 cut total tokens and steps by the same 40% — 2,288 steps at
+the 60% dose against 3,814 at the 0% one — so the dose moved training length in the *opposite* direction to
+what the gate holds constant. `dilution_ladder_cells(..., iso_token=True)` backfills exactly what the dose
+removes with zero-bit biographies, so every arm trains 3,814 steps on ~1.000B tokens and only reasoning
+share moves. `iso_token` with a nonzero `demand_bits_per_param` is refused rather than reconciled.
+
+**On the equivalence margin: three replicates stands, and what changes is what gets reported.** `2pp` is a
+comparator — the size of the one published effect, 2.09pp at Pythia-410M — not a negligibility threshold;
+nobody has one of those for this question. `analysis.trend.achievable_margin` computes what the measured
+sigma can resolve, and at three seeds the answer is unforgiving: `df=2` costs 63% on every interval, with
+one-sided `t(0.95, 2) = 2.920` against `1.796` at `df=11`, and an exact-power MDE multiplier of `3.264*sd`
+against `1.682*sd` at n=5. A 2pp claim at three seeds therefore **requires** the per-seed slope SD to land at
+0.613pp or better, which phase 1 never measured on a treatment — the sigma cells all sit at demand 0, and one
+control sigma cannot set the count axis's MDE anyway. **Lead with the interval, not the verdict**, and quote
+the df cost out loud.

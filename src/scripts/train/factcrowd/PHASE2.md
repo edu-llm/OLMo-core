@@ -349,15 +349,38 @@ B and C show an effect to scale. The 113M rung is defined in `ladder/sizes.py` a
 
 ## 6. If calibration fails
 
-If no (row, length) clears floor + 10 pp, `<mano>` is not the endpoint at this scale, and the design needs a
-different dependent variable before any grid is worth buying:
+Two distinct failures now, because there are two endpoints, and they want different responses.
 
-1. **Fixed `<compare>` as primary.** The leak is closed and the floor is 0.605%, so its achievable range is
+### The in-context ladder is flat over depths 2–5
+
+The most likely failure, and it is a *range* problem rather than a learnability one: four depths is a short
+lever for G1's ≥ 15 pp spread. The response is a **smaller alphabet**, not a different task.
+
+| k | floor | G1 needs | width | aligned depths at `pad_to` | padding worst case |
+|---|---|---|---|---|---|
+| 6 | 17.82% | 34.3% | `102 + 2L` | **2–13** at 128 | 17% (at L=2) |
+| 9 | 11.66% | 29.3% | `204 + 2L` | 2–26 at 256 | 18.8% |
+| **10** | **10.45%** | **28.4%** | `246 + 2L` | **2–5** at 256 | 2.3% |
+| 12 | 8.65% | 26.9% | `342 + 2L` | 2–85 at 512 | 32.4% |
+
+k=6 is the useful fallback: twelve depths, and composition deeper than the memorised task ever reached,
+for a floor 7.4 pp higher and up to 17% of tokens in padding. k=9 and k=12 buy depth at more padding than
+they are worth. The trade is depth range against floor, and if the k=10 ladder is flat, depth range is
+exactly what is missing.
+
+### Neither endpoint clears its absolute bound
+
+Then reasoning-by-composition is not learnable at this scale and the design needs a different dependent
+variable before any grid is worth buying:
+
+1. **Fixed `<compare>` as primary.** The leak is closed and the floor is ~1%, so its achievable range is
    far wider. It is a *related*-fact composition rather than unrelated reasoning, which changes what a
    crowding result would mean — say so rather than substituting quietly.
 2. **Retrieval-then-compute**: ask for an attribute of whichever entity satisfies a comparison. Answer from
    a 263-pool, floor ~0.4%, and the supervision reveals a composition rather than a value.
-3. **The in-context endpoints** `PRD.md` §8.3 names, trading a memorised task for read-and-answer.
+
+Note that option 3 in earlier revisions of this list — "the in-context endpoints `PRD.md` §8.3 names" — is
+no longer a fallback. It is §4.A's confirmatory endpoint, built and calibrated.
 
 ---
 
@@ -459,16 +482,20 @@ recomputed there.
 512-token instance. An earlier revision of this section estimated ~214 at L=4 only and assumed depth would
 be sacrificed; it is not. The whole L2–L10 calibration ladder fits at k=10, and k=12 fits too at 362:
 
-| k | floor | table tokens | item at L=10 | fits 512 |
-|---|---|---|---|---|
-| 8 | 12.5% | 162 | 186 | yes |
-| **10** | **10.45%** | **242** | **266** | **yes** |
-| 12 | 8.4% | 338 | 362 | yes |
-| 16 | 6.3% | 578 | 602 | **no** — refused at construction |
+| k | floor | table tokens | width at L=10 | fits 512 | *aligns* to 512 |
+|---|---|---|---|---|---|
+| 8 | 13.18% | 162 | 186 | yes | at 256, depths 2–45 |
+| **10** | **10.45%** | **242** | **266** | **yes** | **at 256, depths 2–5** |
+| 12 | 8.65% | 338 | 362 | yes | at 512, depths 2–85 |
+| 16 | 6.43% | 578 | 602 | **no** — refused | — |
+
+**"Fits" is the weaker criterion, and it was the only one this section had in its first revision.** An item
+that fits a 512-token instance but does not *divide* it is cut by a boundary — 52% of the time at width 266
+— so the column that matters is the last one. See §4.A; the fallback ordering is in §6.
 
 Ten over twelve because 10.45% already leaves ~90 points of range, more than any gate asks for, and the
-extra 2 points of range is not worth 96 tokens of context per item. The refusal at k=16 is a raised
-`OLMoConfigurationError`, not a truncation.
+extra 1.8 points is not worth 96 tokens of context per item plus a jump to `pad_to=512`. The refusal at
+k=16 is a raised `OLMoConfigurationError`, not a truncation.
 
 One thing to keep in view: `<ctxmano>` items are **254–266 tokens against `<mano>`'s 8–24**, so at equal
 token budget the in-context endpoint sees roughly 11× fewer items. That is not a confound between the fact

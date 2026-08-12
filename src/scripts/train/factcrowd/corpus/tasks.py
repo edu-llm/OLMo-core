@@ -652,12 +652,26 @@ IN_CONTEXT_ALPHABET = 10
 Symbols the in-context variant composes over.
 
 Bounded by the prompt, not by taste. Stating one binary operator row-major with a row label costs
-``k * (2 + k)`` tokens, so two operators plus the expression and framing is ``2 * (1 + k * (2 + k)) +
-2 * length + 4``: **266 tokens at k=10 and length 10**, against a 512-token instance. ``k=12`` fits at 362
-and ``k=16`` does not fit at 602, so the ceiling is between them. Ten is chosen over twelve because the
-floor is ``1 / k`` exactly (see :class:`InContextManoTask`) and a 10.0% floor leaves 90 points of range,
-which is more than any gate in this project asks for -- there is nothing to buy with the extra 1.7 points
-that is worth 96 tokens of context per item.
+``k * (2 + k)`` tokens, so two operators plus the expression and framing is ``2 * k**2 + 4 * k + 2 * L + 6``:
+**266 tokens at k=10 and length 10**, against a 512-token instance.
+
+**The binding constraint is alignment, not fitting.** An item is cut by an instance boundary unless its
+width *divides* 512, so what a k buys is the set of depths one aligned ``pad_to`` covers:
+
+===  ======  ==============  ==========================
+k    floor   width           aligned depths
+===  ======  ==============  ==========================
+6    17.82%  ``102 + 2L``    2-13 at ``pad_to=128``
+8    13.18%  ``166 + 2L``    2-45 at ``pad_to=256``
+10   10.45%  ``246 + 2L``    2-5 at ``pad_to=256``
+12    8.65%  ``342 + 2L``    2-85 at ``pad_to=512``, 32% padding
+16    6.43%  ``578 + 2L``    none -- over the instance, refused
+===  ======  ==============  ==========================
+
+Ten because it gives the lowest floor that still pads cheaply: 2.3% of tokens at worst, against 18.8% at
+k=9 and 32.4% at k=12. It buys only four depths, which is tight for a depth response, and the recorded
+fallback is k=6 -- twelve depths for a floor 7.4 points higher. The floor is **not** ``1 / k``, which an
+earlier revision of this docstring claimed; see :class:`InContextManoTask`.
 """
 
 

@@ -497,6 +497,10 @@ def test_a_trained_checkpoint_scores_end_to_end_into_a_table():
                 "32",
                 "--batch-size",
                 "16",
+                # The floor's precision is not what this test checks, and the production default draws
+                # 60,000 items per endpoint through a rejection-sampling generator.
+                "--floor-sample",
+                "1500",
             ],
             cwd=str(REPO_ROOT),
             env=dict(os.environ, PYTHONPATH=str(REPO_ROOT / "src")),
@@ -588,6 +592,8 @@ def test_the_entropy_axis_scores_end_to_end_too():
                 "16",
                 "--batch-size",
                 "8",
+                "--floor-sample",
+                "1500",
             ],
             cwd=str(REPO_ROOT),
             env=dict(os.environ, PYTHONPATH=str(REPO_ROOT / "src")),
@@ -668,6 +674,8 @@ def test_the_gate_report_is_produced_from_real_runs_and_gates_real_admission():
                     "32",
                     "--batch-size",
                     "16",
+                    "--floor-sample",
+                    "1500",
                     *extra,
                 ],
                 cwd=str(REPO_ROOT),
