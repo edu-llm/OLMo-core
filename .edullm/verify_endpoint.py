@@ -96,6 +96,11 @@ SUBMISSIONS = {
     "baseline": "run_019fe40f-c71e-7045-9b58-537b9e2f6cb4",
     "faithful": "run_019fe90b-f99e-7027-b835-5d91feda869c",
     "output-only": "run_019fe9f6-d060-7016-8bd9-e3b1b21d6638",
+    # Arm 4, added 2026-08-12 when it landed. It is the arm H1b turns on, so it is the one that
+    # most needs a second instrument: H1b decides whether the tranche's headline belongs to
+    # hyper-connections or to the initialization prescription bundled with them, and a
+    # decomposition that only one program can reproduce is not a decomposition.
+    "no-output-init": "run_019fec90-51f8-70a8-8642-275550a81137",
     "mhc": "run_019fe9f6-d4f8-7077-841f-5da0312c3603",
 }
 
@@ -113,6 +118,12 @@ CONTRASTS = (
     ("faithful", "baseline"),
     ("faithful", "output-only"),
     ("output-only", "baseline"),
+    # H1a and H1b, added 2026-08-12. These are the decomposition of H1 into the mechanism and the
+    # initialization prescription bundled with it, and H1b is the contrast the tranche's headline
+    # turns on -- so it is recomputed here, by a route that shares no code with `analysis.py`.
+    ("no-output-init", "baseline"),
+    ("faithful", "no-output-init"),
+    ("mhc", "faithful"),
 )
 
 BPB_KEY = "eval/lm/{source}/BPB"

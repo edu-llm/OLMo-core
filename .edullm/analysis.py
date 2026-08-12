@@ -313,10 +313,11 @@ HYPOTHESES: Tuple[Hypothesis, ...] = (
 POST_HOC: Tuple[Tuple[str, str], ...] = (
     (
         "2026-08-09",
-        "the break-even rho recomputed for the four-arm design that actually ran. The "
-        "pre-registered 0.09 was derived at three arms, where paired df is 8 against an "
-        "unpaired 12; at four arms it is 12 against 16. The pre-registered constant stays the "
-        "operative threshold and the recomputed one is reported beside it.",
+        "the break-even rho recomputed for however many arms actually ran, which is not the "
+        "number the constant was derived at. The pre-registered 0.09 comes from three arms, "
+        "where paired df is 8 against an unpaired 12; the recomputed value is printed beside it "
+        "in section (b) with the two df it rests on, and the pre-registered constant stays the "
+        "operative threshold.",
     ),
     (
         "2026-08-09",
@@ -1571,7 +1572,13 @@ class Contrast:
     delta_bpb: float
     delta_nats: float
     se_bpb: float
-    df: int
+    df: float
+    """
+    Integral for every pooled and blocked estimator, and FRACTIONAL for ``welch``, where the
+    Welch-Satterthwaite value is not a count of anything and rounding it either way moves the
+    interval.
+    """
+
     t_statistic: float
     p_value: float
     ci_bpb: Tuple[float, float]
@@ -1607,8 +1614,23 @@ class Contrast:
     interval than the one printed beside it unless this column says which sigma was used.
     """
 
-    sigma_df: int = 0
+    sigma_df: float = 0.0
     """The degrees of freedom of :attr:`sigma_nats`."""
+
+
+def _df_label(df: float) -> str:
+    """
+    Print a df without inventing precision it does not have and without hiding what it is.
+
+    A blocked df is a count of residual dimensions and prints as an integer. A
+    Welch-Satterthwaite df is a variance ratio, is not a count, and prints with two decimals so a
+    reader can tell the two apart and reproduce the ``t`` that built the interval.
+
+    :param df: The degrees of freedom.
+
+    :returns: ``"16"`` for an integral df, ``"5.78"`` otherwise.
+    """
+    return str(int(df)) if float(df).is_integer() else f"{df:.2f}"
 
 
 def _contrast(
@@ -1618,7 +1640,7 @@ def _contrast(
     analysis: str,
     delta: float,
     se: float,
-    df: int,
+    df: float,
     predicted_sign: int,
     endpoint: str,
     primary: bool,
@@ -2063,7 +2085,13 @@ def analyse(
                     float((a - b).std(ddof=1)) / math.sqrt(n_seeds),
                     n_seeds - 1,
                 ),
-                ("welch", welch_delta, welch_se, max(int(round(welch_df)), 1)),
+                # The Welch-Satterthwaite df is fractional by construction and is left that way.
+                # Rounding it to the nearest integer used to narrow the interval whenever it
+                # rounded up -- on H1b it rounded 5.78 to 6 and took 1.2% off the half-width,
+                # which is the same class of error as quoting an interval built from a sigma other
+                # than the one printed beside it. `scipy.stats.t` takes a real df; floor it only
+                # to stay above zero.
+                ("welch", welch_delta, welch_se, max(welch_df, 1.0)),
             ):
                 rows.append(
                     _contrast(
@@ -2825,8 +2853,9 @@ def render(result: Mapping[str, object]) -> str:
         f"{mark}  error df: paired (k-1)(n-1) = {fit['df_paired']}, unpaired k(n-1) = "
         f"{fit['df_unpaired']}",
         f"{mark}  break-even rho: {pairing['pre_registered_break_even']:.2f} as pre-registered "
-        f"at three arms; {pairing['recomputed_break_even']:.3f} recomputed for the four that "
-        "ran  [post-hoc; the pre-registered constant is the operative one]",
+        f"at three arms; {pairing['recomputed_break_even']:.3f} recomputed for the "
+        f"{len(result['arms'])} that ran  [post-hoc; the pre-registered constant is the "
+        "operative one]",
         f"{mark}  every pair: "
         + ", ".join(f"{k} {v:+.3f}" for k, v in pairing["rho_every_pair"].items()),
     ]
@@ -2872,7 +2901,7 @@ def render(result: Mapping[str, object]) -> str:
             out.append(
                 f"{mark}    {row['endpoint']:<16} {row['analysis']:<18} "
                 f"delta {row['delta_nats']:+.5f} nats ({row['delta_bpb']:+.6f} BPB)  "
-                f"SE {row['se_bpb'] * NATS_PER_BPB:.5f}  df {row['df']:>2}  "
+                f"SE {row['se_bpb'] * NATS_PER_BPB:.5f}  df {_df_label(row['df']):>5}  "
                 f"t {row['t_statistic']:+.3f}  p {row['p_value']:.4f}{star}"
             )
             out.append(

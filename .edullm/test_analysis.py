@@ -691,6 +691,40 @@ def test_every_interval_names_the_sigma_it_was_built_from():
     assert seen, "no rows were checked, so this test asserts nothing"
 
 
+def test_the_welch_df_is_not_rounded_to_an_integer():
+    """
+    Welch-Satterthwaite df is a variance ratio, not a count of residual dimensions, and it is
+    fractional on nearly every real contrast. Rounding it to the nearest integer narrows the
+    interval whenever it rounds up: on H1b it took 5.78 to 6 and 1.2% off the half-width, which
+    is anti-conservative on exactly the contrast the tranche's interpretation turns on.
+
+    So this asserts two things -- that the df reaching the report is the unrounded one, and that
+    the interval was built with it -- because either alone can pass while the interval is wrong.
+    """
+    tranche = an.synthetic_tranche({"faithful": -0.010, "mhc": -0.005})
+    # Widen one arm so the two variances are far apart and the Welch df lands well off an integer.
+    widened = next(arm for arm in tranche if arm.arm == "mhc")
+    for seed, per_step in enumerate(widened.bpb):
+        for per_source in per_step:
+            for source in range(len(per_source)):
+                per_source[source] += 0.004 * (seed - 2)
+    result = an.analyse(tranche)
+    fractional = 0
+    for entry in result["contrasts"]:
+        for row in entry.get("rows", []):
+            if row["analysis"] != "welch":
+                continue
+            half = row["ci_nats"][1] - row["delta_nats"]
+            rebuilt = stats.t.ppf(0.975, row["df"]) * row["se_bpb"] * an.NATS_PER_BPB
+            assert rebuilt == pytest.approx(half, rel=1e-9), (
+                f"{entry['name']}: the printed df does not rebuild the printed interval, so one "
+                "of the two has been rounded"
+            )
+            if not float(row["df"]).is_integer():
+                fractional += 1
+    assert fractional, "every Welch df came out integral, so the rounding would not be visible"
+
+
 def test_the_blocked_interval_is_flagged_when_compound_symmetry_fails():
     """
     Pooling one seed effect across every arm is only the error term of a given contrast if each

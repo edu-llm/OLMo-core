@@ -67,13 +67,25 @@ MARKERS: Dict[str, str] = {
 #: ``faithful``" merges those two instead and paints H1 in the comparator's grey, which reads
 #: as though the baseline were the thing being plotted. Three contrasts over four arms have no
 #: single distinguishing arm and the honest fix is to stop looking for one.
+#: One colour and one marker per hypothesis, so a reader can follow a contrast between the two
+#: panels and between figures. H1a and H1b need their own entries rather than falling through to the
+#: grey default: they are the decomposition of H1 and they are the two the attribution turns on, so
+#: rendering them as the same grey circle made the one comparison the figure exists for unreadable.
 HYPOTHESIS_PALETTE: Dict[str, str] = {
     "H1": "#0b6fa4",
+    "H1a": "#6a3d9a",
+    "H1b": "#b8317f",
     "H2a": "#c1651a",
     "H5": "#5b8c2a",
 }
 
-HYPOTHESIS_MARKERS: Dict[str, str] = {"H1": "s", "H2a": "^", "H5": "D"}
+HYPOTHESIS_MARKERS: Dict[str, str] = {
+    "H1": "s",
+    "H1a": "v",
+    "H1b": "P",
+    "H2a": "^",
+    "H5": "D",
+}
 
 #: ``BPB = CE_nats / (bytes_per_token * ln 2)``, the same constant ``noise_floor`` carries.
 NATS_PER_BPB = 4.57 * math.log(2)
@@ -371,7 +383,9 @@ def endpoint(arms: Sequence, result: Mapping[str, object], path: str) -> str:
     plt = _style()
     ordered = _ordered(arms, result)
     sigma = result["sigma"]  # type: ignore[index]
-    fig, axis = plt.subplots(figsize=(7.6, 4.6))
+    # Taller than the other figures because each arm's tick label carries five lines: the arm, its
+    # n, which contrast it is, the effect, and whether it cleared the gate.
+    fig, axis = plt.subplots(figsize=(7.6, 5.4))
 
     baseline = next((a for a in result["arms"] if a["arm"] == "baseline"), None)  # type: ignore[index]
     centre = (
@@ -476,10 +490,14 @@ def endpoint(arms: Sequence, result: Mapping[str, object], path: str) -> str:
             labels.append(f"{arm.arm}\nn={len(arm.seeds)}")
             continue
         name, against, row, sign = entry
-        verdict = "clears the gate" if row["clears_gate"] else "inside the gate"
+        # One line per fact rather than one long line. At five arms the tick spacing is about 18
+        # characters wide, and "-0.0461 nats, clears the gate" ran into its neighbour on both
+        # sides -- which made the two facts a reader most wants unreadable in the figure that is
+        # supposed to carry them.
+        verdict = "clears the gate" if row["clears_gate"] else "INSIDE THE GATE"
         labels.append(
             f"{arm.arm}\nn={len(arm.seeds)}\n{name} vs {against}\n"
-            f"{sign * row['delta_nats']:+.4f} nats, {verdict}"
+            f"{sign * row['delta_nats']:+.4f} nats\n{verdict}"
         )
     axis.set_xticks(positions)
     axis.set_xticklabels(labels, fontsize=7.5)
@@ -497,9 +515,12 @@ def endpoint(arms: Sequence, result: Mapping[str, object], path: str) -> str:
     secondary.set_ylabel("nats of held-out cross-entropy,\nrelative to the baseline mean")
     axis.set_title(
         "Endpoint per run against the measured noise floor\n"
-        "points are runs; bars are the arm mean with a 95% t interval on 4 df"
+        "points are runs; bars are each arm's own mean with a 95% t interval on its 4 df, which is "
+        "not the interval on any contrast"
     )
-    axis.legend(loc="upper center", bbox_to_anchor=(0.5, -0.20), ncol=1, fontsize=7.5)
+    # -0.20 put the legend on top of the fifth line of the tick labels once every arm carried a
+    # contrast verdict. The tick labels are the figure's point, so the legend moves.
+    axis.legend(loc="upper center", bbox_to_anchor=(0.5, -0.32), ncol=2, fontsize=7.5)
     fig.tight_layout(rect=(0, 0.045, 1, 1))
     return _finish(fig, result, path)
 
