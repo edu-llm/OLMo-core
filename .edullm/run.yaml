@@ -137,6 +137,7 @@ command: >-
   --init-checkpoint "$BASE" || exit 1;
   LOGS=/tmp/armlogs; mkdir -p "$LOGS";
   pids=(); tails=(); for i in 0 1 2 3 4; do : > "$LOGS/A$i.log";
+  WANDB_RUN_ID="${WANDB_RUN_ID:-$EDULLM_RUN_ID}-A$i"
   CUDA_VISIBLE_DEVICES=$i python src/scripts/latentcot/train_codi.py
   --arm ${ARMS[$i]} --rung olmo3_370M --init-checkpoint "$BASE"
   --steps 2000 --batch-size 8 --precision bf16 --lr 2e-5
@@ -147,8 +148,12 @@ command: >-
   --out "$EDULLM_CHECKPOINT_DIR/A$i"
   > "$LOGS/A$i.log" 2>&1 & pids+=($!);
   ( tail -n +1 -f "$LOGS/A$i.log" | sed -u "s|^|[A$i] |" ) & tails+=($!); done;
+  ( while sleep 420; do line="[heartbeat]";
+  for j in 0 1 2 3 4; do if kill -0 "${pids[$j]}" 2>/dev/null; then st=alive; else st=GONE; fi;
+  last=$(grep -oE "step=[0-9]+" "$LOGS/A$j.log" 2>/dev/null | tail -1);
+  line="$line A$j=$st/${last:-nostep}"; done; echo "$line"; done ) & hb=$!;
   rc=0; for p in "${pids[@]}"; do wait "$p" || rc=1; done;
-  sleep 5; kill "${tails[@]}" 2>/dev/null || true;
+  sleep 5; kill "$hb" "${tails[@]}" 2>/dev/null || true;
   for i in 0 1 2 3 4; do echo "===== A$i last 40 ====="; tail -n 40 "$LOGS/A$i.log"; done;
   echo "===== EVAL =====";
   python src/scripts/latentcot/eval_arms_from_s3.py
