@@ -396,7 +396,17 @@ B and C show an effect to scale. The 113M rung is defined in `ladder/sizes.py` a
 
 - **G3** — the premise-ablated probe, the one remaining gate with no evidence path. It needs a corpus
   variant that does not exist, and a row cannot be admitted while it is owed.
-- **G8** — the dilution ladder re-run at the calibrated length, now **iso-token**. 5 cells, 5.0B tokens.
+- **G8** — the dilution ladder re-run at the calibrated length, now **iso-token**, and **on the
+  confirmatory endpoint's variant**. 5 cells, 5.0B tokens.
+
+  That last clause is a gap worth stating plainly: **G8's evidence has to be scored on the same endpoint
+  the report admits.** `assign_roles` reads each ladder arm's accuracy *for the endpoint under test*, so a
+  ladder carrying only `<mano>` contributes nothing to a `--gate-endpoint ctxmano` report — it is skipped
+  with a note, and G8 comes back owed. The committed `configs/cells/gates/` are all
+  `mano_variant: memorised`, which was right when `<mano>` was the only endpoint and is not right now.
+  Regenerate with `dilution_ladder_cells("13M", iso_token=True, mano_variant="both", ...)` at the
+  calibrated lengths — verified to produce five arms carrying `('ctxmano', 'mano')`. Not committed yet for
+  the same reason §4.B is not: the lengths come from §4.A.
 
   The phase-1 ladder was not comparable across its own arms. Cutting reasoning from 1.0B to 0.6B tokens at
   demand 0 cut total tokens and steps by the same 40% — 2,288 steps at the 60% dose against 3,814 at the
