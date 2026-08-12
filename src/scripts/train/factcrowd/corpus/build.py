@@ -128,6 +128,9 @@ class BuiltCorpus:
         # the *training* split, and it has to draw from the stream the cell actually trained on or it is
         # measuring a different corpus.
         self.spec_seed = spec.seed
+        self.mano_pad_to = resolved.spec.mano_pad_to
+        """The padded ``<mano>`` item width, so the table probe can build items shaped like training's."""
+
         self.mano_seed_offset = 4
         self.ctxmano_seed_offset = 6
         """

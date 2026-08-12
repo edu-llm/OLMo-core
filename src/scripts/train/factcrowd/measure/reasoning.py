@@ -71,16 +71,29 @@ def table_probe_task(corpus: Any) -> Any:
     Length 2 is one operation, so it is a table lookup and nothing else. Read beside the full-length
     endpoint at the same checkpoint:
 
-    - **length 2 holds while length 10 falls** -> the tables survived and composition broke. That is
+    - **length 2 holds while the endpoint falls** -> the tables survived and composition broke. That is
       reasoning, and it is the result the project wants.
     - **both fall together** -> the tables went. That is knowledge-versus-knowledge, and the crowding
       claim does not follow.
 
-    **The training split is correct here and is not a leak.** Retention is a question about material the
-    model was taught; asking it on held-out expressions would confound retention with generalisation,
-    which is the other thing being measured. :func:`score_reasoning` refuses a training-split task on
-    purpose, so this returns the task and the caller scores it through :func:`score_table_probe`, where the
-    exception is named rather than smuggled.
+    **What this measures is the table, not a memorised item, and an earlier version of this docstring said
+    otherwise.** The endpoint trains at ``mano_length``, which the calibration sweep selects and which is
+    normally well above two, so a length-2 probe item was **never in the training stream verbatim**. What
+    training did exercise is the individual table entries -- a length-10 expression performs nine lookups --
+    so the probe asks whether those entries are still there, uncontaminated by whether any particular
+    expression was memorised. That is a cleaner question than the one this docstring used to claim, not a
+    weaker one.
+
+    The training split therefore does not make this a leak in the sense the endpoint's guard exists to
+    prevent: it keeps the probe's expressions in the same content half the training stream drew from, so the
+    probe is in-distribution rather than deliberately held out. :func:`score_reasoning` refuses a
+    training-split task on purpose, so this returns the task and the caller scores it through
+    :func:`score_table_probe`, where the exception is named rather than smuggled.
+
+    **One case where the probe degenerates.** If calibration selects ``mano_length=2``, the probe and the
+    endpoint are the same task on the same split, so it stops separating anything and measures verbatim item
+    memorisation instead. Nothing enforces that, because a length-2 endpoint would already have failed G1's
+    depth-spread requirement -- but if one is ever admitted, read the probe as memorisation and say so.
 
     :param corpus: A built corpus, for its vocabulary and the seed it drew ``<mano>`` from.
 
@@ -92,6 +105,10 @@ def table_probe_task(corpus: Any) -> Any:
         corpus.vocabulary,
         domain_token="<mano>",
         length=2,
+        # The training stream's padding, so the probe's items look like the ones the model saw. It changes
+        # nothing about scoring -- the answer sits at the same offset either way -- but a probe whose items
+        # differ from training's in a way nobody intended is a probe whose result nobody can interpret.
+        pad_to=corpus.mano_pad_to,
         seed=corpus.spec_seed + corpus.mano_seed_offset,
         split="train",
     )

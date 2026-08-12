@@ -741,3 +741,37 @@ def test_the_two_tasks_do_not_share_a_stream_even_at_one_seed():
         for i in range(200)
     }
     assert len(keys) == 400
+
+
+def test_an_item_wider_than_the_instance_is_refused_for_either_task():
+    """
+    Every item would be cut by a boundary, so the slice would be entirely truncated expressions.
+
+    ``InContextManoTask`` refused this from the start, because its width is dominated by a table whose size
+    is a config knob. ``ManoTask`` did not, so a length above 254 produced 514-token items the chunker cut in
+    half -- unnoticed precisely because nobody would ask for it on purpose.
+    """
+    _, vocabulary, _ = assemble()
+    widest = T.ManoTask(vocabulary, domain_token="<mano>", length=254)
+    assert widest.tokens_per_item == 512
+    with pytest.raises(OLMoConfigurationError, match="over the 512-token instance"):
+        T.ManoTask(vocabulary, domain_token="<mano>", length=255)
+    with pytest.raises(OLMoConfigurationError, match="over the 512-token instance"):
+        T.InContextManoTask(vocabulary, domain_token="<ctxmano>", length=4, alphabet=16)
+
+
+def test_padding_leaves_the_answer_where_every_scorer_looks_for_it():
+    """
+    Padding goes after the eos, so ``answer_start`` is a function of the natural width and nothing else.
+    A padded and an unpadded task must agree on the answer *and* its offset, or the label-shift rule that
+    charges ``ce_loss[p - 1]`` for token ``p`` would read the wrong position.
+    """
+    _, vocabulary, _ = assemble()
+    for length in (2, 6, 10):
+        bare = T.ManoTask(vocabulary, domain_token="<mano>", length=length, seed=5)
+        padded = T.ManoTask(vocabulary, domain_token="<mano>", length=length, pad_to=32, seed=5)
+        for index in range(60):
+            one, two = bare.item(index), padded.item(index)
+            assert one.answer == two.answer
+            assert one.answer_start == two.answer_start
+            assert list(one.tokens) == list(two.tokens[: bare.tokens_per_item])

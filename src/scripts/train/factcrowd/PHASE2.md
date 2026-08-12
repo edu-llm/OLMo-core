@@ -300,23 +300,32 @@ falls under fact load, "facts crowded out the arithmetic tables" fits as well as
 reasoning" -- and the first is knowledge-versus-knowledge, which Physics 3.3 established years ago.
 
 `measure/reasoning.score_table_probe` scores a **length-2 task on the train split** beside the endpoint at
-every checkpoint, reported as `mano_table`. One operation with a memorised expression is a table lookup and
-nothing else, so:
+every checkpoint, reported as `mano_table`. One operation is a table lookup and nothing else, so:
 
-| `mano_table` (L2, train) | `mano` (L10, eval) | reading |
+| `mano_table` (L2, train) | `mano` (endpoint) | reading |
 |---|---|---|
 | flat | falls | composition broke while lookup survived -- **reasoning** |
 | falls | falls | the tables were evicted -- **knowledge vs knowledge**, not this paper's claim |
 | flat | flat | no effect to explain (P3) |
 | falls | flat | incoherent; suspect the harness |
 
+**It measures the table, not a memorised item, and an earlier revision of this file said otherwise.** The
+endpoint trains at whatever depth §4.A selects, normally well above two, so a length-2 probe item was never
+in the training stream verbatim. What training exercised is the individual entries — a length-10 expression
+performs nine lookups — so the probe asks whether those survive, uncontaminated by whether any expression was
+memorised. Cleaner than the claim it replaces, not weaker. The train split keeps the probe in the same
+content half the training stream drew from, which is in-distribution rather than held out.
+
+The probe **degenerates if §4.A selects length 2**, since then it is the endpoint on the same split and
+measures verbatim memorisation. Nothing enforces that, because a length-2 endpoint would already fail G1's
+depth-spread requirement — but if one is admitted, read the probe as memorisation and say so.
+
 It is a diagnostic, not a gate: no gate consumes it, and adding an unregistered threshold would be
 inventing one. That is now enforced in two places rather than left as a convention — `mano_table` rows carry
 `admission: diagnostic: 'mano_table' is not an admissible endpoint` instead of `no gate report`, which would
 read as the admission machinery having failed, and `--write-gate-report --gate-endpoint mano_table` is
-**refused before a single checkpoint is loaded**. It costs one extra 4,000-item eval pass per checkpoint and it converts the confound into a
-row of the results table. **The train split and length 2 are both deliberate** -- this probe wants the
-memorised case, which is why it does not go through the eval-split guard the endpoint does.
+**refused before a single checkpoint is loaded**. It costs one extra 4,000-item eval pass per checkpoint and converts the confound into a row
+of the results table.
 
 **What the probe cannot do is make `<mano>` the published task.** It is not the task from the phi-3
 claim, it did not work in phase 1, and calibration is what decides whether it works at all. If a length

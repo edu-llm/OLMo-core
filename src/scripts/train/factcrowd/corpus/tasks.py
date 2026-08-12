@@ -208,6 +208,15 @@ def resolve_padding(pad_to: Optional[int], natural: int, *, what: str) -> int:
 
     :raises OLMoConfigurationError: If the width is below ``natural`` or does not divide the instance.
     """
+    if natural > _MAX_INSTANCE_TOKENS:
+        # CHECKED HERE SO BOTH TASKS GET IT. `InContextManoTask` refused an oversized item from the start
+        # because its width is dominated by a table whose size is a config knob; `ManoTask` did not, so a
+        # length above 254 produced items the chunker would silently cut in half. Nobody would ask for that
+        # on purpose, which is exactly why it would have gone unnoticed.
+        raise OLMoConfigurationError(
+            f"a {what} item is {natural} tokens, over the {_MAX_INSTANCE_TOKENS}-token instance, so every "
+            f"one of them would be cut by a boundary"
+        )
     if pad_to is None:
         return natural
     if pad_to < natural:
