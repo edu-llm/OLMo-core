@@ -66,9 +66,62 @@ but 24 h would not be. Keep `--hours` tight.
 
 # The jobs
 
-## Prerequisite P — registration (the long pole, not a command)
+## Prerequisite P — two onboarding paths, and P2 is much cheaper
 
-Nothing can run until this lands. In order:
+The platform frames this choice itself. Both `edullm add --reason` and the
+registration workflow's `reason` input ask for *"why this needs a repository of its
+own **rather than a workload in an existing one**."* Those are the two paths.
+
+### P2 (recommended): a workload in an already-registered repository
+
+Cheapest by a wide margin, because it touches `config/**` only -- owned by **nine**
+people (2 admins + 7 team leads) -- and needs **no ECR repository, no publisher-role
+widening, no laptop deploy, and no image build of our own.** We ride the host repo's
+existing image.
+
+The registered repositories are `edullm-alt-cl`, `edullm-data`, `edullm-p1`,
+`nested-learning`, `OLMo-core`, `olmo-eval-full`, `open-instruct-scored-rewards`.
+`edullm-p1` is the natural host: it already runs a **custom non-OLMo entrypoint**
+that spawns its own launcher, which is exactly our shape.
+
+`--spec` makes this work without disturbing the host: multiple run specs per repo are
+supported (`find_spec` walks upward from cwd, and `--spec <path>` overrides). So our
+spec lives at `experiments/memsplit-hop/.edullm/run.yaml` inside the host repo and is
+selected explicitly.
+
+**Minimal version -- zero platform pull requests.** `edullm-p1-train` already allows
+10 h with one attempt, which covers our ~1.7-4.3 h runs. Point our spec at it:
+
+```yaml
+schema_version: 1
+workload_profile: edullm-p1-train      # already exists; no catalog change needed
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'EDULLM_LAUNCH_CHECK=waived python experiments/memsplit-hop/.edullm/train.py
+  "$EDULLM_RUN_ID" --save-folder "$EDULLM_CHECKPOINT_DIR" --data-root <s3 prefix>'
+```
+
+**If a dedicated profile is wanted**, it is one row in `config/workload-catalog.yaml`:
+
+```yaml
+  - name: edullm-p1-memsplit-hop-train
+    repository: edullm-p1
+    maximum_runtime_hours: "9"      # string: a Decimal read from base-ten text
+    maximum_attempts: 1
+    checkpoint:
+      interval_minutes: 20
+      destination_prefix: "s3://sbsandbox-intern-edullm-outputs/teams/"
+      resume_required: false
+```
+
+**The one thing to check first:** the host image must already carry our dependencies
+(`torch`, `numpy`, `PyYAML`, `tiktoken`, `boto3`). If it does not, adding them means a
+Dockerfile change in **someone else's repository**, which triggers a rebuild there --
+so ask before doing it, and prefer vendoring nothing that needs a new dependency.
+
+### P1: a repository of its own (what we attempted)
+
+Two halves, and the second is the long pole. In order:
 
 1. `memsplit-hop` must exist as a GitHub repo under `edu-llm` — it currently has no
    remote.
@@ -87,6 +140,27 @@ Nothing can run until this lands. In order:
    It edits five platform files and pushes a branch but **does not open the PR** — it
    prints a compare URL and a body to paste. Then merge, then a role-holder must
    **deploy**.
+   Then set the publisher role variable. **This ARN is not something you create** --
+   it is the pre-existing role `sbsandbox-intern-edullm-ecr-publisher`, and the
+   registration skill says so: *"The ARN is the one `infra/README.md` records for
+   `sbsandbox-intern-edullm-ecr-publisher` … registering a repository does not create
+   it."* Derive it with an AWS session:
+
+   ```bash
+   ACCT=$(aws sts get-caller-identity --query Account --output text)
+   gh variable set AWS_ECR_PUBLISHER_ROLE_ARN --repo edu-llm/memsplit-hop \
+     --body "arn:aws:iam::$ACCT:role/sbsandbox-intern-edullm-ecr-publisher"
+   ```
+
+   or read the `RoleArn` output of stack `sbsandbox-intern-edullm-ecr-publisher-iam`.
+
+   **And this is why P2 is cheaper.** The publisher role's policy enumerates each ECR
+   repository explicitly, so registering ours means editing
+   `infra/iam/ecr-publisher-role.yaml` -- which is owned by the two admins only, and
+   whose stack is *"Applied from: laptop"*. The workflow states it plainly: *"the
+   publisher role widening is an IAM stack nobody can apply from CI at all."* So P1
+   ends in a human with AWS credentials running a deploy, not in a merge.
+
 4. **Hand-edit the generated catalog entry before opening the PR.** The tool hardcodes
    1 hour / 1 attempt and names it `<repo>-check`; `--hours 9` against a 1 h profile is
    refused with `runtime_above_the_workload_bound`. Add:
