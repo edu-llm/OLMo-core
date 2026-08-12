@@ -156,11 +156,96 @@ def build_items(
     return np.stack(seqs), spans, np.stack(answers)
 
 
+def load_assets(path: str):
+    """Read the offline-tokenized English needles. See make_needle_assets.py for why they exist."""
+    with open(path) as f:
+        return json.load(f)
+
+
+def build_items_english(streams, length, depth, n_keys, n_items, assets, kind, rng):
+    """English needles, spliced as pre-tokenized ids. Returns (tokens, spans, answers, ctrl_qids).
+
+    Structure per row, identical in shape to the token-space version:
+
+        [ haystack ... NEEDLE(key_j, value_j) ... haystack ... QUERY(key_q) ANSWER(value_q) ]
+
+    ``ctrl_qids`` is the control query -- the same template with a key that was NEVER planted --
+    and it is returned per row rather than derived later because it must have the SAME token
+    length as the real query. Keys are drawn from one equal-query-length group precisely so that
+    substituting it changes the key and nothing else, leaving the sequence length untouched.
+    """
+    items = assets["items"][kind]
+    by_len = {}
+    for it in items:
+        by_len.setdefault(len(it["query_ids"]), []).append(it)
+    # Only groups with enough distinct keys for K planted plus one control are usable.
+    usable = [g for g in by_len.values() if len({i["key"] for i in g}) >= n_keys + 1]
+    if not usable:
+        raise ValueError(
+            f"no equal-query-length key group has {n_keys + 1} distinct keys for kind {kind!r}; "
+            "add keys to make_needle_assets.py"
+        )
+
+    seqs, spans, answers, ctrls = [], [], [], []
+    for _ in range(n_items):
+        group = usable[int(rng.integers(len(usable)))]
+        by_key = {}
+        for it in group:
+            by_key.setdefault(it["key"], []).append(it)
+        keys = list(rng.permutation(sorted(by_key))[: n_keys + 1])
+        planted_keys, ctrl_key = keys[:n_keys], keys[n_keys]
+        chosen = [by_key[k][int(rng.integers(len(by_key[k])))] for k in planted_keys]
+        q = int(rng.integers(n_keys))
+        qitem = chosen[q]
+
+        qids = np.asarray(qitem["query_ids"], dtype=np.int64)
+        aids = np.asarray(qitem["answer_ids"], dtype=np.int64)
+        tail = len(qids) + len(aids)
+        if length <= tail + 32:
+            continue
+        s = streams[int(rng.integers(len(streams)))]
+        if len(s) <= length + 8:
+            continue
+        off = int(rng.integers(0, len(s) - length - 8))
+        row = np.asarray(s[off : off + length], dtype=np.int64).copy()
+
+        # Plant the needles. The queried one sits AT the requested depth; the others are spread
+        # around it far enough not to overlap even at the longest needle.
+        widest = max(len(c["needle_ids"]) for c in chosen)
+        base = int(depth * (length - tail - widest * (n_keys + 1)))
+        base = max(1, base)
+        for j, c in enumerate(chosen):
+            nid = np.asarray(c["needle_ids"], dtype=np.int64)
+            at = base + (j - q) * widest * 2
+            at = max(1, min(at, length - tail - len(nid) - 1))
+            row[at : at + len(nid)] = nid
+
+        # Query and teacher-forced answer occupy the final `tail` tokens exactly.
+        row[length - tail : length - len(aids)] = qids
+        row[length - len(aids) :] = aids
+        seqs.append(row)
+        spans.append((length - len(aids), length))
+        answers.append(aids)
+        ctrl = by_key[ctrl_key][0]["query_ids"]
+        assert len(ctrl) == len(qids), "control query must match the real query's token length"
+        ctrls.append(np.asarray(ctrl, dtype=np.int64))
+    if not seqs:
+        return np.empty((0, length), dtype=np.int64), [], [], []
+    # Answer lengths can differ across items (uuid especially), so answers stay a list.
+    return np.stack(seqs), spans, answers, ctrls
+
+
 @torch.no_grad()
-def score(model, tokens: np.ndarray, spans, answers: np.ndarray, device, micro: int = 1):
-    """Teacher-forced accuracy, exact-match and CE over the queried value tokens only."""
+def score(model, tokens: np.ndarray, spans, answers, device, micro: int = 1):
+    """Teacher-forced accuracy, exact-match and CE over the queried value tokens only.
+
+    Also returns ``per_item_ce``, which is what makes a bootstrap confidence interval on the
+    retrieval gain possible: gain is a PAIRED difference over the same items, so the interval has
+    to be resampled over items rather than assumed from an aggregate.
+    """
     n_correct = n_total = n_exact = 0
     ce_sum = 0.0
+    per_item_ce = []
     for i in range(0, len(tokens), micro):
         batch = torch.from_numpy(tokens[i : i + micro]).to(device)
         logits = model(input_ids=batch)  # (B, T, V) -- value spans are short, so this is safe
@@ -170,7 +255,7 @@ def score(model, tokens: np.ndarray, spans, answers: np.ndarray, device, micro: 
             s, e = spans[i + b]
             # Position p predicts token p+1, so the logits for the value at [s, e) are at [s-1, e-1).
             lg = logits[b, s - 1 : e - 1].float()
-            tgt = torch.from_numpy(answers[i + b]).to(device)
+            tgt = torch.from_numpy(np.asarray(answers[i + b], dtype=np.int64)).to(device)
             pred = lg.argmax(-1)
             ok = pred == tgt
             n_correct += int(ok.sum().item())
@@ -182,6 +267,7 @@ def score(model, tokens: np.ndarray, spans, answers: np.ndarray, device, micro: 
         "exact": n_exact / max(1, len(tokens)),
         "ce": ce_sum / max(1, n_total),
         "n_items": len(tokens),
+        "per_item_ce": per_item_ce,
     }
 
 

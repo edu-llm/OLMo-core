@@ -33,6 +33,28 @@
 # it should promise neither. The upload of the results JSON goes to EDULLM_OUTPUT_PREFIX, which
 # the checkpoint contract does not cover and does not need to.
 #
+# ${EDULLM_OUTPUT_PREFIX%/} strips a trailing slash the platform already supplies. Without it the
+# last run wrote ".../run_019ff658.../\/eval_arms.json" with a doubled separator, which S3 treats
+# as a distinct key -- so `aws s3 cp` at the obvious path answered 404 for an object that was
+# there. Harmless to the run, wasted several minutes finding the file afterwards.
+#
+# NEEDLES ARE ENGLISH NOW, AND THE REASON IS RESOLUTION RATHER THAN REALISM. The token-space
+# probe bound ids the model had never seen in any relation -- a novel, out-of-distribution
+# association -- and every arm sat near the floor, inside a noise band measured at 0.43 nats from
+# the cells where all three were provably dead. A task nobody can do cannot separate anybody. An
+# English needle recruits machinery the model already has (the "number for X is Y" construction,
+# induction and copy circuits, numerals as high-prior tokens after "is"), which buys headroom for
+# the arms to differ at the same sample size -- and makes the numbers comparable to published
+# RULER scores, which is the GDN-2 paper's own metric.
+#
+# The needles are PRE-TOKENIZED and committed (experiments/.../needle_assets.json), so no run
+# needs a tokenizer or a network. See make_needle_assets.py.
+#
+# --value-kind digits is the highest-resolution condition and also the most contaminated by
+# template completion: the model can partly guess that a numeral follows "is". That is exactly why
+# the control is load-bearing here, and why `uuid` exists as the version with essentially no prior
+# (RULER's S-NIAH-3) for a second pass.
+#
 # TRITON_F32_DEFAULT=ieee because every arm's mixer is a Triton kernel (fla.ops.linear_attn,
 # fla.ops.gated_delta_rule, fla.ops.gdn2) and Triton lowers tl.dot to TF32 on Ampere+ by its own
 # default, which torch's allow_tf32=False does not reach. Playbook B9 measures 166x of relative
@@ -49,5 +71,6 @@ command: >-
   --eval-data "$S/stage-evaldata/arxiv/part-00-00000.npy,$S/stage-evaldata/finemath-3plus/part-000-00000.npy,$S/stage-evaldata/wikipedia/part-00-00000.npy"
   --seq-lens 4096,8192,16384,32768,65536
   --niah-lens 1024,2048,4096,8192,16384
-  --niah-keys 1,4 --niah-items 32 --max-windows 48
-  --upload-to "$EDULLM_OUTPUT_PREFIX/eval_arms.json"'
+  --niah-keys 1,4 --niah-items 96
+  --needle-style english --value-kind digits --bootstrap 2000
+  --upload-to "${EDULLM_OUTPUT_PREFIX%/}/eval_arms.json"'

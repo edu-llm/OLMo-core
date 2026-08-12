@@ -61,7 +61,13 @@ from eval_long_context import (  # noqa: E402
     _patch_head_for_chunked_ce,
     _windows,
 )
-from eval_niah import build_items, pick_marker_ids, score  # noqa: E402
+from eval_niah import (  # noqa: E402
+    build_items,
+    build_items_english,
+    load_assets,
+    pick_marker_ids,
+    score,
+)
 
 from olmo_core.io import upload  # noqa: E402
 from olmo_core.train import (  # noqa: E402
@@ -114,6 +120,27 @@ def main() -> int:
     # and "indistinguishable at this sample size".
     p.add_argument("--niah-items", type=int, default=96)
     p.add_argument("--value-len", type=int, default=4)
+    p.add_argument(
+        "--needle-style",
+        choices=["tokens", "english"],
+        default="english",
+        help="english uses pre-tokenized natural-language needles (see make_needle_assets.py) and "
+        "is the default because the token-space task is too hard at this scale to discriminate: "
+        "every arm sat near the floor, inside a measured noise band of 0.43 nats. tokens keeps the "
+        "harder probe, which isolates state capacity from linguistic priors.",
+    )
+    p.add_argument("--value-kind", default="digits", choices=["digits", "uuid", "words"])
+    p.add_argument(
+        "--needle-assets",
+        default=os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..",
+            "experiments",
+            "linear-attn-vs-gdn",
+            "needle_assets.json",
+        ),
+    )
+    p.add_argument("--bootstrap", type=int, default=2000)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--work-dir", default="/tmp/evalarms")
     p.add_argument("--skip-niah", action="store_true")
@@ -152,6 +179,12 @@ def main() -> int:
             log.info(f"  L={L}: {len(windows[L])} window(s) -> {len(windows[L]) * L:,} tokens")
 
         phase(f"windows built for {len(windows)} length(s)")
+        assets = None
+        if opts.needle_style == "english":
+            assets = load_assets(opts.needle_assets)
+            n_items = {k: len(v) for k, v in assets["items"].items()}
+            phase(f"english needles from {assets['tokenizer']}, items per kind {n_items}")
+
         results: Dict[str, Any] = {}
         markers = pool = freq = None
 
@@ -159,7 +192,7 @@ def main() -> int:
             phase(f"{name}: loading {ckpt}")
             model, model_cfg = _load_model(ckpt, device, os.path.join(opts.work_dir, name))
             phase(f"{name}: loaded, {model_cfg.num_params:,} params")
-            if markers is None:
+            if markers is None and opts.needle_style == "tokens":
                 phase("choosing needle markers by measured rarity")
                 markers, pool, freq = pick_marker_ids(
                     streams, n_markers=max(niah_keys) + 4, vocab=model_cfg.vocab_size
@@ -181,38 +214,84 @@ def main() -> int:
                     for L in niah_lens:
                         for d in niah_depths:
                             rng = np.random.default_rng(opts.seed)
-                            toks, spans, answers = build_items(
-                                streams,
-                                L,
-                                d,
-                                K,
-                                opts.niah_items,
-                                markers,
-                                pool,
-                                opts.value_len,
-                                rng,
-                            )
+                            if opts.needle_style == "english":
+                                toks, spans, answers, ctrl_qids = build_items_english(
+                                    streams,
+                                    L,
+                                    d,
+                                    K,
+                                    opts.niah_items,
+                                    assets,
+                                    opts.value_kind,
+                                    rng,
+                                )
+                            else:
+                                toks, spans, answers = build_items(
+                                    streams,
+                                    L,
+                                    d,
+                                    K,
+                                    opts.niah_items,
+                                    markers,
+                                    pool,
+                                    opts.value_len,
+                                    rng,
+                                )
+                                ctrl_qids = None
                             if len(toks) == 0:
                                 continue
                             got = score(model, toks, spans, answers, device, opts.micro_batch)
+
+                            # THE CONTROL: the same row with the query's KEY replaced by one never
+                            # planted, and nothing else touched -- same haystack, same needles,
+                            # same teacher-forced answer, same targets, same length.
                             ctl = toks.copy()
-                            # markers[-1] is reserved for the control; build_items samples keys
-                            # from markers[:-1] so it is never inserted as a needle.
-                            ctl[:, L - (1 + opts.value_len)] = markers[-1]
+                            if ctrl_qids is not None:
+                                for i, (sp, _e) in enumerate(spans):
+                                    q = ctrl_qids[i]
+                                    ctl[i, sp - len(q) : sp] = q
+                            else:
+                                # markers[-1] is reserved; build_items samples keys from
+                                # markers[:-1] so it is never inserted as a needle.
+                                ctl[:, L - (1 + opts.value_len)] = markers[-1]
                             ctlr = score(model, ctl, spans, answers, device, opts.micro_batch)
+
+                            # PAIRED BOOTSTRAP over items. gain is a difference on the same items,
+                            # so its uncertainty has to be resampled over items; an aggregate
+                            # cannot say whether a 0.2-nat gap is real. The last run had no
+                            # interval at all and I reported differences that turned out to sit
+                            # inside a 0.43-nat noise band.
+                            lo = hi = None
+                            a_ce = np.asarray(got.get("per_item_ce") or [], dtype=np.float64)
+                            b_ce = np.asarray(ctlr.get("per_item_ce") or [], dtype=np.float64)
+                            if opts.bootstrap and len(a_ce) == len(b_ce) and len(a_ce) > 1:
+                                diff = b_ce - a_ce
+                                brng = np.random.default_rng(opts.seed + 1)
+                                idx = brng.integers(0, len(diff), size=(opts.bootstrap, len(diff)))
+                                means = diff[idx].mean(axis=1)
+                                lo, hi = (
+                                    float(np.percentile(means, 2.5)),
+                                    float(np.percentile(means, 97.5)),
+                                )
+                            # per_item_ce is dropped from the record: it is what the bootstrap
+                            # above consumed, and keeping thousands of floats per cell would
+                            # bloat the results JSON without adding anything a reader needs.
+                            rec = {k: v for k, v in got.items() if k != "per_item_ce"}
                             arm["niah"].append(
                                 {
                                     "n_keys": K,
                                     "len": L,
                                     "depth": d,
-                                    **got,
+                                    **rec,
                                     "ce_ctrl": ctlr["ce"],
                                     "gain": ctlr["ce"] - got["ce"],
+                                    "gain_ci95": [lo, hi],
                                 }
                             )
+                            ci = f" [{lo:+.2f},{hi:+.2f}]" if lo is not None else ""
                             log.info(
                                 f"  niah K={K} L={L:<6} d={d:<4} acc={got['acc']:.3f} "
-                                f"gain={ctlr['ce'] - got['ce']:+.3f}"
+                                f"gain={ctlr['ce'] - got['ce']:+.3f}{ci}"
                             )
 
             # ---- length sweep. The head is patched for chunked CE and cannot give logits
@@ -273,26 +352,53 @@ def main() -> int:
         if not opts.skip_niah:
             print()
             print("=" * 78)
-            print("ASSOCIATIVE RECALL -- acc, and retrieval gain (ce_ctrl - ce)")
+            print("ASSOCIATIVE RECALL -- gain (ce_ctrl - ce) with 95% bootstrap CI, PER DEPTH")
             print("=" * 78)
+            print("A cell is gain [lo,hi]. The CI is a paired bootstrap over items, so an")
+            print("interval spanning zero means NO retrieval was demonstrated at that cell.")
+            print("NOT averaged over depths: depth is the best-resolved axis in this eval and")
+            print("averaging it away turns a monotone effect into one uninterpretable number.")
             for K in niah_keys:
-                print(f"  n_keys={K}")
-                print(f"    {'arm':<16}" + "".join(f"{L:>14}" for L in niah_lens))
+                for d in niah_depths:
+                    print(f"\n  n_keys={K}  depth={d}")
+                    print(f"    {'arm':<10}" + "".join(f"{L:>22}" for L in niah_lens))
+                    for name in results:
+                        row = f"    {name:<10}"
+                        for L in niah_lens:
+                            c = next(
+                                (
+                                    x
+                                    for x in results[name]["niah"]
+                                    if x["n_keys"] == K and x["len"] == L and x["depth"] == d
+                                ),
+                                None,
+                            )
+                            if not c:
+                                row += f"{'-':>22}"
+                            else:
+                                lo_, hi_ = c.get("gain_ci95") or [None, None]
+                                cell = (
+                                    f"{c['gain']:+.2f}"
+                                    if lo_ is None
+                                    else f"{c['gain']:+.2f}[{lo_:+.2f},{hi_:+.2f}]"
+                                )
+                                row += f"{cell:>22}"
+                        print(row)
+            print("\n  accuracy, same layout (fraction of answer tokens whose argmax is right)")
+            for K in niah_keys:
+                print(f"    n_keys={K}")
                 for name in results:
-                    row = f"    {name:<16}"
+                    row = f"      {name:<10}"
                     for L in niah_lens:
-                        cells = [
-                            c for c in results[name]["niah"] if c["n_keys"] == K and c["len"] == L
+                        cs = [
+                            x for x in results[name]["niah"] if x["n_keys"] == K and x["len"] == L
                         ]
-                        if not cells:
-                            row += f"{'-':>14}"
-                        else:
-                            a = sum(c["acc"] for c in cells) / len(cells)
-                            g = sum(c["gain"] for c in cells) / len(cells)
-                            row += f"  {a:.2f}/{g:+.2f}".rjust(14)
+                        row += (
+                            f"{'-':>10}"
+                            if not cs
+                            else f"{sum(c['acc'] for c in cs) / len(cs):>10.3f}"
+                        )
                     print(row)
-            print("    cells are acc/gain, averaged over depths. gain near zero means NO")
-            print("    retrieval however high acc looks -- acc alone rides the value prior.")
 
         print()
         print("READ THE RELATIVE TABLE FOR THE ARCHITECTURE COMPARISON, NOT THE ABSOLUTE ONE.")

@@ -26,6 +26,30 @@
 # a dtype on a command that cannot land on one would be noise. If this spec is ever pointed at a
 # T4 shape, the cast in the script is what has to change, not this line.
 #
+# --batch-tokens 4096, AND 16,384 PUT EVERY CELL OUT OF MEMORY. run_019ff6ac reported OOM at
+# every length including 1024, which looked absurd until the error text said each one had tried
+# to allocate the SAME 6.12 GiB: 16,384 x 100,352 x 4 bytes, the fp32 logits for one step. Tokens
+# per step is held constant across lengths on purpose -- that is what makes the arms comparable --
+# so the logits are identically sized at L=1024 and at L=65536, and the length of the sequence
+# never enters that allocation at all. With the unchunked loss path holding five (N,V) fp32
+# tensors (A100-MFU-PLAYBOOK.md B4) that is ~30 GiB of logits before the model's own ~7 GiB of
+# weights and Adam state, against 44.39 GiB on the card.
+#
+# At 4,096 tokens/step the chain is a quarter of that and fits. ABOVE L=4096 THE BATCH FLOORS AT
+# ONE SEQUENCE, so tokens/step becomes L itself and the chain grows with L however small
+# --batch-tokens is. The 30.62 GiB chain is the one that just failed, and L=16384 produces exactly
+# that chain at any batch size, so 16,384 and above are expected to run out for BOTH arms. The
+# usable sweep is 1024 through 8192, four points over an 8x span, and the arms are compared there
+# at equal tokens per step -- which is the comparison this benchmark exists to make. The larger
+# lengths are left in the list because they cost seconds to refuse and the boundary is worth
+# measuring rather than assuming.
+#
+# THE CEILING HERE IS THE LM HEAD, NOT ATTENTION, and that is worth being honest about. A
+# 100,352-wide vocabulary over an unchunked loss dominates memory long before the quadratic score
+# term does, so this benchmark cannot reach the lengths where attention is most obviously the
+# bottleneck. Bounding the loss (the chunked-CE path eval_long_context.py patches in) is what
+# would extend the range, and is the right next change if four points prove too few.
+#
 # TRITON_F32_DEFAULT=ieee because the linear arm's kernel is Triton (fla.ops.linear_attn) and
 # Triton lowers tl.dot to TF32 on Ampere+ by its own default, which torch's allow_tf32=False does
 # not reach. Playbook B9. It matters less for a timing run than for a training one -- but a
@@ -38,4 +62,4 @@ command: >-
   bash -lc 'export TRITON_F32_DEFAULT=ieee &&
   python .edullm/bench_attention_vs_linear.py "$EDULLM_RUN_ID"
   --seq-lens 1024,2048,4096,8192,16384,32768,65536
-  --batch-tokens 16384 --warmup 20 --steps 50'
+  --batch-tokens 4096 --warmup 20 --steps 50'
