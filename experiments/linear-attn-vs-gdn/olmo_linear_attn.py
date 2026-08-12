@@ -204,7 +204,17 @@ class LinearAttention(SequenceMixer):
             k = F.normalize(k, p=2.0, dim=-1)
 
         # Same fla chunked-scan kernel family as chunk_gated_delta_rule, minus gate + delta.
-        o, _ = chunk_linear_attn(q=q, k=k, v=v, normalize=self.normalize, head_first=False)
+        # NO head_first= HERE, AND ITS ABSENCE IS THE POINT. This module was written against
+        # flash-linear-attention 0.4.1, where chunk_linear_attn took head_first to choose between
+        # a [B, H, T, D] and a [B, T, H, D] layout. 0.5.x removed the argument and standardised on
+        # [B, T, H, D] -- exactly what head_first=False selected -- so dropping the keyword keeps
+        # the same layout and the same numerics. Passing it against 0.5.2 is a TypeError, which is
+        # how run_019ff4db died after the softmax arm had already been timed.
+        #
+        # The pin moved because GatedDeltaNet2 needs fla.ops.gdn2, which does not exist before
+        # 0.5.0. So bumping the extra for one mixer broke a sibling mixer's call site, in a file
+        # that no test imports.
+        o, _ = chunk_linear_attn(q=q, k=k, v=v, normalize=self.normalize)
 
         # shape: (batch_size, seq_len, d_model)
         return self.w_out(self.o_norm(o).view(B, T_og, -1))
