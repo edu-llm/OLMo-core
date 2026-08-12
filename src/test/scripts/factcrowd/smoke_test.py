@@ -523,7 +523,8 @@ def test_a_trained_checkpoint_scores_end_to_end_into_a_table():
     assert all(row["cell_id"] == "smoke_13m_reason" for row in rows)
     steps = sorted({int(row["step"]) for row in rows})
     assert len(steps) >= 3, steps
-    assert len(rows) == 2 * len(steps)
+    # Three: the two endpoints and the operator-table probe, at every checkpoint.
+    assert len(rows) == 3 * len(steps)
 
     for row in rows:
         # Every measurement present and in range, so a downstream read needs no defensive parsing.
@@ -748,6 +749,16 @@ def test_the_gate_report_is_produced_from_real_runs_and_gates_real_admission():
         with (work / "pass2.csv").open() as handle:
             admitted_rows = list(csv.DictReader(handle))
 
+        # The same passing verdicts, now bound to a configuration these runs are not.
+        elsewhere_path = work / "elsewhere.json"
+        elsewhere_path.write_text(
+            json.dumps([dict(one, identity={"sweep": "entropy", "row": "999M"}) for one in passing])
+        )
+        fourth = score("--gate-report", str(elsewhere_path), out="pass4.csv")
+        assert fourth.returncode == 0, fourth.stdout[-2500:] + fourth.stderr[-2500:]
+        with (work / "pass4.csv").open() as handle:
+            elsewhere_rows = list(csv.DictReader(handle))
+
         # --- one checkpoint per cell -------------------------------------------------------------
         # A first read needs the end of training, not the trajectory, and the trajectory is nine tenths
         # of the work. Per *cell*, because cells finish at different steps and one --steps list cannot
@@ -774,6 +785,17 @@ def test_the_gate_report_is_produced_from_real_runs_and_gates_real_admission():
     assert probe_rows, "the probe must be scored beside the endpoint it disambiguates"
     assert all(row["confirmatory"] == "False" for row in probe_rows)
     assert all("diagnostic" in row["admission"] for row in probe_rows)
+    # The fixture binds itself to nothing, so it admits -- and says that it was not checked.
+    assert all("carries no identity" in row["admission"] for row in admissible)
+
+    # --- a passing report about another configuration admits nothing --------------------------------
+    # The endpoint name was the only thing ever checked. A report gathered on the entropy architecture --
+    # 8,000 vocabulary words -- would otherwise admit every row of a count-axis run at 3,554.
+    real = [row for row in elsewhere_rows if row["endpoint"] != "mano_table"]
+    assert real
+    assert all(row["confirmatory"] == "False" for row in real), real
+    assert all("another configuration" in row["admission"] for row in real), real
+    assert any("row is" in row["admission"] for row in real), real
 
     # A failing report is refused too, and says which gate: the middle state between "no report" and
     # "admitted" is the one a reader is most likely to misread as either.

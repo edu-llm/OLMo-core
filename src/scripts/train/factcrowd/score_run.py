@@ -518,9 +518,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         elif not report.passed:
             row["confirmatory"] = False
             row["admission"] = f"gates not passed: {', '.join(report.failures)}"
+        elif report.mismatch(row):
+            # A PASSING REPORT ABOUT A DIFFERENT MEASUREMENT ADMITS NOTHING. The endpoint name is the only
+            # thing that used to be checked, so a report gathered on the entropy architecture -- 8,000
+            # vocabulary words and 31.43M parameters -- would have admitted every row of a count-axis run
+            # at 3,554 and 29.71M. Those are different networks, and "the task is learnable" on one is not
+            # evidence about the other.
+            row["confirmatory"] = False
+            row["admission"] = f"report is about another configuration: {report.mismatch(row)}"
         else:
             row["confirmatory"] = True
             row["admission"] = f"{report.version} at {report.commit or 'unknown commit'}"
+            if not report.identity:
+                # Admitted, because refusing every report written before the field existed would strand
+                # evidence that is otherwise fine -- but a reader should know the binding was not checked.
+                row["admission"] += " (report carries no identity)"
     if args.json:
         for row in rows:
             print(json.dumps(row))

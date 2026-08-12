@@ -374,6 +374,22 @@ B and C show an effect to scale. The 113M rung is defined in `ladder/sizes.py` a
   So G1 closes when §4.A is scored, and G2 costs nothing at all. Verified end to end: on a synthetic
   scored sweep both gates return verdicts **on the merits** rather than `no evidence`, and G3 — which
   genuinely has none — still says so.
+- **A gate report now binds itself to what it measured.** The endpoint name was the only thing ever
+  checked, so a report gathered on the entropy architecture — 8,000 vocabulary words, 31.43M parameters —
+  would have admitted every row of a count-axis run at 3,554 and 29.71M without complaint. Those are
+  different networks, and "the task is learnable" on one is not evidence about the other. `GateReport`
+  carries a `row`/`sweep`/`total_params` plus the endpoint's own depth, taken **from the cell under test**
+  rather than from what all the evidence agrees on — the depth sweep varies depth by construction and the
+  width sweep varies the row, so an "agreement" identity would omit exactly the two fields worth binding.
+  A mismatch marks the row `confirmatory=False` naming the field, and a report written before the field
+  existed still admits but says `(report carries no identity)`. §16.11 recorded this as a warning to be
+  careful; it is mechanical now.
+
+  **One consequence to plan around:** a report gathered on the entropy-architecture calibration will not
+  admit §4.C's count-axis rows. That is correct — §4.C is descriptive sensitivity, not the primary result —
+  but it means the count axis needs either its own calibration or an explicit, stated acknowledgement that
+  its rows are not confirmatory.
+
 - **G3** — the premise-ablated probe, the one remaining gate with no evidence path. It needs a corpus
   variant that does not exist, and a row cannot be admitted while it is owed.
 - **G8** — the dilution ladder re-run at the calibrated length, now **iso-token**. 5 cells, 5.0B tokens.

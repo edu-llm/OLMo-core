@@ -38,7 +38,7 @@ Two conventions, both enforced rather than documented:
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -1205,6 +1205,8 @@ class GateReport:
     :param endpoint: Which endpoint was admitted.
     :param results: One verdict per gate.
     :param commit: The commit the evidence was gathered at, so a report cannot outlive its code.
+    :param identity: What the evidence was gathered *on* -- see :meth:`mismatch`. Empty on a report
+        written before this field existed, which is admitted but says so.
     :param note: Free text for the person who ran it.
     """
 
@@ -1212,7 +1214,35 @@ class GateReport:
     endpoint: str
     results: Tuple[GateResult, ...]
     commit: str = ""
+    identity: Mapping[str, str] = field(default_factory=dict)
     note: str = ""
+
+    def mismatch(self, row: Mapping[str, object]) -> str:
+        """
+        Why this report cannot speak for a row, or ``""`` when it can.
+
+        **The endpoint name is not enough, and this is the hole it leaves.** A report says "``mano``
+        passed", and until this existed nothing checked *which* ``mano``. The calibration sweep runs
+        reasoning-only in the entropy architecture at 8,000 vocabulary words and 31.43M parameters; a count
+        axis treatment is 3,554 and 29.71M. Those are different softmax widths and different networks, so
+        "the task is learnable" measured on one is not evidence about the other -- and a gate report from
+        the first would have admitted every row of the second without complaint. PRD 16.11 recorded the
+        risk as a warning to be careful; this makes it mechanical.
+
+        Only fields the report actually carries are compared, so a row that does not state one is not
+        refused for it -- the report is the thing making a claim, and it can only be held to what it says.
+
+        :param row: A collected row, or any mapping of the identity fields.
+
+        :returns: A description of the first disagreement, or ``""``.
+        """
+        for key, expected in sorted(self.identity.items()):
+            if key not in row or row[key] is None:
+                continue
+            actual = str(row[key])
+            if actual != str(expected):
+                return f"{key} is {actual!r} here and {str(expected)!r} in the report"
+        return ""
 
     @property
     def passed(self) -> bool:
@@ -1266,6 +1296,7 @@ class GateReport:
             "commit": self.commit,
             "note": self.note,
             "passed": self.passed,
+            "identity": dict(self.identity),
             "results": [dict(result.summary()) for result in self.results],
         }
 
@@ -1307,11 +1338,15 @@ class GateReport:
                     detail=str(entry.get("detail", "")),
                 )
             )
+        raw_identity = raw.get("identity") or {}
+        if not isinstance(raw_identity, Mapping):
+            raise OLMoConfigurationError("gate report's 'identity' is not a mapping")
         return cls(
             version=version,
             endpoint=endpoint,
             results=tuple(results),
             commit=str(raw.get("commit", "")),
+            identity={str(k): str(v) for k, v in raw_identity.items()},
             note=str(raw.get("note", "")),
         )
 

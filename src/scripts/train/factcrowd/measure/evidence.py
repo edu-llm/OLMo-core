@@ -87,6 +87,22 @@ An endpoint absent from this mapping -- ``compare``, or the ``mano_table`` probe
 G1 reports as owed for it, which is correct rather than a gap: no ladder over its depth exists.
 """
 
+IDENTITY_FIELDS: Tuple[str, ...] = ("row", "sweep", "total_params")
+"""
+The fields a gate report binds itself to, so it cannot admit a row it says nothing about.
+
+Chosen to be the smallest set that separates measurements which are not evidence about each other:
+``row`` and ``total_params`` are the network, and ``sweep`` is the vocabulary -- the count axis builds 3,554
+words and the entropy axis 8,000, so the two differ in softmax width and in total parameters even at one
+ladder row. The endpoint's own depth is added per endpoint, since ``ctxmano_length`` and ``mano_length``
+each matter only to their own endpoint.
+
+Deliberately *not* including the replicate or the demand: a gate report is a statement that the instrument
+works at this configuration, and it is meant to admit every arm of the sweep it was gathered for.
+"""
+
+_DEPTH_FIELD_FOR_ENDPOINT = {"mano": "mano_length", "ctxmano": "ctxmano_length"}
+
 _CONTROL_SUFFIX = "_ctrl"
 
 
@@ -144,6 +160,8 @@ class RoleAssignment:
         the gate would silently have no evidence to fail on.
     :param depths: G1's task-depth sweep, keyed by expression depth.
     :param random_init: G2's untrained checkpoint, the step-0 one every run writes.
+    :param under_test: The whole checkpoint :attr:`result` came from, so a report can bind itself to the
+        configuration it was built around rather than only to the endpoint's name.
     :param notes: What was recognised and what was skipped, for the caller to log.
     """
 
@@ -158,6 +176,7 @@ class RoleAssignment:
         replicates: Optional[Sequence[EndpointResult]] = None,
         depths: Optional[Mapping[int, float]] = None,
         random_init: Optional[EndpointResult] = None,
+        under_test: Optional[ScoredCheckpoint] = None,
         notes: Sequence[str] = (),
     ) -> None:
         self.endpoint = endpoint
@@ -168,6 +187,7 @@ class RoleAssignment:
         self.replicates = tuple(replicates) if replicates else None
         self.depths = dict(depths) if depths else None
         self.random_init = random_init
+        self.under_test = under_test
         self.notes = tuple(notes)
 
     def __repr__(self) -> str:  # pragma: no cover - diagnostic only
@@ -347,6 +367,7 @@ def assign_roles(
         and _accuracy(entry, endpoint) is not None
     ]
     under_test: Optional[EndpointResult] = None
+    chosen: Optional[ScoredCheckpoint] = None
     if candidates:
         chosen = max(candidates, key=lambda e: float(e.stated("demand_bits_per_param", 0.0)))
         under_test = _result(chosen, endpoint)
@@ -356,6 +377,7 @@ def assign_roles(
         # same width and the same endpoint. Better than refusing to report at all during M0.
         reference = final.get((f"{str(row).lower()}_dil100", 0))
         if reference is not None:
+            chosen = reference
             under_test = _result(reference, endpoint)
             notes.append(
                 "endpoint under test: the ladder's 100% arm (no confirmatory cell scored yet)"
@@ -370,6 +392,7 @@ def assign_roles(
         replicates=replicates,
         depths=depths or None,
         random_init=random_init,
+        under_test=chosen,
         notes=notes,
     )
 
@@ -394,12 +417,18 @@ def assemble(
     :raises OLMoConfigurationError: If no checkpoint carries the endpoint at all, since a report about
         an endpoint nothing measured would admit rows on the strength of an empty file.
     """
-    assignment = assign_roles(scored, endpoint=endpoint, row=row)
+    scored_rows = list(scored)
+    assignment = assign_roles(scored_rows, endpoint=endpoint, row=row)
     if assignment.result is None:
         raise OLMoConfigurationError(
             f"no scored checkpoint carries endpoint {endpoint!r}, so there is nothing to run the gates "
             f"against. Score a run of the cell being admitted, or its dilution ladder, first."
         )
+    identity = (
+        {}
+        if assignment.under_test is None
+        else _identity_of(assignment.under_test, endpoint=endpoint)
+    )
     results = run_gates(
         assignment.result,
         depth_scores=assignment.depths,
@@ -415,6 +444,34 @@ def assemble(
             endpoint=endpoint,
             results=results,
             commit=commit or "",
+            identity=identity,
         ),
         assignment,
     )
+
+
+def _identity_of(entry: ScoredCheckpoint, *, endpoint: str) -> Dict[str, str]:
+    """
+    What the evidence is *about*, for :meth:`factcrowd.measure.gates.GateReport.mismatch`.
+
+    **Read from the cell under test, not from every checkpoint the report saw.** An earlier version took the
+    fields all the endpoint's checkpoints agreed on, which sounds safer and is useless: the depth sweep
+    varies depth by construction and the width sweep varies the row, so the two fields most worth binding
+    are exactly the two that never agree. The report's claim is "this endpoint is a usable instrument at the
+    configuration I was built around", and that configuration is one cell.
+
+    :param entry: The checkpoint the gates were run against.
+    :param endpoint: The endpoint being admitted, which selects whose depth is bound.
+
+    :returns: The identity fields, as strings. A field the cell does not state is omitted.
+    """
+    fields = list(IDENTITY_FIELDS)
+    depth = _DEPTH_FIELD_FOR_ENDPOINT.get(endpoint)
+    if depth is not None:
+        fields.append(depth)
+    identity: Dict[str, str] = {}
+    for key in fields:
+        value = entry.stated(key)
+        if value is not None:
+            identity[key] = str(value)
+    return identity

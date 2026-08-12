@@ -456,3 +456,104 @@ def test_g1_and_g2_reach_the_report_rather_than_stopping_at_the_assignment():
     # G3 is the one that genuinely has no evidence, and it must still say so.
     assert "no evidence" in verdicts["G3"].detail
     assert assignment.depths and assignment.random_init is not None
+
+
+# --- a report binds itself to what it measured ----------------------------------------------------
+
+
+def test_a_report_binds_itself_to_the_configuration_it_was_gathered_on():
+    """
+    **The endpoint name was the only thing ever checked, and it is not enough.** A report says "``mano``
+    passed"; nothing asked *which* ``mano``. Calibration runs reasoning-only in the entropy architecture at
+    8,000 vocabulary words, and a count-axis treatment is 3,554 -- different softmax widths, different
+    networks, so "the task is learnable" on one is not evidence about the other.
+    """
+    rows = calibration("in_context", (0.62, 0.48, 0.35, 0.24))
+    treatment = C.CellSpec(
+        cell_id="28m_b8",
+        row="28M",
+        sweep="entropy",
+        bits_per_attribute=8,
+        n_entities=100_000,
+        reasoning_tokens=C.REASONING_TOKENS,
+        mano_variant="in_context",
+        ctxmano_length=4,
+    )
+    rows += [
+        scored(treatment, 0.105, step=0, name="ctxmano"),
+        scored(treatment, 0.55, name="ctxmano"),
+    ]
+    report, _ = E.assemble(rows, endpoint="ctxmano", commit="cafe")
+
+    assert report.identity["sweep"] == "entropy"
+    assert report.identity["row"] == "28M"
+    assert report.identity["ctxmano_length"] == "4"  # the treatment's, not the sweep's spread
+    # It speaks for the configuration it measured.
+    assert report.mismatch(dict(report.identity)) == ""
+    # And for a row that simply does not state a field, since the report is the one making the claim.
+    assert report.mismatch({"row": "28M"}) == ""
+    # It does not speak for another architecture, another width, or another depth.
+    assert "sweep" in report.mismatch({**report.identity, "sweep": "count"})
+    assert "row" in report.mismatch({**report.identity, "row": "13M"})
+    assert "ctxmano_length" in report.mismatch({**report.identity, "ctxmano_length": "5"})
+
+
+def test_the_depth_bound_is_the_endpoints_own():
+    """``mano_length`` means nothing to ``ctxmano``, and binding it would refuse arms for no reason."""
+    memorised = calibration("memorised", (0.3,) * 7) + [
+        scored(C.dilution_ladder_cells("13M")[0], 0.4)
+    ]
+    report, _ = E.assemble(memorised, endpoint="mano", commit="c")
+    assert "mano_length" in report.identity
+    assert "ctxmano_length" not in report.identity
+
+
+def test_the_binding_comes_from_the_cell_under_test_not_from_every_arm():
+    """
+    **The two fields most worth binding are the two that never agree across the evidence.** The depth sweep
+    varies depth by construction and the width sweep varies the row, so an identity built from "what all the
+    checkpoints agree on" would omit exactly those -- which an earlier version of this did.
+
+    The report's claim is about the configuration it was built around, and that is one cell.
+    """
+    rows = calibration("in_context", (0.62, 0.48, 0.35, 0.24))  # depths 2, 3, 4, 5 all present
+    treatment = C.CellSpec(
+        cell_id="28m_b8",
+        row="28M",
+        sweep="entropy",
+        bits_per_attribute=8,
+        n_entities=100_000,
+        reasoning_tokens=C.REASONING_TOKENS,
+        mano_variant="in_context",
+        ctxmano_length=5,
+    )
+    rows += [scored(treatment, 0.55, name="ctxmano")]
+    report, assignment = E.assemble(rows, endpoint="ctxmano", commit="c")
+    assert assignment.under_test is not None
+    assert assignment.under_test.stated("cell_id") == "28m_b8"
+    # The treatment's depth, not "unbound because the sweep disagreed".
+    assert report.identity["ctxmano_length"] == "5"
+    assert report.mismatch({"ctxmano_length": "4"})
+
+
+def test_an_identity_survives_a_json_round_trip():
+    """A binding that is dropped on serialisation is a binding that does not exist."""
+    results = tuple(gates.GateResult(gate=name, passed=True, detail="fine") for name in gates.GATES)
+    report = gates.GateReport(
+        version=gates.GATE_REPORT_VERSION,
+        endpoint="ctxmano",
+        results=results,
+        identity={"row": "28M", "sweep": "entropy"},
+    )
+    assert report.passed
+    again = gates.GateReport.from_dict(report.as_dict())
+    assert again.identity == report.identity
+    assert again.mismatch({"sweep": "count"})
+
+    # A report written before the field existed still loads, and binds nothing.
+    legacy = dict(report.as_dict())
+    legacy.pop("identity")
+    assert gates.GateReport.from_dict(legacy).identity == {}
+    assert gates.GateReport.from_dict(legacy).mismatch({"sweep": "count"}) == ""
+    with pytest.raises(OLMoConfigurationError, match="'identity' is not a mapping"):
+        gates.GateReport.from_dict({**report.as_dict(), "identity": ["row", "28M"]})
