@@ -123,7 +123,13 @@ def build_items(
         off = int(rng.integers(0, len(s) - length - 8))
         row = np.asarray(s[off : off + length], dtype=np.int64).copy()
 
-        keys = list(rng.choice(len(markers), size=n_keys, replace=False))
+        # KEYS COME FROM markers[:-1]; THE LAST MARKER IS RESERVED FOR THE CONTROL ALONE.
+        # Sampling keys from ALL markers meant the marker the control queries as "never
+        # inserted" was in fact inserted in about half of K=4 items (4 chosen out of 8) and one
+        # in eight K=1 items. In those, the control query hit a REAL binding to the WRONG value,
+        # so ce_ctrl came out high and the retrieval gain was inflated -- upward, and worse for
+        # larger K, which is exactly where the arms were reported to separate.
+        keys = list(rng.choice(len(markers) - 1, size=n_keys, replace=False))
         vals = [
             np.asarray(rng.choice(pool, size=value_len, replace=True), dtype=np.int64) for _ in keys
         ]

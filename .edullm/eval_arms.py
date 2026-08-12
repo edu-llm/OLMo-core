@@ -91,7 +91,14 @@ def main() -> int:
     p.add_argument("--arms", required=True, help="name=checkpoint_uri, comma separated.")
     p.add_argument("--eval-data", required=True)
     p.add_argument("--seq-lens", default="4096,8192,16384,32768,65536")
-    p.add_argument("--max-windows", type=int, default=64)
+    # TOKENS PER LENGTH, NOT WINDOWS PER LENGTH, AND THE DIFFERENCE BIASED THE LAST RUN.
+    # Holding windows constant makes the token count GROW with L, so 4096 is the noisiest point
+    # -- and it is the denominator of every x-own-4096 ratio, which pushed all of them low: my
+    # GDN read 0.91x where the published run read 0.99x. The published harness held tokens at
+    # ~2M and let the window count fall (256 windows at 4096 down to 30 at 65536); this now does
+    # the same, so the ratios are comparable both to it and between lengths.
+    p.add_argument("--tokens-per-len", type=int, default=2_000_000)
+    p.add_argument("--max-windows", type=int, default=256)
     p.add_argument("--micro-batch", type=int, default=1)
     p.add_argument("--ce-chunk", type=int, default=4096)
     # NIAH scores argmax over the vocabulary, so it needs FULL (B, T, V) logits where the length
@@ -101,7 +108,11 @@ def main() -> int:
     p.add_argument("--niah-lens", default="1024,2048,4096,8192")
     p.add_argument("--niah-depths", default="0.1,0.5,0.9")
     p.add_argument("--niah-keys", default="1,4")
-    p.add_argument("--niah-items", type=int, default=32)
+    # 96 rather than 32: the last run's retrieval cells were single estimates over 32 items with
+    # no repeats, and differences between GDN and GDN-2 sat inside that noise. Tripling the sample
+    # is cheap here -- the whole NIAH pass was minutes -- and is the difference between "level"
+    # and "indistinguishable at this sample size".
+    p.add_argument("--niah-items", type=int, default=96)
     p.add_argument("--value-len", type=int, default=4)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--work-dir", default="/tmp/evalarms")
@@ -134,9 +145,11 @@ def main() -> int:
 
         # WINDOWS AND MARKERS ARE BUILT ONCE, BEFORE ANY MODEL LOADS. Every arm then sees
         # byte-identical evaluation inputs; nothing about arm order can change what is scored.
-        windows = {L: _windows(streams, L, opts.max_windows) for L in seq_lens}
-        for L, w in windows.items():
-            log.info(f"  L={L}: {len(w)} window(s)")
+        windows = {}
+        for L in seq_lens:
+            n = max(2, min(opts.max_windows, opts.tokens_per_len // L))
+            windows[L] = _windows(streams, L, n)
+            log.info(f"  L={L}: {len(windows[L])} window(s) -> {len(windows[L]) * L:,} tokens")
 
         phase(f"windows built for {len(windows)} length(s)")
         results: Dict[str, Any] = {}
@@ -183,6 +196,8 @@ def main() -> int:
                                 continue
                             got = score(model, toks, spans, answers, device, opts.micro_batch)
                             ctl = toks.copy()
+                            # markers[-1] is reserved for the control; build_items samples keys
+                            # from markers[:-1] so it is never inserted as a needle.
                             ctl[:, L - (1 + opts.value_len)] = markers[-1]
                             ctlr = score(model, ctl, spans, answers, device, opts.micro_batch)
                             arm["niah"].append(
