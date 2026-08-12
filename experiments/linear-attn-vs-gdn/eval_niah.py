@@ -261,7 +261,14 @@ def score(model, tokens: np.ndarray, spans, answers, device, micro: int = 1):
             n_correct += int(ok.sum().item())
             n_total += int(tgt.numel())
             n_exact += int(bool(ok.all().item()))
-            ce_sum += float(torch.nn.functional.cross_entropy(lg, tgt, reduction="sum").item())
+            item_ce = float(torch.nn.functional.cross_entropy(lg, tgt, reduction="sum").item())
+            ce_sum += item_ce
+            # PER TOKEN, NOT PER ITEM-SUM, so an item with a 6-token answer is not weighted more
+            # heavily than one with 4 in the bootstrap than it is in `ce`. Without this append the
+            # list stayed empty and every confidence interval was silently dropped: the bootstrap
+            # in eval_arms.py is guarded on len(per_item_ce) > 1, so it never ran, and the summary
+            # table went on printing its "gain [lo,hi]" header over bare gains.
+            per_item_ce.append(item_ce / max(1, int(tgt.numel())))
     return {
         "acc": n_correct / max(1, n_total),
         "exact": n_exact / max(1, len(tokens)),

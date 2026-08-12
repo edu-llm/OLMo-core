@@ -261,7 +261,7 @@ def main() -> int:
                             # cannot say whether a 0.2-nat gap is real. The last run had no
                             # interval at all and I reported differences that turned out to sit
                             # inside a 0.43-nat noise band.
-                            lo = hi = None
+                            lo = hi = boot = None
                             a_ce = np.asarray(got.get("per_item_ce") or [], dtype=np.float64)
                             b_ce = np.asarray(ctlr.get("per_item_ce") or [], dtype=np.float64)
                             if opts.bootstrap and len(a_ce) == len(b_ce) and len(a_ce) > 1:
@@ -272,6 +272,24 @@ def main() -> int:
                                 lo, hi = (
                                     float(np.percentile(means, 2.5)),
                                     float(np.percentile(means, 97.5)),
+                                )
+                                # THE INTERVAL'S OWN CENTRE, RECORDED SEPARATELY. `gain` is a
+                                # difference of TOKEN-weighted means and this is a mean of
+                                # ITEM-weighted ones, so they coincide only when every answer has
+                                # the same token count. They nearly do here (4-6 tokens), but a
+                                # silent divergence between an estimate and the interval drawn
+                                # around it is the kind of thing that invalidates a table without
+                                # looking wrong, so both are written down and can be compared.
+                                boot = float(diff.mean())
+                            elif opts.bootstrap:
+                                # LOUD, BECAUSE THE LAST RUN FAILED HERE IN SILENCE. per_item_ce
+                                # came back empty (nothing appended to it), this guard fell
+                                # through, and the summary printed a "gain [lo,hi]" header over
+                                # bare gains for all 90 cells. A skipped interval is now a line in
+                                # the log rather than an absence nobody can see.
+                                log.warning(
+                                    f"  no CI at K={K} L={L} d={d}: per-item CE lengths "
+                                    f"{len(a_ce)} and {len(b_ce)}"
                                 )
                             # per_item_ce is dropped from the record: it is what the bootstrap
                             # above consumed, and keeping thousands of floats per cell would
@@ -286,6 +304,7 @@ def main() -> int:
                                     "ce_ctrl": ctlr["ce"],
                                     "gain": ctlr["ce"] - got["ce"],
                                     "gain_ci95": [lo, hi],
+                                    "gain_boot": boot,
                                 }
                             )
                             ci = f" [{lo:+.2f},{hi:+.2f}]" if lo is not None else ""
@@ -406,6 +425,49 @@ def main() -> int:
         print("length and token budget match, but optimizer, LR, batch size and z-loss do not.")
         print("A gap in absolute ppl is a gap between two trained models. The x-own-4096 column")
         print("and the retrieval gain are taken inside one model, so the recipe largely cancels.")
+
+        # ---- DIGEST, PRINTED LAST, BECAUSE `edullm logs` SHOWS FIFTY LINES. -----------------
+        # The tables above are about sixty and the model repr each arm prints is longer than the
+        # whole window, so on the previous run every number had scrolled out of reach and the
+        # results were recoverable only by reading the raw stream. Whatever a reader most needs
+        # has to be the last thing printed, and short enough to survive on its own.
+        print()
+        print("=" * 78)
+        print("DIGEST (last, so it survives the 50-line `edullm logs` window)")
+        print("=" * 78)
+        for name in results:
+            # arm["lengths"] is a dict keyed by str(L), and a cell that ran out of memory carries
+            # only {"oom": True} -- so filter on a present ppl rather than assuming every
+            # requested length produced one.
+            sweep = {
+                int(k): v
+                for k, v in results[name]["lengths"].items()
+                if not v.get("oom") and v.get("ppl") is not None
+            }
+            if sweep:
+                lo_l, hi_l = min(sweep), max(sweep)
+                ratio = sweep[hi_l]["ppl"] / sweep[lo_l]["ppl"]
+                print(
+                    f"  {name:<8} ppl {sweep[lo_l]['ppl']:.2f} @{lo_l} -> "
+                    f"{sweep[hi_l]['ppl']:.2f} @{hi_l}  ({ratio:.2f}x own baseline)"
+                )
+            # The deepest, longest cell that still demonstrates retrieval: the CI must clear zero,
+            # so a cell survives here only if the interval says it did rather than the point
+            # estimate looking positive.
+            alive = [
+                c
+                for c in results[name]["niah"]
+                if (c.get("gain_ci95") or [None])[0] is not None and c["gain_ci95"][0] > 0
+            ]
+            if alive:
+                best = max(alive, key=lambda c: (c["len"], c["depth"]))
+                print(
+                    f"  {name:<8} retrieval holds to L={best['len']} "
+                    f"(K={best['n_keys']}, depth={best['depth']}, gain {best['gain']:+.2f} "
+                    f"CI [{best['gain_ci95'][0]:+.2f},{best['gain_ci95'][1]:+.2f}])"
+                )
+            else:
+                print(f"  {name:<8} retrieval: NO cell had a CI clear of zero")
 
         out = os.path.join(opts.work_dir, f"eval_arms_{opts.run_name}.json")
         os.makedirs(os.path.dirname(out), exist_ok=True)
