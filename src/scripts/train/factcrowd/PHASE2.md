@@ -99,6 +99,23 @@ run §5.2 first.
 
 ---
 
+### The degenerate-baseline estimator reported a maximum, not a rate
+
+Found by building `InContextManoTask`, whose floor came back at **11.1%** against an analytic 10.45%.
+`degenerate_baseline` searched every prompt offset for a copy policy and reported the best one's rate **on
+the sample that selected it**, so what it returned was a maximum over W offsets — biased upward by roughly
+`2.5 * sqrt(p(1-p)/n)`. At the ~20 offsets every task had until now that is a rounding error, which is why
+a flat three-standard-error bar sufficed. At 240 it is 0.6pp, and worse, **it scaled with
+`tokens_per_item`**, so a wide endpoint and a narrow one could not have their floors compared — which is
+exactly what the in-context and memorised variants need from each other.
+
+Both families now select on one half of the sample and score on the other, `degenerate_answer` included so
+the invariant between them holds. It also moved `mano`'s L10 floor from 4.695% to 4.277%, against the
+analytic `1/23 = 4.348%` — so the old figure was inflated by ~0.35pp too, and every floor quoted in
+earlier revisions of this file was slightly high. The cost is variance, since the held-out half is half the
+sample, so the production floor sample is now 60,000 (`measure.reasoning.FLOOR_SAMPLE`); it is computed
+once per run rather than per checkpoint.
+
 ## 3. What to keep, what to discard
 
 **Keep and re-use.** The 32 trained cells' checkpoints remain valid artefacts. The `schema` fingerprint is
@@ -148,31 +165,81 @@ undisturbed — entropy 4.52 bits of a 4.524-bit maximum, floors within sampling
 Short lengths are now honest tests of computation, which is what makes them usable as calibration points
 rather than only as pipeline controls.
 
-G4 requires floor-to-ceiling ≥ 10 pp. Measured floors, which shift because at short lengths a *copy* policy
-beats a constant:
+G4 requires floor-to-ceiling ≥ 10 pp. Floors measured at 60,000 items with the corrected estimator
+(§2), for **both** endpoints the plan now carries:
 
-| L | floor | winning policy | ceiling needed |
-|---|---|---|---|
-| 2 | 6.220% | copy@2 | 16.2% |
-| 3 | 5.310% | copy@2 | 15.3% |
-| 4 | 4.610% | constant `<n21>` | 14.6% |
-| 5 | 4.625% | constant `<n11>` | 14.6% |
-| 6 | 4.635% | constant `<n3>` | 14.6% |
-| 8 | 4.680% | constant `<n2>` | 14.7% |
-| 10 | 4.695% | constant `<n16>` | 14.7% |
+| L | `ctxmano` floor | width (padded) | `mano` floor | width |
+|---|---|---|---|---|
+| 2 | 10.02% | 250 → **256** | 6.09% | 8 |
+| 3 | 10.05% | 252 → **256** | 5.97% | 10 |
+| 4 | 10.69% | 254 → **256** | 4.41% | 12 |
+| 5 | 9.98% | 256 → **256** | 4.25% | 14 |
+| 6 | — | 258, unalignable | 4.32% | 16 |
+| 8 | — | 262, unalignable | 4.50% | 20 |
+| 10 | — | 266, unalignable | 3.89% | 24 |
+
+Both have **analytic floors to check the estimates against**, which is the useful part. `mano` answers are
+uniform over 23 residues, so the constant floor is `1/23 = 4.348%`. `ctxmano` answers are uniform over k,
+but its best fixed-offset copy is right whenever the cell it reads equals the answer and once in `2k**2`
+items that offset *is* the answer's own cell: `1/(2k**2) + (1 - 1/(2k**2))/k = 10.450%` at k=10. The
+estimates above bracket both. **A floor that drifts away from its analytic value is a bug in the
+estimator, not a property of the length** — that is how the selection bias in §2 was found.
+
+**The in-context ladder stops at length 5, and the reason is packing rather than difficulty.** The trainer
+concatenates a slice and chunks it into 512-token instances, so an item of width `w` is cut by a boundary
+unless `w` divides 512. At `<mano>`'s 24 tokens that is **3.1%** of items — the figure already recorded on
+`TaskStream.num_tokens`. At an in-context item's 266 it is **52%**: half of them truncated, most losing the
+answer or part of the table they were meant to read. That is not a small tax, it is a broken endpoint.
+
+`InContextManoTask` therefore takes `pad_to`, and every config sets it to **256**. At k=10 the natural
+widths at lengths 2–5 are 250, 252, 254 and 256, so one aligned width covers the whole ladder for **at most
+2.3% of tokens** and takes the cut rate to zero. Length 6 is 258 and is **refused at construction** rather
+than run unaligned. Padding goes after the `eos` so the answer's offset is unchanged, uses `PAD` rather
+than `EOS` so the document-boundary count is not inflated, and does not move the measured floor.
+
+Four depths is enough for a depth response but tight for G1's ≥ 15 pp spread. The fallback, if the spread
+over 2–5 comes back flat, is a **smaller alphabet**: k=6 gives width `102 + 2L`, so `pad_to=128` aligns
+depths **2 through 13** — twelve depths, and deeper composition than the memorised task ever reached — at a
+17.8% floor instead of 10.45%, which raises G1's absolute bar from 28.4% to 34.3%. See §6.
 
 **Exit condition, and floor + 10 pp is not it.** That threshold is only G4's *range* requirement. The
-binding constraint is G1, whose in-band lower bound is 20% of the floor-to-100 range: at a ~4.65% floor
-that is **≥ 23.8% absolute accuracy**, not 14.7%. G1 additionally wants a ≥15 pp spread across depths, and
-G3 a ≥15 pp ablation drop. So the rule is:
+binding constraint is G1, whose in-band lower bound is 20% of the floor-to-100 range:
 
-> Select the **hardest content-disjoint length** at 28M in the entropy architecture that reaches
-> **≥ 23.8% absolute**, shows a **≥ 15 pp spread** across the swept depths, and has `modal_rate` bounded
-> away from 1. Confirm the selected length on independent seeds before freezing it.
+| endpoint | floor | G1 needs |
+|---|---|---|
+| `ctxmano` | ~10.45% | **≥ 28.4% absolute** |
+| `mano` | ~4.35% | **≥ 23.5% absolute** |
+
+G1 additionally wants a ≥ 15 pp spread across depths, and G3 a ≥ 15 pp ablation drop. So the rule is:
+
+> Select the **hardest length** at 28M in the entropy architecture that reaches its endpoint's absolute
+> bound above, shows a **≥ 15 pp spread** across the swept depths, and has `modal_rate` bounded away
+> from 1. Confirm the selected length on independent seeds before freezing it.
+
+`ctxmano` is the confirmatory endpoint, so **its** sweep is the one that gates. `mano` is calibrated in the
+same submission and reported as a secondary; if it fails to clear 23.5% at every length, the secondary
+reading is simply unavailable and the confirmatory result stands on its own.
 
 `modal_rate` is a diagnostic, not yet a gate input — no gate consumes it, and treating it as an exit
 criterion without a pre-registered threshold would be inventing one. Pre-register the bound or drop it from
 the rule.
+
+**The committed configs are now 28M in the entropy architecture, which is where the treatment lives.**
+`configs/cells/calibration/` holds **11 cells, `fanout_size: 11`**, and the index maps by *filename*:
+
+| index | cell | endpoint |
+|---|---|---|
+| 0–3 | `p2_28m_ctxmanoL02` … `L05` | in-context, confirmatory |
+| 4–10 | `p2_28m_manoL02` … `L10` | memorised, secondary |
+
+`p2_28m_ctxmanoL*` sorts before `p2_28m_manoL*`, so the in-context block comes first. **Verify this against
+the CLI before submitting** — that ordering is filename-derived, and the phase-1 directory had `113m`
+sorting before `13m` for the same reason, which is the sort of thing that trains the wrong cell silently.
+
+The 13M and 113M width-response sweep for G6 moved to `configs/cells/calibration_width/` (8 cells,
+in-context only) and runs after a length is frozen, not before. An entropy-axis reasoning-only cell carries
+`bits_per_attribute: 0` and one entity — the axis requires a positive count, and one zero-bit biography is
+8,400 tokens against 1.0B of reasoning, so the demand is nil and the vocabulary is the treatment's.
 
 If nothing clears 23.8%, §6 applies instead of §4.B.
 
@@ -213,7 +280,9 @@ the 13M ones**, lengths ascending within each. Verified against the CLI; index 1
 
 ### B. Entropy sweep × 3 seeds — the primary result
 
-18 cells, **108.0B tokens**. 28M, b ∈ {0, 4, 8, 16, 24, 32}, at the calibrated length.
+18 cells, 28M, b ∈ {0, 4, 8, 16, 24, 32}, at the calibrated lengths, every cell at
+`mano_variant: both` so one run yields the confirmatory in-context endpoint, the secondary memorised one and
+the table probe. Token totals are recomputed in §7 for the extra reasoning slice.
 
 First because it is the **identified** axis: iso-token by construction, so entity count, token budget and
 mixture are held and only entropy varies. Half the cost of the count axis at the same row, and three seeds
@@ -294,14 +363,25 @@ different dependent variable before any grid is worth buying:
 
 ## 7. Cost
 
-| block | cells | tokens |
-|---|---|---|
-| A calibration | 14 | 14.0B |
-| B entropy × 3 | 18 | 108.0B |
-| C count × 3, reduced | 9 | 71.8B |
-| C′ count × 3, full | 18 | 214.6B |
-| D 64M × 3 | 18 | 469.0B |
-| D′ 113M × 3 | 18 | 832.0B |
+Every treatment cell now carries `mano_variant: both`, which adds one reasoning slice at
+`REASONING_TOKENS` — exactly **+1.0B per cell**, since the budget is per slice rather than a split of one
+total. The right-hand column is the figure to use; the middle one is what the same block cost with a single
+endpoint, kept so the delta is visible.
+
+| block | cells | one endpoint | **both endpoints** |
+|---|---|---|---|
+| A calibration (4 ctx + 7 mano) | 11 | 11.0B | **11.0B** — one variant per cell by construction |
+| A′ width response, ctx only | 8 | 8.0B | **8.0B** |
+| B entropy × 3 | 18 | 108.0B | **126.0B** |
+| C count × 3, reduced | 9 | 71.8B | **80.8B** |
+| C′ count × 3, full | 18 | 214.6B | **232.6B** |
+| D 64M × 3 | 18 | 469.0B | **487.0B** |
+| D′ 113M × 3 | 18 | 832.0B | **850.0B** |
+| E G8 iso-token ladder | 5 | 5.0B | **5.0B** |
+
+The extra slice is 17% of block B and 4% of block D′ — it buys the confound-free confirmatory endpoint, the
+memorised secondary and the table probe from one run instead of two blocks, so it is the cheapest thing in
+this table per unit of what it settles.
 
 **Measured throughput, 4×A10G:** 13M **886k tok/s**, 28M **484k tok/s**.
 
@@ -314,10 +394,11 @@ At the measured 28M rate on 4×A10G:
 
 | block | slot-hours | rate used |
 |---|---|---|
-| A | **13.5–18.3** | 13M measured (886k) + 113M fitted (172k)/FLOP-linear (121k) |
-| B | 62 | measured, 28M |
-| C reduced | 41 | measured, 28M |
-| C′ full | 123 | measured, 28M |
+| A calibration, 28M | **6.3** | measured, 28M (484k) |
+| A′ width, 13M + 113M | **4.6–7.1** | 13M measured (886k) + 113M fitted (172k)/FLOP-linear (121k) |
+| B, both endpoints | **72** | measured, 28M |
+| C reduced, both | 46 | measured, 28M |
+| C′ full, both | 133 | measured, 28M |
 | D 64M × 3 | ~492 | **fitted**, 265k tok/s |
 | D′ 113M × 3 | ~1,341 | **fitted**, 172k tok/s |
 
@@ -348,59 +429,65 @@ A crowding result needs, and phase 1 had none of:
    fixed cohort, not Allen-Zhu R(F), which would need the name term and an untaught prefix;
 4. **G1–G3 closed**, which §4.E finishes.
 
-## 9. Two decisions that should be made before §4.B runs
+## 9. Two decisions, now taken
 
-Neither is a defect. Both are choices where the wrong default quietly weakens the result, and both are
-cheaper to settle now than after 108B tokens of treatment.
+### 9.1 `<mano>` keeps its tables in the weights as a *secondary*; the confirmatory endpoint puts them in the prompt
 
-### 9.1 Whether `<mano>` keeps its tables in the weights
+**Decision: run both.** `InContextManoTask` is the confirmatory endpoint and `ManoTask` the secondary, both
+carried by every treatment cell at `mano_variant: both`.
 
-§4.A's probe *measures* the table confound. It does not remove it. The removal is a modest change to
-`ManoTask`: **put the operator table in the prompt**, freshly randomised per example. Nothing about the
-mapping is then memorisable — a model that has stored every table it ever saw still cannot answer, because
-this example's table is new — so a decline under fact load cannot be table eviction. It is the difference
-between reporting a diagnostic and not needing one.
+§4.A's probe *measures* the table confound. It does not remove it. Removal is what the in-context variant
+is: the operator tables are stated in the prompt and **redrawn every item**, so nothing about the mapping is
+memorisable — a model that had stored every table it ever saw still cannot answer, because this item's
+table is new. A decline under fact load therefore cannot be table eviction.
 
-The honest caveat is that the task changes character: it becomes **read-then-compute** rather than
-compute-from-memory. That is a real narrowing (it no longer speaks to stored procedural knowledge at all)
-and it is also much closer to what the phi-3 claim is about, which is chained inference over material in
-context.
+The honest caveat is that the construct changes: it becomes **read-then-compute** rather than
+compute-from-memory, so it says nothing about stored procedural knowledge. That is a real narrowing, and it
+is also much closer to the chained-inference-over-context claim that motivated the project. Carrying both
+means the narrowing costs nothing — the memorised endpoint is still there, with its probe, for the other
+reading.
 
-The cost is sequence length, because the table has to fit in the prompt. With alphabet `k` the floor is
-about `1/k` and each binary operator costs `k**2` tokens to state:
+Both live in one cell rather than two blocks, which is what makes this affordable: one extra reasoning
+slice at `REASONING_TOKENS` rather than a second treatment sweep. The **budget is per slice, not a split of
+one total** — the same rule that keeps the reasoning-only control comparable to the arms it references —
+so `both` doubles unrelated-reasoning tokens from 1.0B to 2.0B per cell. Against a treatment cell's fact
+budget that is small; against a *control* cell it is the whole cell, so §7's control figures move and are
+recomputed there.
 
-| `k` | floor | table tokens | item at L=4 | fits `seq_len` 512? |
+**k=10, and the prompt turns out not to bind.** Stating one operator row-major with a row label costs
+`k*(2+k)` tokens, so an item is `2*(1 + k*(2+k))*... ` → **266 tokens at k=10 and L=10**, against a
+512-token instance. An earlier revision of this section estimated ~214 at L=4 only and assumed depth would
+be sacrificed; it is not. The whole L2–L10 calibration ladder fits at k=10, and k=12 fits too at 362:
+
+| k | floor | table tokens | item at L=10 | fits 512 |
 |---|---|---|---|---|
-| 8 | 12.5% | 128 | ~150 | yes, comfortably |
-| 10 | 10.0% | 200 | ~214 | yes |
-| 16 | 6.25% | 512 | ~540 | **no** |
+| 8 | 12.5% | 162 | 186 | yes |
+| **10** | **10.45%** | **242** | **266** | **yes** |
+| 12 | 8.4% | 338 | 362 | yes |
+| 16 | 6.3% | 578 | 602 | **no** — refused at construction |
 
-`k=23` as it stands is 1,058 table tokens and cannot be done in-context at any useful depth. So the
-in-context version means a smaller alphabet, a **higher floor**, and therefore a smaller floor-to-ceiling
-range for G4 to work in — 87.5 pp at `k=8` against the current 95.3 pp, which is not the binding
-constraint, so this is affordable. Depth is bounded by what is left of the context after the table.
+Ten over twelve because 10.45% already leaves ~90 points of range, more than any gate asks for, and the
+extra 2 points of range is not worth 96 tokens of context per item. The refusal at k=16 is a raised
+`OLMoConfigurationError`, not a truncation.
 
-Three ways to go, and this is a judgement call rather than a fact:
+One thing to keep in view: `<ctxmano>` items are **254–266 tokens against `<mano>`'s 8–24**, so at equal
+token budget the in-context endpoint sees roughly 11× fewer items. That is not a confound between the fact
+arms — it is identical across them — but it does mean the two endpoints are not equally *trained*, and the
+confirmatory sweep's learnability question is being asked of a much smaller item count. §4.A calibrates it
+at the real budget, which is the only way to answer that.
 
-- **A — keep memorised `<mano>`, report the probe.** Zero new code. The confound becomes a measured row
-  instead of an objection. If both curves fall together the reasoning claim is not made.
-- **B — switch to in-context tables at `k=10`, calibrate that.** Removes the confound at source. Costs a
-  re-calibration (§4.A pricing, unchanged in shape) and narrows the claim to read-then-compute.
-- **C — run both.** In-context as the confirmatory endpoint, memorised as a secondary. Two calibration
-  sweeps; the reasoning-only cells are the cheap ones, so the delta is calibration, not treatment.
+### 9.2 Three seeds, and the margin is computed rather than claimed
 
-C is the strongest and B is the efficient one. **A is what the committed code does today**, and it is not
-wrong — it is just weaker than the alternatives by exactly the amount the probe has to explain.
+**Decision: three replicates**, as §4.B has it. What changes is what gets reported.
 
-### 9.2 Three seeds, or five
+The margin is **computed from the sigma the block measures**, via
+`analysis/trend.achievable_margin(slope_sd, n_blocks)`. `2pp` is a *comparator* — the size of the one
+published effect, 2.09 pp at Pythia-410M — and not a negligibility threshold. Nobody has one of those for
+this question, and asserting one would be inventing it.
 
-The margin should be **computed from the sigma the block measures**, not chosen in advance. `2pp` is a
-comparator — the size of the one published effect, 2.09 pp at Pythia-410M — and not a negligibility
-threshold. Nobody has one of those for this question, and asserting one would be inventing it.
-`analysis/trend.achievable_margin(slope_sd, n_blocks)` answers it directly, and the answer at three seeds
-is unforgiving:
+At three seeds that is a demanding place to stand, and the write-up should say so:
 
-| between-seed slope SD | smallest margin supportable at **3 seeds** | at **5 seeds** |
+| between-seed slope SD | margin supportable at **3 seeds** | at 5 seeds, for reference |
 |---|---|---|
 | 0.3 pp | 0.98 pp | 0.50 pp |
 | 0.6 pp | 1.96 pp | 1.01 pp |
@@ -408,26 +495,27 @@ is unforgiving:
 | 1.5 pp | 4.90 pp | 2.52 pp |
 | 2.0 pp | 6.53 pp | 3.36 pp |
 
-**Three seeds is df=2, and df=2 is expensive.** One-sided `t(0.95, 2) = 2.920` against `1.796` at `df=11` —
-a **63% penalty** on every interval — and the exact-power MDE multiplier is `3.264*sd` at n=3 against
-`1.682*sd` at n=5. So 67% more compute buys a **1.94x** tighter resolvable margin. That is close to the
-best marginal return anywhere in this plan, and it is better spent here than on §4.D's scale rungs.
+**df=2 is expensive and the cost goes in the paper, not only in this file.** One-sided `t(0.95, 2) = 2.920`
+against `1.796` at `df=11` — a **63% penalty** on every interval — and the exact-power MDE multiplier is
+`3.264*sd` at n=3 against `1.682*sd` at n=5. Read in reverse: a 2pp claim at three seeds *requires* the
+per-seed slope SD to come in at **≤ 0.613 pp**, and phase 1 never measured that quantity on a treatment.
 
-Read the trade in the other direction to see the risk: a 2pp claim at three seeds *requires* the per-seed
-slope SD to come in at **≤ 0.613 pp**. Phase 1 never measured that quantity on a treatment — the sigma
-cells sit at demand 0 — so it is currently a hope, and if sigma comes back at 1.5 pp the design supports
-"declines larger than 4.9 pp are excluded", which is nearly vacuous.
+So the reporting rule, which is the actual content of this decision:
 
-Whichever is chosen: **lead with the interval, not the verdict.** `[-1.2, +0.4]pp` is informative at any
-sigma; "equivalent at 2pp" is a claim whose content depends entirely on a sigma the reader cannot see.
+> **Lead with the interval, not the verdict.** `[−1.2, +0.4]pp` is informative at any sigma. "Equivalent at
+> 2pp" is a claim whose content depends entirely on a sigma the reader cannot see. If the measured sigma
+> supports only a 4.9pp margin, the finding is "declines larger than 4.9 pp are excluded" — a weaker claim
+> that is true — and the 2pp comparator is quoted beside it as the effect size that would have been needed
+> to match the literature, not as a bar that was cleared.
+
+If sigma comes back small enough that 2pp is supportable, say that and show the arithmetic. Adding seeds
+later is a second submission on a later commit, so it is a fallback rather than the plan.
 
 ### 9.3 A related limit worth stating rather than fixing
 
-**The sigma measured on the sigma cells does not transfer to the count axis.** All nine sit at demand 0.
-One control sigma cannot set one MDE for a sweep whose arms differ in entity count, token budget, steps,
-mixture and optimiser history, because between-seed variance is not guaranteed constant across them — and
-on the count axis it is precisely the arms with more entities that have more to be variable about. The
-entropy axis is iso-token by construction and much closer to safe. For §4.C, either measure sigma at a
-positive demand or state the assumption; do not quote a demand-0 MDE as though it were the axis's.
-
-Same for the `df=2` cost above: it belongs in the write-up out loud, not only in this file.
+**The sigma measured on the sigma cells does not transfer to the count axis.** All nine sit at demand 0. One
+control sigma cannot set one MDE for a sweep whose arms differ in entity count, token budget, steps, mixture
+and optimiser history, because between-seed variance is not guaranteed constant across them — and on the
+count axis it is precisely the arms with more entities that have more to be variable about. The entropy axis
+is iso-token by construction and much closer to safe. For §4.C, either measure sigma at a positive demand or
+state the assumption; do not quote a demand-0 MDE as though it were the axis's.

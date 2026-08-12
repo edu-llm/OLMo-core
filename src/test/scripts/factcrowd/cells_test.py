@@ -917,7 +917,7 @@ def test_the_calibration_sweep_brackets_the_length_that_failed():
     Reasoning only: the question is whether the *task* is learnable at a width and token budget, and with
     no facts each cell is 1.0B tokens rather than up to 35B. That also makes it G1's task-depth evidence.
     """
-    cells = C.mano_calibration_cells(("13M", "113M"))
+    cells = C.mano_calibration_cells(("13M", "113M"), architecture="count")
     assert len(cells) == 2 * len(C.MANO_CALIBRATION_LENGTHS)
     assert 10 in C.MANO_CALIBRATION_LENGTHS  # the length that produced a constant function
     assert min(C.MANO_CALIBRATION_LENGTHS) == 2
@@ -928,6 +928,20 @@ def test_the_calibration_sweep_brackets_the_length_that_failed():
         assert cell.resolve().total_tokens(69.2) == C.REASONING_TOKENS
     # Every id is distinct, so nine of them cannot land on one filename.
     assert len({c.qualified_id for c in cells}) == len(cells)
+
+    # THE IN-CONTEXT SWEEP IS SHORTER, AND FOR A PACKING REASON RATHER THAN A SCIENTIFIC ONE. Its items
+    # are ~256 tokens, so they only tile the 512-token instance at lengths whose natural width is at most
+    # 256 -- above that the cell is refused rather than run with half its items cut by a boundary.
+    ctx = C.mano_calibration_cells(("28M",), variant="in_context", architecture="entropy")
+    assert tuple(c.ctxmano_length for c in ctx) == C.IN_CONTEXT_CALIBRATION_LENGTHS
+    assert max(C.IN_CONTEXT_CALIBRATION_LENGTHS) == 5
+    for cell in ctx:
+        assert cell.reasoning_slice_names == ("ctxmano",)
+        assert cell.ctxmano_pad_to == 256
+        assert cell.sweep == "entropy"  # the treatment's vocabulary, 8,000 words rather than 3,554
+    # Calibrating "both" would sweep one depth while holding the other fixed.
+    with pytest.raises(OLMoConfigurationError, match="one endpoint at a time"):
+        C.mano_calibration_cells(("28M",), variant="both")
 
 
 def test_the_compare_pools_are_disjoint_across_splits():
@@ -971,7 +985,7 @@ def test_short_mano_expressions_are_content_disjoint_not_merely_index_disjoint()
 
     from factcrowd.corpus.build import BuiltCorpus
 
-    base = C.load_cell(CONFIG_ROOT / "calibration" / "13m_manoL02.yaml")
+    base = C.load_cell(CONFIG_ROOT / "calibration" / "p2_28m_manoL02.yaml")
     for length in (2, 3):
         cell = replace(base, mano_length=length)
         with tempfile.TemporaryDirectory() as raw:
@@ -1001,7 +1015,7 @@ def test_the_content_split_does_not_skew_the_answer_distribution():
 
     from factcrowd.corpus.build import BuiltCorpus
 
-    base = C.load_cell(CONFIG_ROOT / "calibration" / "13m_manoL02.yaml")
+    base = C.load_cell(CONFIG_ROOT / "calibration" / "p2_28m_manoL02.yaml")
     for length in (2, 6, 10):
         cell = replace(base, mano_length=length)
         with tempfile.TemporaryDirectory() as raw:

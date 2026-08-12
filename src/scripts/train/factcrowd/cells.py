@@ -38,6 +38,7 @@ __all__ = [
     "dilution_ladder_cells",
     "mano_calibration_cells",
     "MANO_CALIBRATION_LENGTHS",
+    "IN_CONTEXT_CALIBRATION_LENGTHS",
     "replicate_block",
     "grid_summary",
     "load_cell",
@@ -169,6 +170,29 @@ class CellSpec:
         same step would be silently treated as duplicate runs of one cell, and the wrong one could win.
         :attr:`qualified_id` carries it, so the two cannot collide in a filename or a checkpoint prefix
         either.
+    :param mano_variant: Which reasoning endpoint the unrelated slice carries. ``"memorised"`` is mod-23
+        :class:`~factcrowd.corpus.tasks.ManoTask`, whose operator tables must live in the weights;
+        ``"in_context"`` is :class:`~factcrowd.corpus.tasks.InContextManoTask`, whose tables are in the
+        prompt and new every item; ``"both"`` carries each as its own slice with its own budget.
+
+        **``"both"`` is what the phase-2 treatment uses, and it is not a hedge.** Mano cannot separate
+        "facts crowded out reasoning" from "facts crowded out the arithmetic tables" -- the tables are only
+        4.8 kbit against 114.3 Mbit of demand at ``b=32``, but the design runs about 4x oversubscribed,
+        which is where marginal things get evicted. The in-context variant cannot suffer that, because
+        there is nothing to memorise. Carrying both gets the confirmatory endpoint and the secondary one
+        from a single run, which costs one extra reasoning slice rather than a second treatment block.
+    :param ctxmano_length: Operands in a ``<ctxmano>`` expression. Calibrated separately from
+        ``mano_length``: the two tasks are different instruments and there is no reason their admission
+        bands land at the same depth.
+    :param ctxmano_alphabet: Symbols the in-context variant composes over. Bounded by the prompt, since
+        the tables cost ``2 * k * (2 + k)`` tokens -- see
+        :data:`~factcrowd.corpus.tasks.IN_CONTEXT_ALPHABET`.
+    :param ctxmano_pad_to: Pad ``<ctxmano>`` items to this width so they tile the instance. **Defaults to
+        256, and the default is load-bearing**: the trainer chunks a slice into 512-token windows, so a
+        266-token item is cut by a boundary 52% of the time against 3.1% for a 24-token ``<mano>`` one.
+        256 aligns k=10 at lengths 2 to 5 for at most 2.3% of tokens; above length 5 the natural width
+        exceeds 256 and the cell is refused rather than run with half its items truncated. Set ``None`` to
+        opt out, which is only sensible in a test.
     :param mano_length: Operands in a ``<mano>`` expression. **The calibration knob, and it was a module
         constant until the endpoint failed.** It had already been cut from 13 to 10 because 13 sat a point
         above its own degenerate policy; at 10 the first campaign found every model a constant function and
@@ -211,6 +235,10 @@ class CellSpec:
     warmup_steps: Optional[int] = None
     decay_fraction: float = 0.1
     mano_length: int = 10
+    mano_variant: str = "memorised"
+    ctxmano_length: int = 10
+    ctxmano_alphabet: int = 10
+    ctxmano_pad_to: Optional[int] = 256
     phase: str = "p1"
     reasoning_tokens: int = 0
     related_reasoning_tokens: int = 0
@@ -225,6 +253,16 @@ class CellSpec:
                 f"cell '{self.cell_id}': 'sweep' must be 'count' or 'entropy', got {self.sweep!r}"
             )
         sizes.row(self.row)  # raises, listing the ladder, if the row is unknown
+        if self.mano_variant not in ("memorised", "in_context", "both"):
+            raise OLMoConfigurationError(
+                f"cell '{self.cell_id}': 'mano_variant' must be 'memorised', 'in_context' or 'both', "
+                f"got {self.mano_variant!r}"
+            )
+        if self.mano_length < 2 or self.ctxmano_length < 2:
+            raise OLMoConfigurationError(
+                f"cell '{self.cell_id}': a reasoning expression needs at least two operands, got "
+                f"mano_length={self.mano_length} and ctxmano_length={self.ctxmano_length}"
+            )
 
         if self.sweep == "count":
             if self.demand_bits_per_param is None:
@@ -268,6 +306,7 @@ class CellSpec:
         for name, value in (
             ("exposures", self.exposures),
             ("sequence_length", self.sequence_length),
+            ("ctxmano_alphabet", self.ctxmano_alphabet),
             ("global_batch_size", self.global_batch_size),
             ("learning_rate", self.learning_rate),
         ):
@@ -374,9 +413,14 @@ class CellSpec:
         """
         if self.reasoning_tokens <= 0:
             return ()
+        unrelated = {
+            "memorised": ("mano",),
+            "in_context": ("ctxmano",),
+            "both": ("ctxmano", "mano"),
+        }[self.mano_variant]
         if self.sweep == "count" and not self.is_control and self.related_reasoning_tokens > 0:
-            return ("mano", "compare")
-        return ("mano",)
+            return unrelated + ("compare",)
+        return unrelated
 
     def slice_budget(self, name: str) -> int:
         """
@@ -392,6 +436,9 @@ class CellSpec:
             raise OLMoConfigurationError(
                 f"cell '{self.cell_id}' carries {self.reasoning_slice_names}, not {name!r}"
             )
+        # Per slice, not a split of one total. `<ctxmano>` and `<mano>` each get `reasoning_tokens`, so
+        # `"both"` doubles the unrelated-reasoning budget rather than halving each endpoint's exposure --
+        # which is the same rule that keeps the control comparable to the arms it is a reference for.
         return self.related_reasoning_tokens if name == "compare" else self.reasoning_tokens
 
     @property
@@ -670,6 +717,12 @@ class ResolvedCell:
             "reasoning_tokens_unrelated": self.spec.reasoning_tokens,
             "reasoning_tokens_related": self.spec.related_reasoning_tokens,
             "reasoning_slices": ",".join(self.spec.reasoning_slice_names) or "none",
+            # The endpoint's identity, not decoration: `28m_b8` carrying the in-context variant and
+            # `28m_b8` carrying the memorised one are different measurements, and a scored row that does
+            # not say which of the two it came from cannot be put in a table.
+            "mano_variant": self.spec.mano_variant,
+            "ctxmano_length": self.spec.ctxmano_length,
+            "ctxmano_alphabet": self.spec.ctxmano_alphabet,
             "reasoning_tokens": self.reasoning_total,
             "total_tokens": self.total_tokens(mean_tokens_per_bio),
             "steps": steps,
@@ -884,6 +937,22 @@ def dilution_ladder_cells(
 
 
 MANO_CALIBRATION_LENGTHS: Tuple[int, ...] = (2, 3, 4, 5, 6, 8, 10)
+
+IN_CONTEXT_CALIBRATION_LENGTHS: Tuple[int, ...] = (2, 3, 4, 5)
+"""
+Depths the in-context endpoint can be calibrated at, and it is shorter than the memorised one for a
+mechanical reason rather than a scientific one.
+
+At k=10 the natural item widths are 250, 252, 254 and 256, so ``pad_to=256`` aligns all four to the
+512-token instance for at most 2.3% of tokens. Length 6 is 258 and would need ``pad_to=512``, wasting 48%
+of every item -- and running it *unaligned* is worse still, at 52% of items cut by a boundary.
+
+Four depths is enough for a depth response but it is tight for G1's >=15pp spread requirement. If the
+spread over 2..5 comes back flat, the fallback is a **lower alphabet**: k=6 gives width ``102 + 2L``, so
+``pad_to=128`` aligns depths 2 through 13 -- twelve depths and deeper composition -- at a 17.8% floor
+instead of 10.45%, which raises G1's absolute bar from 28.4% to 34.3%. That trade is recorded in
+PHASE2.md 6 rather than chosen here.
+"""
 """
 Expression lengths the calibration sweep covers.
 
@@ -896,7 +965,9 @@ walks up until it is not.
 
 def mano_calibration_cells(
     rows: Sequence[str] = ("13M",),
-    lengths: Sequence[int] = MANO_CALIBRATION_LENGTHS,
+    lengths: Optional[Sequence[int]] = None,
+    variant: str = "memorised",
+    architecture: str = "entropy",
     **overrides: Any,
 ) -> Tuple[CellSpec, ...]:
     """
@@ -915,30 +986,74 @@ def mano_calibration_cells(
     :param rows: Ladder rows to sweep. One row answers "is it learnable here"; two answer "does width
         rescue it", which is the question G6 asks and could not be asked while every cell was at the floor.
     :param lengths: Expression lengths.
+    :param variant: ``"memorised"`` sweeps ``mano_length`` on :class:`~factcrowd.corpus.tasks.ManoTask`;
+        ``"in_context"`` sweeps ``ctxmano_length`` on
+        :class:`~factcrowd.corpus.tasks.InContextManoTask`. **Both need calibrating and they are separate
+        instruments** -- the in-context floor is about 10.4% against the memorised 4.3-6.6%, its items are
+        254 tokens against 12, and there is no reason their admission bands land at the same depth. The
+        plan runs in-context as the confirmatory endpoint and memorised as a secondary, so the confirmatory
+        sweep is the one that gates.
+    :param architecture: Which axis's vocabulary to calibrate in, and **not a cosmetic choice**. The
+        count axis builds the bioS vocabulary at 3,554 words and the entropy axis the union at 8,000, which
+        is a different softmax width and a different parameter count -- 29.71M against 31.43M at the 28M
+        row. An exit rule satisfied in one is not satisfied in the other, and the first campaign's
+        calibration configs were written on the count axis while the primary treatment ran on the entropy
+        one. Defaults to ``"entropy"`` because that is where the treatment lives.
+
+        An ``"entropy"`` calibration cell carries ``bits_per_attribute=0`` and a single entity: the axis
+        requires a positive entity count, and one zero-bit biography is 8,400 tokens against 1.0B of
+        reasoning, so the demand is nil and the vocabulary is the treatment's.
     :param overrides: Applied to every cell, e.g. ``seed``.
 
     :returns: One reasoning-only cell per (row, length).
+
+    :raises OLMoConfigurationError: If ``variant`` is ``"both"``, or either argument is unknown.
     """
+    if variant not in ("memorised", "in_context"):
+        raise OLMoConfigurationError(
+            f"calibrate one endpoint at a time; 'variant' must be 'memorised' or 'in_context', got "
+            f"{variant!r}. A 'both' cell would sweep one length while holding the other fixed, so half "
+            f"its rows would differ in nothing that is being calibrated."
+        )
+    if architecture not in ("count", "entropy"):
+        raise OLMoConfigurationError(
+            f"'architecture' must be 'count' or 'entropy', got {architecture!r}"
+        )
+    in_context = variant == "in_context"
+    if lengths is None:
+        # Per variant, because the two have different alignment constraints and a shared default would
+        # silently refuse half the in-context sweep.
+        lengths = IN_CONTEXT_CALIBRATION_LENGTHS if in_context else MANO_CALIBRATION_LENGTHS
+    placement: Dict[str, Any] = (
+        {"sweep": "count", "demand_bits_per_param": 0.0}
+        if architecture == "count"
+        else {"sweep": "entropy", "bits_per_attribute": 0, "n_entities": 1}
+    )
     settings: Dict[str, Any] = {
         "reasoning_tokens": REASONING_TOKENS,
         # No facts, so no orderable attribute and therefore no `<compare>` slice either.
         "related_reasoning_tokens": 0,
+        "mano_variant": variant,
         **overrides,
     }
+    tag = "ctx" if in_context else ""
     out: List[CellSpec] = []
     for row in rows:
         for length in lengths:
-            out.append(
-                CellSpec(
-                    cell_id=f"{row.lower()}_manoL{length:02d}",
-                    row=row,
-                    sweep="count",
-                    demand_bits_per_param=0.0,
-                    mano_length=length,
-                    notes=f"mano calibration: reasoning only, expression length {length}",
-                    **settings,
-                )
-            )
+            # One dict rather than three `**` unpacks: mypy infers a value type per literal and reads
+            # the merge of an int-valued one with a str-valued one as passing an int where a str goes.
+            fields: Dict[str, Any] = {
+                "cell_id": f"{row.lower()}_{tag}manoL{length:02d}",
+                "row": row,
+                "notes": (
+                    f"{'in-context' if in_context else 'memorised'} mano calibration in the "
+                    f"{architecture} architecture: reasoning only, expression length {length}"
+                ),
+                "ctxmano_length" if in_context else "mano_length": length,
+                **placement,
+                **settings,
+            }
+            out.append(CellSpec(**fields))
     return tuple(out)
 
 

@@ -1,0 +1,24 @@
+bits_per_attribute: 0
+cell_id: 28m_manoL04
+ctxmano_alphabet: 10
+ctxmano_length: 10
+ctxmano_pad_to: 256
+decay_fraction: 0.1
+exposures: 200
+global_batch_size: 262144
+learning_rate: 0.003
+mano_length: 4
+mano_variant: memorised
+n_entities: 1
+notes: 'memorised mano calibration in the entropy architecture: reasoning only, expression
+  length 4'
+phase: p2
+reasoning_tokens: 1000000000
+related_reasoning_tokens: 0
+replicate: 0
+row: 28M
+seed: 1234
+sequence_length: 512
+sweep: entropy
+warmup_fraction: 0.02
+weight_decay: 0.1

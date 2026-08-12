@@ -174,6 +174,10 @@ def score_checkpoint(
     # composition broke, and if both fall the tables went -- which is knowledge-versus-knowledge, not
     # crowding. The tables are 4.8 kbit against 114.3 Mbit of fact demand, and the design runs 4x
     # oversubscribed, so eviction is a live possibility rather than a quibble.
+    #
+    # Conditional on `<mano>` being present, and that is the whole rule: `<ctxmano>` carries its tables in
+    # the prompt and redraws them per item, so it has no memorised mapping to lose and nothing to probe.
+    # A cell at `mano_variant="in_context"` therefore reports no `mano_table` row, correctly.
     if any(task.name == "mano" for task in loaded.corpus.tasks):
         endpoints.append(
             reasoning_module.score_table_probe(

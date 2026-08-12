@@ -23,7 +23,7 @@ from . import tasks as tasks_module
 from . import values as values_module
 from . import vocab as vocab_module
 
-DOMAIN_TOKENS: Tuple[str, ...] = ("<facts>", "<mano>", "<compare>")
+DOMAIN_TOKENS: Tuple[str, ...] = ("<facts>", "<mano>", "<compare>", "<ctxmano>")
 """One per corpus slice. Prepended to every segment; there is no flag to disable it."""
 
 MANO_LENGTH = 10
@@ -43,7 +43,7 @@ scratch at our exact twelve layers, moving 18.2 points across the parameter rang
 """
 
 TASK_WORDS: Tuple[str, ...] = tasks_module.all_required_words(
-    (tasks_module.ManoTask, tasks_module.CompareTask)
+    (tasks_module.ManoTask, tasks_module.CompareTask, tasks_module.InContextManoTask)
 )
 """
 Words the reasoning tasks need, taken off the classes before anything is built.
@@ -51,6 +51,14 @@ Words the reasoning tasks need, taken off the classes before anything is built.
 The ordering is forced: a task cannot be constructed without a vocabulary containing its tokens,
 and the vocabulary cannot be built without knowing which tokens to reserve -- and the pool
 allocator has to avoid them too, or a generated city could collide with an operator.
+
+**Every variant's words are reserved in every cell, whether that cell carries the variant or not.**
+:meth:`factcrowd.corpus.tasks.InContextManoTask.required_words` is :func:`mano_words` exactly, so it adds
+none -- but ``<ctxmano>`` is in :data:`DOMAIN_TOKENS` unconditionally, and that is the deliberate part.
+Reserving a domain token only where it is used would give the confirmatory in-context endpoint and the
+secondary memorised one different softmax widths and different parameter counts, so the comparison between
+them would carry an architecture confound instead of the reading it exists to provide. One vocabulary for
+the whole phase, one token wider than phase 1's.
 """
 
 
@@ -121,6 +129,13 @@ class BuiltCorpus:
         # measuring a different corpus.
         self.spec_seed = spec.seed
         self.mano_seed_offset = 4
+        self.ctxmano_seed_offset = 6
+        """
+        Offset for the in-context variant's seed, distinct from every other slice's.
+
+        Six because 5 is `<compare>`'s. Two tasks sharing a seed would draw correlated item streams, and
+        the in-context and memorised endpoints are meant to be independent measurements of the same cell.
+        """
         if not spec.is_control:
             table_entities = spec.table_entities or resolved.n_entities
             self.table = entities_module.EntityTable.build(
@@ -157,15 +172,31 @@ class BuiltCorpus:
         self.task_streams: Tuple[tasks_module.TaskStream, ...] = ()
         self.tasks: Tuple[tasks_module.ReasoningTask, ...] = ()
         if spec.reasoning_tokens > 0:
-            built: list = [
-                tasks_module.ManoTask(
-                    self.vocabulary,
-                    domain_token="<mano>",
-                    length=resolved.spec.mano_length,
-                    seed=spec.seed + self.mano_seed_offset,
-                    split=split,
+            built: list = []
+            # Order matters only in that it must match `reasoning_slice_names`, which asserts against it
+            # below. In-context first because it is the confirmatory endpoint where both are present.
+            if spec.mano_variant in ("in_context", "both"):
+                built.append(
+                    tasks_module.InContextManoTask(
+                        self.vocabulary,
+                        domain_token="<ctxmano>",
+                        length=resolved.spec.ctxmano_length,
+                        alphabet=resolved.spec.ctxmano_alphabet,
+                        pad_to=resolved.spec.ctxmano_pad_to,
+                        seed=spec.seed + self.ctxmano_seed_offset,
+                        split=split,
+                    )
                 )
-            ]
+            if spec.mano_variant in ("memorised", "both"):
+                built.append(
+                    tasks_module.ManoTask(
+                        self.vocabulary,
+                        domain_token="<mano>",
+                        length=resolved.spec.mano_length,
+                        seed=spec.seed + self.mano_seed_offset,
+                        split=split,
+                    )
+                )
             # The related-reasoning slice asks about the fact schema, so it exists only where that
             # schema has fields to ask about. The entropy axis's attributes are abstract by
             # construction -- six positional attributes of four words each, with no ordinal field to

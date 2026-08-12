@@ -40,7 +40,7 @@ from olmo_core.exceptions import OLMoConfigurationError
 from .entities import EntityTable
 from .render import splitmix64
 from .values import CorpusSchema
-from .vocab import Vocabulary
+from .vocab import PAD, Vocabulary
 
 __all__ = [
     "MANO_MODULUS",
@@ -63,6 +63,15 @@ risk: an endpoint whose difficulty depends on how a BPE splits "17" is measuring
 """
 
 _TOKEN_DTYPE = np.uint32
+
+_MAX_INSTANCE_TOKENS = 512
+"""
+The instance length every cell trains at, repeated here as a bound rather than imported.
+
+`cells.CellSpec.sequence_length` is the authority and defaults to this. Duplicated because an item wider
+than an instance is a corpus-layer error that should be refused when the task is built, and importing the
+cell layer from the corpus layer to learn one integer would invert the dependency.
+"""
 
 
 def mano_words() -> Tuple[str, ...]:
@@ -315,36 +324,50 @@ class ReasoningTask(ABC):
         :returns: A label for the winning policy, and its accuracy.
         """
         width = self.tokens_per_item
+        # SELECT ON ONE HALF, SCORE ON THE OTHER. Taking the best offset's rate on the sample that chose
+        # it reports a maximum, and a maximum over W offsets is biased upward by roughly
+        # `2.5 * sqrt(p(1-p)/n)`. At W ~ 20 that is a rounding error, which is why a flat three-standard-
+        # error bar sufficed here for as long as every task was narrow. `InContextManoTask` searches ~240
+        # offsets and inflated its floor by 0.6pp of pure selection noise -- and a bias that grows with
+        # `tokens_per_item` makes two endpoints' floors incomparable, which is exactly what the
+        # in-context and memorised variants need from each other. Splitting the sample removes it
+        # outright, and needs no multiplicity correction to argue about.
+        pick = sample // 2
         constant: Dict[Tuple[str, ...], int] = {}
+        held_constant: Dict[Tuple[str, ...], int] = {}
         # One counter per prompt offset a copy policy could read an answer-width span from.
         copies: Dict[int, int] = {}
+        held_copies: Dict[int, int] = {}
         for index in range(sample):
+            selecting = index < pick
             item = self.item(index)
             answer = item.answer
-            constant[answer] = constant.get(answer, 0) + 1
+            target = constant if selecting else held_constant
+            target[answer] = target.get(answer, 0) + 1
             span = item.answer_end - item.answer_start
             words = self._vocabulary.decode(item.tokens)
+            hits = copies if selecting else held_copies
             for offset in range(0, width - span + 1):
                 if offset == item.answer_start:
                     continue  # reading the answer itself is not a policy
                 if tuple(words[offset : offset + span]) == answer:
-                    copies[offset] = copies.get(offset, 0) + 1
+                    hits[offset] = hits.get(offset, 0) + 1
 
+        held = sample - pick
         best_constant = max(constant, key=lambda key: constant[key])
-        label, count = f"constant:{' '.join(best_constant)}", constant[best_constant]
+        rate = held_constant.get(best_constant, 0) / held
+        label = f"constant:{' '.join(best_constant)}"
         if copies:
-            # A copy policy wins only if it beats the best constant by more than sampling noise. The
-            # maximum over ~20 offsets is upward-biased -- each is right about 1/23 of the time on Mano,
-            # so the best of them exceeds the constant by two standard errors for nothing, and the floor
-            # would drift up with the number of offsets searched rather than with the task. Three
-            # standard errors of the constant rate is the bar; the real thing this exists to catch beat
-            # it by a factor of 1,400.
+            # A copy policy wins only if it beats the best constant by more than sampling noise on the
+            # held-out half. Three standard errors, now measuring only noise rather than noise plus a
+            # selection bias that scaled with the task's width. The real thing this exists to catch --
+            # `<compare>`'s copy-the-first-name policy -- beat the constant by a factor of 1,400.
             best_offset = max(copies, key=lambda key: copies[key])
-            rate = count / sample
-            margin = 3.0 * math.sqrt(max(rate * (1.0 - rate), 1e-12) / sample)
-            if copies[best_offset] / sample > rate + margin:
-                label, count = f"copy@{best_offset}", copies[best_offset]
-        return label, count / sample
+            copy_rate = held_copies.get(best_offset, 0) / held
+            margin = 3.0 * math.sqrt(max(rate * (1.0 - rate), 1e-12) / held)
+            if copy_rate > rate + margin:
+                label, rate = f"copy@{best_offset}", copy_rate
+        return label, rate
 
     def degenerate_answer(self, sample: int = 20_000) -> Tuple[Tuple[str, ...], float]:
         """
@@ -353,16 +376,25 @@ class ReasoningTask(ABC):
         Kept because the constant family is worth reporting on its own, but it is **not** the endpoint's
         floor -- see :meth:`degenerate_baseline`, which is.
 
-        :param sample: How many items to draw.
+        **Selected and scored on disjoint halves, like** :meth:`degenerate_baseline`. Both estimators have
+        to agree on their footing or the invariant between them fails: an in-sample constant rate can
+        exceed a held-out best-of-both-families rate, which reads as "the constant family beat the search
+        that contains it" and is an artefact of mixing the two. A test asserts the ordering.
 
-        :returns: The most frequent answer, and its frequency.
+        :param sample: How many items to draw. Half select the constant and half score it, so the
+            reported rate carries the standard error of ``sample / 2``.
+
+        :returns: The most frequent answer, and its held-out frequency.
         """
+        pick = sample // 2
         counts: Dict[Tuple[str, ...], int] = {}
+        held: Dict[Tuple[str, ...], int] = {}
         for index in range(sample):
             answer = self.item(index).answer
-            counts[answer] = counts.get(answer, 0) + 1
+            target = counts if index < pick else held
+            target[answer] = target.get(answer, 0) + 1
         best = max(counts, key=lambda key: counts[key])
-        return best, counts[best] / sample
+        return best, held.get(best, 0) / (sample - pick)
 
 
 _MANO_SPLIT_ATTEMPTS: Final = 64
@@ -608,6 +640,285 @@ class ManoTask(ReasoningTask):
             str(self._seed),
             self._split,
             str(MANO_MODULUS),
+        ):
+            raw = field.encode()
+            digest.update(len(raw).to_bytes(8, "big"))
+            digest.update(raw)
+        return digest.hexdigest()
+
+
+IN_CONTEXT_ALPHABET = 10
+"""
+Symbols the in-context variant composes over.
+
+Bounded by the prompt, not by taste. Stating one binary operator row-major with a row label costs
+``k * (2 + k)`` tokens, so two operators plus the expression and framing is ``2 * (1 + k * (2 + k)) +
+2 * length + 4``: **266 tokens at k=10 and length 10**, against a 512-token instance. ``k=12`` fits at 362
+and ``k=16`` does not fit at 602, so the ceiling is between them. Ten is chosen over twelve because the
+floor is ``1 / k`` exactly (see :class:`InContextManoTask`) and a 10.0% floor leaves 90 points of range,
+which is more than any gate in this project asks for -- there is nothing to buy with the extra 1.7 points
+that is worth 96 tokens of context per item.
+"""
+
+
+class InContextManoTask(ReasoningTask):
+    """
+    Composition over operator tables **given in the prompt**, freshly randomised per item.
+
+    .. note::
+        **This exists to remove a confound that :class:`ManoTask` can only measure.** Mod-23 Mano needs
+        its operator tables in the weights: two 23x23 tables and a unary map is 1,058 entries at
+        ``log2(23)`` bits, so 4,786 bits -- 0.0042% of the 114.3 Mbit demanded at ``b=32``, which sounds
+        negligible until you remember the design runs about 4x oversubscribed, where the marginal thing is
+        exactly what gets evicted. A decline under fact load is then equally well explained by "the facts
+        evicted the arithmetic tables", which is knowledge-versus-knowledge and not this project's claim.
+
+        Here the tables are **in the prompt and new every item**, so there is nothing to memorise: a model
+        that had stored every table it ever saw still could not answer, because this item's table is one it
+        has never seen. A decline therefore cannot be table eviction.
+
+        The honest cost is that the construct changes. This is **read-then-compute**, not
+        compute-from-memory, so it says nothing about stored procedural knowledge -- and it is closer to
+        the chained-inference-over-context claim that motivated the project in the first place.
+        :class:`ManoTask` is kept as the secondary endpoint for the other reading.
+
+    Layout, at ``alphabet`` = k: the domain token, ``bos``, then each operator's table as a header token
+    followed by k rows of ``label <equals> cell_0 ... cell_{k-1}``, then the expression as k-ary residues
+    joined by the two operator tokens, then ``<equals>``, the answer, ``eos``. Every item is the same
+    width, which is what keeps the stream O(1).
+
+    **The answer is exactly uniform, so the constant floor is exactly ``1 / k``.** Composition is left to
+    right, ``total <- table[op][total][operand]``, and each operand is drawn uniformly and independently; a
+    row of a uniformly random table is k iid uniform values, so a uniform draw from it is uniform whatever
+    ``total`` was. Measured entropy is 3.3216 bits of the 3.3219 a uniform ten-way answer has.
+
+    **The floor is not ``1 / k``, though, and an earlier revision of this docstring said it was.** A
+    fixed-offset copy is right whenever the cell it reads happens to equal the answer, and once in
+    ``2 * k**2`` items that offset *is* the answer's own cell -- so the best copy policy scores
+    ``1/(2k**2) + (1 - 1/(2k**2))/k``, which is **10.45%** at k=10 rather than 10.0%. Small, real, and
+    exactly the kind of thing :meth:`degenerate_baseline` exists to find by measurement instead of
+    argument. It found something else at the same time: searching ~240 offsets inflated the reported floor
+    another 0.6pp by selection alone, which is why that method now selects and scores on disjoint halves.
+
+    **Splits need no rejection sampling here**, unlike :class:`ManoTask`. Content disjointness is what the
+    fresh table buys: train and eval draw different index streams, so they draw different tables, and two
+    items sharing an expression do not share an answer unless they also share ``2 * k**2`` table cells.
+    The ``split`` still enters the item key, so a task cannot produce the other split's items.
+
+    :param vocabulary: Must contain :meth:`required_words` and the domain token.
+    :param domain_token: Prepended to every item.
+    :param length: Operands in the expression.
+    :param alphabet: Symbols to compose over. See :data:`IN_CONTEXT_ALPHABET`.
+    :param pad_to: Pad each item's tail to this width, which must divide the 512-token instance. **Wanted
+        on every production config**, because the trainer chunks the concatenated slice into 512-token
+        windows and an item whose width does not divide 512 is cut by a boundary: 3.1% of 24-token
+        ``<mano>`` items, but **52%** of 266-token in-context ones, most of them losing the answer or part
+        of the table. At k=10 the natural widths are 250, 252, 254 and 256 at lengths 2 to 5, so
+        ``pad_to=256`` aligns that whole ladder for at most 2.3% of tokens. Lengths above 5 need
+        ``pad_to=512`` and cost 48%, which is why the in-context ladder is short.
+    :param seed: Seeds table and expression generation.
+    :param split: Which generation split.
+
+    :raises OLMoConfigurationError: If ``length`` is below two, the alphabet is outside
+        ``2 .. MANO_MODULUS``, an item would not fit a 512-token instance, or a word is missing.
+    """
+
+    name = "ctxmano"
+
+    def __init__(
+        self,
+        vocabulary: Vocabulary,
+        *,
+        domain_token: str,
+        length: int = 10,
+        alphabet: int = IN_CONTEXT_ALPHABET,
+        pad_to: Optional[int] = None,
+        seed: int = 0,
+        split: str = "train",
+    ) -> None:
+        if length < 2:
+            raise OLMoConfigurationError(f"'length' must be at least 2, got {length}")
+        if not 2 <= alphabet <= MANO_MODULUS:
+            raise OLMoConfigurationError(
+                f"'alphabet' must be between 2 and {MANO_MODULUS}, got {alphabet}; the symbols are the "
+                f"residue tokens, so there are no more of them than the modulus"
+            )
+        if seed < 0:
+            raise OLMoConfigurationError(f"'seed' must not be negative, got {seed}")
+        if split not in SPLITS:
+            raise OLMoConfigurationError(f"unknown split {split!r}; expected one of {SPLITS}")
+
+        self._vocabulary = vocabulary
+        self._domain_token = domain_token
+        self._length = length
+        self._alphabet = alphabet
+        self._seed = seed
+        self._split = split
+
+        self._residue_ids = np.array(
+            [vocabulary.id_of(f"<n{value}>") for value in range(alphabet)], dtype=_TOKEN_DTYPE
+        )
+        self._operator_ids = np.array(
+            [vocabulary.id_of("<plus>"), vocabulary.id_of("<times>")], dtype=_TOKEN_DTYPE
+        )
+        self._prefix = vocabulary.encode([domain_token, vocabulary.words[2]])
+        self._equals = np.array([vocabulary.id_of("<equals>")], dtype=_TOKEN_DTYPE)
+        self._eos = np.array([vocabulary.eos_id], dtype=_TOKEN_DTYPE)
+
+        # Per operator: the operator token, then k rows of [row label, <equals>, k cells].
+        self._block = 1 + alphabet * (2 + alphabet)
+        self._table_width = 2 * self._block
+        # domain + bos + tables + length operands + (length - 1) operators + equals + answer + eos
+        self._width = 2 + self._table_width + length + (length - 1) + 3
+        if self._width > _MAX_INSTANCE_TOKENS:
+            raise OLMoConfigurationError(
+                f"an item is {self._width} tokens at alphabet={alphabet} and length={length}, over the "
+                f"{_MAX_INSTANCE_TOKENS}-token instance; the table alone is {self._table_width}. Reduce "
+                f"'alphabet' -- it costs 2 * k * (2 + k) tokens against 2 per unit of 'length'"
+            )
+        # INSTANCE ALIGNMENT, AND FOR THIS TASK IT IS NOT OPTIONAL. The trainer concatenates a slice and
+        # chunks it into 512-token windows, so an item is cut by a boundary unless its width divides 512:
+        # over one period there are `lcm(w, 512)/512` boundaries and only those landing on an item start
+        # are harmless. At w=24 that is 3.1% of `<mano>` items, which is the figure recorded on
+        # `TaskStream.num_tokens`. At w=266 it is **52%** -- half the items truncated, most of them losing
+        # the answer or part of the table they were supposed to read. Padding the tail to a divisor of 512
+        # costs a few percent of tokens and takes the cut rate to zero.
+        self._natural_width = self._width
+        self._pad_to = pad_to
+        if pad_to is not None:
+            if pad_to < self._width:
+                raise OLMoConfigurationError(
+                    f"'pad_to' is {pad_to} but an item at alphabet={alphabet} and length={length} is "
+                    f"already {self._width} tokens"
+                )
+            if _MAX_INSTANCE_TOKENS % pad_to:
+                raise OLMoConfigurationError(
+                    f"'pad_to' must divide the {_MAX_INSTANCE_TOKENS}-token instance, and {pad_to} does "
+                    f"not. Padding to a width that does not divide it moves the cut rate without "
+                    f"removing it, which is the worst of both -- try "
+                    f"{[n for n in (128, 256, 512) if n >= self._width]}"
+                )
+            self._width = pad_to
+        self._pad_id = _TOKEN_DTYPE(vocabulary.id_of(PAD))
+        # Cells to draw per item. Named because the fingerprint and the draw both need it.
+        self._cells = 2 * alphabet * alphabet
+
+    @property
+    def tokens_per_item(self) -> int:
+        return self._width
+
+    @property
+    def domain_token(self) -> str:
+        return self._domain_token
+
+    @property
+    def length(self) -> int:
+        """Operands in the expression."""
+        return self._length
+
+    @property
+    def alphabet(self) -> int:
+        """Symbols composed over."""
+        return self._alphabet
+
+    @property
+    def table_tokens(self) -> int:
+        """Tokens the two tables occupy, which is what bounds ``length``."""
+        return self._table_width
+
+    @staticmethod
+    def required_words() -> Tuple[str, ...]:
+        # The full mod-23 word list, not the k the alphabet uses. Deliberate: it keeps the vocabulary --
+        # and so the softmax width and the parameter count -- identical to `ManoTask`'s, which is what
+        # lets a confirmatory in-context row and a secondary memorised row be compared at all.
+        return mano_words()
+
+    def _draw(self, index: int) -> np.ndarray:
+        """
+        The uniform stream one item is built from.
+
+        :param index: Which item.
+
+        :returns: ``cells + 2 * length`` values, enough for the tables, the operands and the operators.
+        """
+        base = item_key(
+            class_tag=0x43544D4E, split=self._split, seed=self._seed, index=index  # 'CTMN'
+        )
+        wanted = self._cells + 2 * self._length
+        # One splitmix64 per output rather than a strided walk of a single 64-bit draw: the tables need
+        # ~200 independent values and a 64-bit state carries about 19 of them at k=10.
+        keys = (np.uint64(base) + np.arange(wanted, dtype=np.uint64)) * np.uint64(
+            0x9E3779B97F4A7C15
+        )
+        return splitmix64(keys)
+
+    def item(self, index: int) -> TaskItem:
+        raw = self._draw(index)
+        alphabet = np.uint64(self._alphabet)
+        cells = (raw[: self._cells] % alphabet).astype(np.int64)
+        tail = raw[self._cells :]
+        operands = (tail[: self._length] % alphabet).astype(np.int64)
+        operators = (tail[self._length :][: self._length - 1] % np.uint64(2)).astype(np.int64)
+
+        tokens = np.empty(self._width, dtype=_TOKEN_DTYPE)
+        tokens[:2] = self._prefix
+        cursor = 2
+        for operator in range(2):
+            tokens[cursor] = self._operator_ids[operator]
+            cursor += 1
+            for left in range(self._alphabet):
+                tokens[cursor] = self._residue_ids[left]
+                tokens[cursor + 1] = self._equals[0]
+                cursor += 2
+                start = (operator * self._alphabet + left) * self._alphabet
+                row = cells[start : start + self._alphabet]
+                tokens[cursor : cursor + self._alphabet] = self._residue_ids[row]
+                cursor += self._alphabet
+
+        total = int(operands[0])
+        tokens[cursor] = self._residue_ids[total]
+        cursor += 1
+        for position in range(1, self._length):
+            operator = int(operators[position - 1])
+            operand = int(operands[position])
+            tokens[cursor] = self._operator_ids[operator]
+            tokens[cursor + 1] = self._residue_ids[operand]
+            cursor += 2
+            total = int(cells[(operator * self._alphabet + total) * self._alphabet + operand])
+
+        tokens[cursor] = self._equals[0]
+        cursor += 1
+        answer_start = cursor
+        tokens[cursor] = self._residue_ids[total]
+        tokens[cursor + 1] = self._eos[0]
+        # After the eos, so the answer's offset is unchanged and every scorer indexing `answer_start`
+        # keeps working. `PAD` rather than `EOS`: the document-boundary machinery counts eos occurrences
+        # to size its per-instance array, and padding that shares that id inflates the count.
+        if cursor + 2 < self._width:
+            tokens[cursor + 2 :] = self._pad_id
+        return TaskItem(tokens, answer_start, answer_start + 1, (f"<n{total}>",))
+
+    @property
+    def natural_width(self) -> int:
+        """Tokens an item needs before any instance-alignment padding."""
+        return self._natural_width
+
+    @property
+    def padding(self) -> int:
+        """Padding tokens per item, zero when unaligned or already aligned."""
+        return self._width - self._natural_width
+
+    def fingerprint(self) -> str:
+        digest = hashlib.sha256()
+        for field in (
+            "factcrowd.InContextManoTask.v1",
+            str(self._pad_to),
+            self._vocabulary.fingerprint(),
+            self._domain_token,
+            str(self._length),
+            str(self._alphabet),
+            str(self._seed),
+            self._split,
         ):
             raw = field.encode()
             digest.update(len(raw).to_bytes(8, "big"))

@@ -22,14 +22,14 @@ from factcrowd.corpus import vocab as Vo
 
 from olmo_core.exceptions import OLMoConfigurationError
 
-DOMAIN_TOKENS = ("<facts>", "<mano>", "<compare>")
+DOMAIN_TOKENS = ("<facts>", "<mano>", "<compare>", "<ctxmano>")
 SEED = 1234
 
 
 def assemble(n_entities: int = 3_000):
     """A vocabulary and table that the reasoning tasks can be built against."""
     literals = Rn.literal_words_of(Rn.BIOS_TEMPLATES)
-    task_words = T.all_required_words((T.ManoTask, T.CompareTask))
+    task_words = T.all_required_words((T.ManoTask, T.CompareTask, T.InContextManoTask))
     combined = tuple(literals) + tuple(task_words)
     schema = V.bios_schema(reserved=combined + Vo.SPECIALS + DOMAIN_TOKENS)
     vocabulary = Vo.Vocabulary.build(
@@ -292,6 +292,228 @@ def test_mano_and_compare_floors_are_the_best_of_both_policy_families():
         table, schema, vocabulary, domain_token="<compare>", probe_ids=table.probe_ids, seed=3
     )
     assert compare.degenerate_answer(2_000)[1] <= compare.degenerate_baseline(2_000)[1] + 1e-9
+
+
+def in_context(length: int = 10, alphabet: int = 10, split: str = "train", seed: int = 0):
+    """An in-context Mano task and the vocabulary it was built against."""
+    _, vocabulary, _ = assemble()
+    task = T.InContextManoTask(
+        vocabulary,
+        domain_token="<ctxmano>",
+        length=length,
+        alphabet=alphabet,
+        seed=seed,
+        split=split,
+    )
+    return task, vocabulary
+
+
+def replay_in_context(words, alphabet: int, length: int) -> str:
+    """
+    Re-derive the answer from the tables **as rendered**, independently of the generator.
+
+    The whole point of the in-context variant is that the answer is a function of the prompt, so the test
+    that matters is the one that reads the prompt back and composes it by hand. A generator comparing
+    against its own bookkeeping would pass even if it laid the table out in an order nothing could read.
+    """
+    symbol = {f"<n{value}>": value for value in range(alphabet)}
+    cursor, cells = 2, {}
+    for operator in range(2):
+        assert words[cursor] == ("<plus>", "<times>")[operator]
+        cursor += 1
+        for left in range(alphabet):
+            assert symbol[words[cursor]] == left, "each row must be labelled with its left operand"
+            assert words[cursor + 1] == "<equals>"
+            cursor += 2
+            for right in range(alphabet):
+                cells[(operator, left, right)] = symbol[words[cursor]]
+                cursor += 1
+    total = symbol[words[cursor]]
+    cursor += 1
+    for _ in range(length - 1):
+        operator = 0 if words[cursor] == "<plus>" else 1
+        total = cells[(operator, total, symbol[words[cursor + 1]])]
+        cursor += 2
+    assert words[cursor] == "<equals>"
+    return f"<n{total}>"
+
+
+@pytest.mark.parametrize("length", [2, 4, 10])
+def test_in_context_mano_answers_are_composed_from_the_prompts_own_table(length):
+    """The answer is a function of the tokens the model sees, which is the whole claim of this variant."""
+    task, vocabulary = in_context(length=length)
+    for index in range(120):
+        item = task.item(index)
+        words = vocabulary.decode(item.tokens)
+        assert replay_in_context(words, task.alphabet, length) == item.answer[0]
+        assert item.answer_end - item.answer_start == 1
+        assert len(item.tokens) == task.tokens_per_item
+
+
+def test_in_context_mano_draws_a_fresh_table_every_item():
+    """
+    Nothing about the mapping is memorisable, which is what removes the table-eviction confound.
+
+    :class:`ManoTask` needs its mod-23 tables in the weights, so a decline under fact load is equally
+    explained by the facts having evicted them -- knowledge versus knowledge, not reasoning. Here a model
+    that had stored every table it ever saw still could not answer.
+    """
+    task, vocabulary = in_context()
+    tables = {
+        tuple(vocabulary.decode(task.item(index).tokens)[2 : 2 + task.table_tokens])
+        for index in range(600)
+    }
+    assert len(tables) == 600
+
+
+def test_in_context_mano_splits_are_content_disjoint_without_rejection_sampling():
+    """
+    The fresh table buys disjointness that :class:`ManoTask` needs 64 redraws to approximate.
+
+    Two items sharing an expression do not share an answer unless they also share ``2 * k**2`` cells, so
+    there is nothing to reject.
+    """
+    train, vocabulary = in_context(split="train")
+    evaluation, _ = in_context(split="eval")
+    seen = {tuple(vocabulary.decode(train.item(index).tokens)[2:]) for index in range(3_000)}
+    other = {tuple(vocabulary.decode(evaluation.item(index).tokens)[2:]) for index in range(3_000)}
+    assert not seen & other
+
+
+@pytest.mark.parametrize("length", [2, 4, 10])
+def test_in_context_mano_answers_are_uniform_so_the_constant_floor_is_one_over_k(length):
+    """
+    Composition off a uniformly random table is uniform at every depth, so no constant beats ``1 / k``.
+
+    A row of a uniform table is k iid uniform values, and each operand is an independent uniform draw, so
+    ``total <- table[op][total][operand]`` is uniform whatever ``total`` was. This is what makes the floor
+    a property of the construction rather than a fact about one seed.
+    """
+    task, _ = in_context(length=length)
+    counts: dict = {}
+    for index in range(6_000):
+        answer = task.item(index).answer[0]
+        counts[answer] = counts.get(answer, 0) + 1
+    assert len(counts) == task.alphabet
+    share = [count / 6_000 for count in counts.values()]
+    assert max(share) - min(share) < 0.02, counts
+
+
+def test_in_context_mano_floor_exceeds_one_over_k_because_a_copy_can_land_on_the_answer_cell():
+    """
+    The measured floor is **10.45%** at k=10, not 10.0%, and an earlier docstring here claimed 10.0%.
+
+    A fixed-offset copy is right whenever the cell it reads equals the answer, and once in ``2 * k**2``
+    items that offset *is* the answer's own cell: ``1/(2k**2) + (1 - 1/(2k**2))/k``. Small, real, and the
+    reason the floor is measured rather than argued.
+    """
+    task, _ = in_context()
+    predicted = 1 / (2 * task.alphabet**2) + (1 - 1 / (2 * task.alphabet**2)) / task.alphabet
+    assert abs(predicted - 0.1045) < 1e-9
+    _, floor = task.degenerate_baseline(12_000)
+    # Three standard errors of the held-out half at this rate is about 0.8pp.
+    assert abs(floor - predicted) < 0.012, floor
+    assert (
+        floor < 0.115
+    ), "a floor drifting with the offsets searched is selection bias, not a floor"
+
+
+def test_in_context_mano_fits_the_instance_and_refuses_an_alphabet_that_does_not():
+    """
+    ``k`` is bounded by the prompt: the tables cost ``2 * k * (2 + k)`` tokens against 2 per unit of depth.
+
+    k=10 fits the whole calibration ladder at 266 tokens of 512; k=16 needs 602 and is refused rather than
+    silently truncated, which is what an instance-length overflow would otherwise become.
+    """
+    _, vocabulary, _ = assemble()
+    widths = {}
+    for alphabet in (8, 10, 12):
+        task = T.InContextManoTask(
+            vocabulary, domain_token="<ctxmano>", length=10, alphabet=alphabet
+        )
+        widths[alphabet] = task.tokens_per_item
+        assert task.tokens_per_item <= 512
+        assert task.table_tokens == 2 * (1 + alphabet * (2 + alphabet))
+    assert widths == {8: 186, 10: 266, 12: 362}
+
+    with pytest.raises(OLMoConfigurationError, match="over the 512-token instance"):
+        T.InContextManoTask(vocabulary, domain_token="<ctxmano>", length=10, alphabet=16)
+    with pytest.raises(OLMoConfigurationError, match="'alphabet' must be between 2 and 23"):
+        T.InContextManoTask(vocabulary, domain_token="<ctxmano>", length=4, alphabet=24)
+    with pytest.raises(OLMoConfigurationError, match="'length' must be at least 2"):
+        T.InContextManoTask(vocabulary, domain_token="<ctxmano>", length=1)
+
+
+def test_in_context_items_are_padded_to_tile_the_instance():
+    """
+    **Half the in-context items would be cut by an instance boundary without this**, and a cut item is
+    worse than a missing one: the instance opens mid-table or loses the answer.
+
+    The trainer concatenates a slice and chunks it into 512-token windows, so an item of width ``w`` is cut
+    unless ``w`` divides 512 -- 3.1% of 24-token ``<mano>`` items, the figure recorded on
+    ``TaskStream.num_tokens``, but 266/512 = **52%** of in-context ones. At k=10 the natural widths at
+    lengths 2 to 5 are 250, 252, 254 and 256, so padding to 256 aligns the whole ladder for at most 2.3% of
+    tokens.
+    """
+    _, vocabulary, _ = assemble()
+    pad_id = vocabulary.id_of(Vo.PAD)
+    for length, natural, padding in ((2, 250, 6), (3, 252, 4), (4, 254, 2), (5, 256, 0)):
+        task = T.InContextManoTask(
+            vocabulary, domain_token="<ctxmano>", length=length, alphabet=10, pad_to=256
+        )
+        assert (task.natural_width, task.padding) == (natural, padding)
+        assert task.tokens_per_item == 256
+        assert 512 % task.tokens_per_item == 0, "an unaligned width is the whole defect"
+        item = task.item(11)
+        # Padding sits after the eos, so the answer's offset is untouched and every scorer keeps working.
+        assert item.answer_start == natural - 2
+        assert replay_in_context(vocabulary.decode(item.tokens), 10, length) == item.answer[0]
+        if padding:
+            assert list(item.tokens[natural:]) == [pad_id] * padding
+            assert pad_id not in item.tokens[:natural]
+
+    # Padding must not move the floor: a pad token never equals a residue answer.
+    unpadded = T.InContextManoTask(vocabulary, domain_token="<ctxmano>", length=4, alphabet=10)
+    padded = T.InContextManoTask(
+        vocabulary, domain_token="<ctxmano>", length=4, alphabet=10, pad_to=256
+    )
+    assert (
+        abs(unpadded.degenerate_baseline(8_000)[1] - padded.degenerate_baseline(8_000)[1]) < 0.015
+    )
+
+    with pytest.raises(OLMoConfigurationError, match="already 254 tokens"):
+        T.InContextManoTask(vocabulary, domain_token="<ctxmano>", length=4, alphabet=10, pad_to=200)
+    with pytest.raises(OLMoConfigurationError, match="must divide the 512-token instance"):
+        T.InContextManoTask(vocabulary, domain_token="<ctxmano>", length=4, alphabet=10, pad_to=300)
+
+
+def test_in_context_mano_fingerprint_moves_with_alphabet_and_length_and_split():
+    """A digest that ignores the alphabet would call two different endpoints the same corpus."""
+    base, _ = in_context()
+    variants = [
+        in_context(length=4)[0],
+        in_context(alphabet=8)[0],
+        in_context(split="eval")[0],
+        in_context(seed=1)[0],
+        T.InContextManoTask(assemble()[1], domain_token="<ctxmano>", length=10, pad_to=512),
+    ]
+    digests = {base.fingerprint()} | {task.fingerprint() for task in variants}
+    assert len(digests) == 1 + len(variants)
+    # Structure excludes seed and split, so those two must collide there and the other two must not.
+    assert in_context(split="eval")[0].structure_fingerprint() == base.structure_fingerprint()
+    assert in_context(seed=1)[0].structure_fingerprint() == base.structure_fingerprint()
+    assert in_context(alphabet=8)[0].structure_fingerprint() != base.structure_fingerprint()
+
+
+def test_in_context_mano_keeps_manos_vocabulary_so_the_two_endpoints_are_comparable():
+    """
+    Same words, so same softmax width and same parameter count.
+
+    The plan runs in-context as the confirmatory endpoint and memorised Mano as a secondary. If the two
+    needed different vocabularies they would be different architectures, and the comparison between them
+    would carry a width confound rather than the reading it is there to provide.
+    """
+    assert T.InContextManoTask.required_words() == T.ManoTask.required_words() == T.mano_words()
 
 
 def test_compare_refuses_a_schema_without_an_ordinal_field():

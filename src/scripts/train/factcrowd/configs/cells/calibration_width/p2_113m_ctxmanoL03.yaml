@@ -1,0 +1,24 @@
+bits_per_attribute: 0
+cell_id: 113m_ctxmanoL03
+ctxmano_alphabet: 10
+ctxmano_length: 3
+ctxmano_pad_to: 256
+decay_fraction: 0.1
+exposures: 200
+global_batch_size: 262144
+learning_rate: 0.003
+mano_length: 10
+mano_variant: in_context
+n_entities: 1
+notes: 'in-context mano calibration in the entropy architecture: reasoning only, expression
+  length 3'
+phase: p2
+reasoning_tokens: 1000000000
+related_reasoning_tokens: 0
+replicate: 0
+row: 113M
+seed: 1234
+sequence_length: 512
+sweep: entropy
+warmup_fraction: 0.02
+weight_decay: 0.1

@@ -35,6 +35,24 @@ tensors, numpy arrays, or a stub -- which is what keeps the scoring logic free o
 """
 
 
+FLOOR_SAMPLE = 60_000
+"""
+Items drawn to measure an endpoint's degenerate baseline.
+
+Sixty thousand rather than twenty, because
+:meth:`~factcrowd.corpus.tasks.ReasoningTask.degenerate_baseline` now selects the winning policy on one
+half of the sample and scores it on the other. That removed a selection bias which grew with the task's
+width -- ``InContextManoTask`` searches ~240 copy offsets and inflated its own floor by 0.6pp -- at the
+cost of halving the effective sample, and a floor is a gate input rather than a diagnostic.
+
+The two endpoints have analytic floors to check against, which is how the sample size was chosen:
+``ManoTask`` answers are uniform over 23 residues, so ``1/23 = 4.348%``, and ``InContextManoTask``'s best
+copy policy is ``1/(2k**2) + (1 - 1/(2k**2))/k = 10.450%`` at k=10. At 20,000 the estimates came back
+3.890% and 10.260%; at 60,000, 4.277% and 10.593%. Costs 15s for the in-context endpoint and 44s for the
+memorised one -- paid once per run rather than per checkpoint, since `floor` is passed forward.
+"""
+
+
 def table_probe_task(corpus: Any) -> Any:
     """
     A length-2 ``<mano>`` task on the **training** split, for measuring operator-table retention.
@@ -85,6 +103,7 @@ def score_table_probe(
     *,
     n_items: int = 4_000,
     batch_size: int = 32,
+    floor_sample: int = FLOOR_SAMPLE,
 ) -> EndpointResult:
     """
     Score the operator-table probe, named ``mano_table``.
@@ -94,11 +113,14 @@ def score_table_probe(
     :param n_items: Items to score. Fewer than the endpoint needs: the probe is a coarse
         survived/did-not question, and its own floor is the same measured constant policy.
     :param batch_size: Sequences per forward pass.
+    :param floor_sample: See :data:`FLOOR_SAMPLE`. Explicit rather than left at the task's own default,
+        which is smaller: the probe's floor is compared against the endpoint's, so the two have to be
+        estimated at the same precision or the comparison inherits the difference.
 
     :returns: The result, with ``name="mano_table"`` so it cannot be mistaken for the endpoint.
     """
     task = table_probe_task(corpus)
-    label, floor = task.degenerate_baseline()
+    label, floor = task.degenerate_baseline(floor_sample)
     return _score(
         task,
         forward,
@@ -116,7 +138,7 @@ def score_reasoning(
     *,
     n_items: int,
     batch_size: int = 64,
-    floor_sample: int = 20_000,
+    floor_sample: int = FLOOR_SAMPLE,
     floor: Optional[float] = None,
     degenerate_answer: Optional[Tuple[str, ...]] = None,
 ) -> EndpointResult:
@@ -129,7 +151,7 @@ def score_reasoning(
     :param n_items: How many items to score. The frozen evaluation set is the first ``n_items`` of the
         eval split, so the same items are scored at every checkpoint and every cell.
     :param batch_size: Items per forward pass.
-    :param floor_sample: Items to draw when measuring the degenerate baseline.
+    :param floor_sample: Items to draw when measuring the degenerate baseline. See :data:`FLOOR_SAMPLE`.
     :param floor: Pre-measured floor, to avoid re-measuring it per checkpoint. Measured here if omitted.
     :param degenerate_answer: Pre-measured best fact-free answer, paired with ``floor``.
 
