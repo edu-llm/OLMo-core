@@ -763,8 +763,20 @@ def entropy_sweep_cells(row: str = "28M", **overrides: Any) -> Tuple[CellSpec, .
     )
 
 
+#: Tokens one zero-bit biography costs, from the entropy renderer's measured mean at 200 exposures.
+#:
+#: Used to size the filler that keeps the dilution ladder iso-token. Read off the built renderer rather
+#: than assumed anywhere it matters; this constant only sizes the config, and the resolved cell reports
+#: the true figure.
+ZERO_BIT_TOKENS_PER_ENTITY: float = 42.0 * 200
+
+
 def dilution_ladder_cells(
-    row: str = "13M", *, demand_bits_per_param: float = 0.0, **overrides: Any
+    row: str = "13M",
+    *,
+    demand_bits_per_param: float = 0.0,
+    iso_token: bool = True,
+    **overrides: Any,
 ) -> Tuple[CellSpec, ...]:
     """
     G8's calibration ladder: one cell trained on a decreasing share of its reasoning tokens.
@@ -784,6 +796,19 @@ def dilution_ladder_cells(
 
     :param row: Which ladder row. Use the row whose slope the ladder is calibrating.
     :param demand_bits_per_param: Facts to carry. ``0.0``, the default, is the reasoning-only control.
+    :param iso_token: Backfill the removed reasoning tokens with **zero-bit biographies**, so total tokens
+        and optimiser steps are the same in every arm.
+
+        **Without this the ladder manipulates something the treatment holds constant, in the opposite
+        direction.** The arms cut reasoning 1.0B -> 0.6B at demand 0, so total tokens and steps fall 40%.
+        The treatment does the reverse: reasoning is pinned at 1.0B in every cell and facts are *added*, so
+        total tokens rise. As a bare "can the instrument see 2pp" check that is tolerable; as the
+        calibration the docstring claims -- converting "reasoning fell 2pp" into "worth about this much
+        reasoning exposure" -- it is not, because the dose axis is not only reasoning exposure.
+
+        Zero-bit filler makes the dose purely reasoning *share*, which is what the treatment changes.
+        ``bits_per_attribute=0`` gives biographies whose attribute values carry no information at all, so
+        the arm gains tokens and steps without gaining anything to store.
     :param overrides: Applied to every arm, e.g. ``seed``.
 
     :returns: One cell per dose in :data:`factcrowd.measure.gates.DILUTION_DOSES_PCT`, strongest dose
@@ -794,6 +819,16 @@ def dilution_ladder_cells(
     from .measure.gates import (
         DILUTION_DOSES_PCT,  # single source of truth for the doses
     )
+
+    if iso_token and demand_bits_per_param:
+        # Refused rather than overridden. Under `iso_token` the zero-bit filler *is* the fact content, so
+        # a requested demand has nowhere to go -- an earlier draft silently replaced it, which produced a
+        # "mixture-matched" ladder carrying no mixture.
+        raise OLMoConfigurationError(
+            f"iso_token=True backfills with zero-bit biographies, so it cannot also carry "
+            f"demand_bits_per_param={demand_bits_per_param}. Pass iso_token=False for a mixture-matched "
+            f"ladder, and read its dose as reasoning share *and* training length rather than share alone."
+        )
 
     is_control = demand_bits_per_param == 0.0
     settings: Dict[str, Any] = {
@@ -815,6 +850,13 @@ def dilution_ladder_cells(
             )
         arm = dict(settings)
         arm["reasoning_tokens"] = scaled
+        if iso_token and dose < 100:
+            # Filler sized to replace exactly what the dose removed.
+            removed = reference - scaled
+            arm["sweep"] = "entropy"
+            arm["bits_per_attribute"] = 0
+            arm["n_entities"] = max(1, int(round(removed / ZERO_BIT_TOKENS_PER_ENTITY)))
+            arm["demand_bits_per_param"] = None
         # The related slice takes the same dose. Holding it fixed would make the ladder a ratio sweep
         # between the two reasoning slices, and G8 reads it as one reasoning-exposure dose.
         arm["related_reasoning_tokens"] = (related * dose) // 100
@@ -823,15 +865,21 @@ def dilution_ladder_cells(
             f"{', no facts' if is_control else f', demand {demand_bits_per_param}'}. "
             f"Reference arm is the 100% cell."
         )
-        cells.append(
-            CellSpec(
-                cell_id=f"{row.lower()}_dil{dose}",
-                row=row,
-                sweep="count",
-                demand_bits_per_param=demand_bits_per_param,
-                **arm,
-            )
-        )
+        if iso_token and dose == 100:
+            # The reference arm carries no filler but must sit on the same axis as the others, or the
+            # ladder compares an entropy cell against a count cell and the schema differs.
+            arm["sweep"] = "entropy"
+            arm["bits_per_attribute"] = 0
+            arm["n_entities"] = 1
+            arm["demand_bits_per_param"] = None
+        if not iso_token:
+            arm["sweep"] = "count"
+            arm["demand_bits_per_param"] = demand_bits_per_param
+        arm["cell_id"] = f"{row.lower()}_dil{dose}"
+        arm["row"] = row
+        # One dict, one unpack: two conditional unpacks of `Dict[str, object]` gave mypy no way to match
+        # a keyword to its declared type and produced five arg-type errors for correct code.
+        cells.append(CellSpec(**arm))  # type: ignore[arg-type]
     return tuple(cells)
 
 

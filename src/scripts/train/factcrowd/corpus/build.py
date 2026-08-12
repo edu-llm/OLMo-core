@@ -115,6 +115,12 @@ class BuiltCorpus:
         self.stream: Optional[Any] = None
         self.spec_cell_id = spec.cell_id
         self.split = split
+        # Kept so a diagnostic can rebuild a task from the same stream this corpus used.
+        # `measure.reasoning.table_probe_task` needs it: the operator-table probe is a length-2 task on
+        # the *training* split, and it has to draw from the stream the cell actually trained on or it is
+        # measuring a different corpus.
+        self.spec_seed = spec.seed
+        self.mano_seed_offset = 4
         if not spec.is_control:
             table_entities = spec.table_entities or resolved.n_entities
             self.table = entities_module.EntityTable.build(
@@ -156,7 +162,7 @@ class BuiltCorpus:
                     self.vocabulary,
                     domain_token="<mano>",
                     length=resolved.spec.mano_length,
-                    seed=spec.seed + 4,
+                    seed=spec.seed + self.mano_seed_offset,
                     split=split,
                 )
             ]

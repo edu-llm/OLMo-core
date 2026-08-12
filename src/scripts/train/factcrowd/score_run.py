@@ -168,6 +168,18 @@ def score_checkpoint(
         reasoning_module.score_reasoning(task, forward, n_items=eval_items, batch_size=batch_size)
         for task in loaded.corpus.tasks
     ]
+    # THE OPERATOR-TABLE PROBE, BESIDE THE ENDPOINT AND AT THE SAME CHECKPOINT. `<mano>` needs the mod-23
+    # tables in its weights, so a decline under fact load has two explanations and this separates them:
+    # length 2 is one operation, so if it holds while the full length falls the tables survived and
+    # composition broke, and if both fall the tables went -- which is knowledge-versus-knowledge, not
+    # crowding. The tables are 4.8 kbit against 114.3 Mbit of fact demand, and the design runs 4x
+    # oversubscribed, so eviction is a live possibility rather than a quibble.
+    if any(task.name == "mano" for task in loaded.corpus.tasks):
+        endpoints.append(
+            reasoning_module.score_table_probe(
+                loaded.corpus, forward, n_items=min(4_000, eval_items), batch_size=batch_size
+            )
+        )
     achieved = bits_module.score_checkpoint(
         loaded,
         forward,

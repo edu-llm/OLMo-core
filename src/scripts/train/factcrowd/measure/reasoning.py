@@ -15,7 +15,7 @@ The scorer takes a ``forward`` callable rather than a model, so every line below
 that returns chosen logits -- including the cases a real model would almost never produce.
 """
 
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -33,6 +33,81 @@ Takes token ids of shape ``(batch, sequence)`` and returns ``(ce_loss, logits)``
 ``(batch, sequence)`` and ``(batch, sequence, vocab)``. Whatever indexes like that will do -- torch
 tensors, numpy arrays, or a stub -- which is what keeps the scoring logic free of the GPU stack.
 """
+
+
+def table_probe_task(corpus: Any) -> Any:
+    """
+    A length-2 ``<mano>`` task on the **training** split, for measuring operator-table retention.
+
+    THIS IS THE DIAGNOSTIC THAT SEPARATES TWO EXPLANATIONS OF A DECLINE, AND IT IS ALMOST FREE.
+    ``<mano>`` is not purely a reasoning task: answering ``7 x 15`` mod 23 requires the multiplication
+    table to be *in the weights*, because nothing in the prompt says what it is. So if accuracy falls under
+    fact load, "facts evicted the arithmetic tables" explains it exactly as well as "facts crowded out
+    reasoning" -- and the first is knowledge-versus-knowledge, which Physics 3.3 already established.
+
+    It is a live worry rather than a theoretical one. The two tables are 1,058 entries at log2(23) bits,
+    about **4.8 kbit**, against **114.3 Mbit** of fact demand at b=32 -- 0.0042% of it. Ordinarily one
+    would shrug at something that small; this design deliberately runs 4x oversubscribed, which is exactly
+    where small marginal things get evicted.
+
+    Length 2 is one operation, so it is a table lookup and nothing else. Read beside the full-length
+    endpoint at the same checkpoint:
+
+    - **length 2 holds while length 10 falls** -> the tables survived and composition broke. That is
+      reasoning, and it is the result the project wants.
+    - **both fall together** -> the tables went. That is knowledge-versus-knowledge, and the crowding
+      claim does not follow.
+
+    **The training split is correct here and is not a leak.** Retention is a question about material the
+    model was taught; asking it on held-out expressions would confound retention with generalisation,
+    which is the other thing being measured. :func:`score_reasoning` refuses a training-split task on
+    purpose, so this returns the task and the caller scores it through :func:`score_table_probe`, where the
+    exception is named rather than smuggled.
+
+    :param corpus: A built corpus, for its vocabulary and the seed it drew ``<mano>`` from.
+
+    :returns: The probe task.
+    """
+    from ..corpus import tasks as tasks_module
+
+    return tasks_module.ManoTask(
+        corpus.vocabulary,
+        domain_token="<mano>",
+        length=2,
+        seed=corpus.spec_seed + corpus.mano_seed_offset,
+        split="train",
+    )
+
+
+def score_table_probe(
+    corpus: Any,
+    forward: Any,
+    *,
+    n_items: int = 4_000,
+    batch_size: int = 32,
+) -> EndpointResult:
+    """
+    Score the operator-table probe, named ``mano_table``.
+
+    :param corpus: A built corpus.
+    :param forward: The forward callable.
+    :param n_items: Items to score. Fewer than the endpoint needs: the probe is a coarse
+        survived/did-not question, and its own floor is the same measured constant policy.
+    :param batch_size: Sequences per forward pass.
+
+    :returns: The result, with ``name="mano_table"`` so it cannot be mistaken for the endpoint.
+    """
+    task = table_probe_task(corpus)
+    label, floor = task.degenerate_baseline()
+    return _score(
+        task,
+        forward,
+        n_items=n_items,
+        batch_size=batch_size,
+        floor=floor,
+        degenerate_answer=_answer_of(task, label),
+        name="mano_table",
+    )
 
 
 def score_reasoning(
@@ -80,7 +155,45 @@ def score_reasoning(
         if degenerate_answer is None:
             degenerate_answer = _answer_of(task, label)
 
-    accumulator = EndpointAccumulator(task.name, floor=floor, degenerate_answer=degenerate_answer)
+    return _score(
+        task,
+        forward,
+        n_items=n_items,
+        batch_size=batch_size,
+        floor=floor,
+        degenerate_answer=degenerate_answer,
+        name=task.name,
+    )
+
+
+def _score(
+    task: ReasoningTask,
+    forward: Forward,
+    *,
+    n_items: int,
+    batch_size: int,
+    floor: float,
+    degenerate_answer: Optional[Tuple[str, ...]],
+    name: str,
+) -> EndpointResult:
+    """
+    The scoring loop, shared by the endpoint and the table probe.
+
+    Split out so :func:`score_table_probe` can reuse it without going through
+    :func:`score_reasoning`'s eval-split guard -- which stays exactly as strict as it was, because the one
+    caller allowed to score training items is a named function whose docstring says why.
+
+    :param task: The task.
+    :param forward: See :data:`Forward`.
+    :param n_items: Items to score.
+    :param batch_size: Items per forward pass.
+    :param floor: The measured degenerate baseline.
+    :param degenerate_answer: Its winning answer.
+    :param name: The name the result carries, which need not be the task's.
+
+    :returns: The score.
+    """
+    accumulator = EndpointAccumulator(name, floor=floor, degenerate_answer=degenerate_answer)
     for start in range(0, n_items, batch_size):
         stop = min(start + batch_size, n_items)
         items = [task.item(index) for index in range(start, stop)]

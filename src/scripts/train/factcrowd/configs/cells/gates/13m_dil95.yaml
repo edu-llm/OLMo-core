@@ -1,17 +1,20 @@
+bits_per_attribute: 0
 cell_id: 13m_dil95
 decay_fraction: 0.1
-demand_bits_per_param: 0.0
 exposures: 200
 global_batch_size: 262144
 learning_rate: 0.003
+mano_length: 10
+n_entities: 5952
 notes: 'G8 dilution ladder: 95% of the reasoning tokens, no facts. Reference arm is
   the 100% cell.'
+phase: p1
 reasoning_tokens: 950000000
 related_reasoning_tokens: 0
 replicate: 0
 row: 13M
 seed: 1234
 sequence_length: 512
-sweep: count
+sweep: entropy
 warmup_fraction: 0.02
 weight_decay: 0.1

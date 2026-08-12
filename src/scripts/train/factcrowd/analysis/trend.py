@@ -68,6 +68,7 @@ __all__ = [
     "tost",
     "non_inferiority",
     "minimum_detectable_effect",
+    "achievable_margin",
 ]
 
 
@@ -928,6 +929,30 @@ def non_inferiority(
         lower_bound=effect - _t_quantile(1.0 - alpha, trend.df) * standard_error,
         non_inferior=bool((p_value < alpha) and standard_error > _DEGENERATE_SE_PP),
     )
+
+
+def achievable_margin(slope_sd: float, n_blocks: int, span: float = 1.0) -> float:
+    """
+    The smallest equivalence margin this design can actually support, from the sigma it measured.
+
+    **The margin should be computed from sigma, not chosen and then hoped for.** PRD 8.5's 2pp is a
+    *comparator* -- the size of the one published effect, 2.09pp at Pythia-410M -- and not a negligibility
+    threshold; nobody has one of those for this question, and asserting one would be inventing it. So the
+    honest sequence is: measure sigma on the replicate block, compute what margin that sigma can resolve,
+    and state *that*. If sigma comes back at 1.5pp the smallest supportable margin is about 3pp, and
+    "declines larger than 3pp are excluded" is a weaker claim that is true. Claiming 2pp anyway would not
+    be.
+
+    This is :func:`minimum_detectable_effect` under the name that says what it is for, scaled to the
+    end-to-end effect when a span is given.
+
+    :param slope_sd: Between-replicate SD of the per-seed slope.
+    :param n_blocks: Replicates.
+    :param span: Multiply by the sweep's width to get an end-to-end margin rather than a per-bit one.
+
+    :returns: The margin, in the units of ``slope_sd`` times ``span``.
+    """
+    return minimum_detectable_effect(slope_sd, n_blocks) * span
 
 
 def _one_sample_t_power(effect_over_sd: float, n: int, critical: float) -> float:

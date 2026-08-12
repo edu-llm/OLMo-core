@@ -380,13 +380,20 @@ def test_every_committed_config_loads_and_resolves():
     # The gate directories are not axes -- their `sweep` is "count" and they carry no demand -- but a
     # hand edit in them would ship a cell that does not add up just as easily. Two directories were
     # added after this test and escaped it, which is exactly how a config tree drifts.
-    for extra in ("gates", "sigma", "round2"):
+    for extra in ("sigma", "round2"):
         cells = C.load_cells(CONFIG_ROOT / extra)
         assert cells, extra
         for cell in cells:
             resolved = cell.resolve()
             assert cell.is_control and resolved.n_entities == 0
             assert cell.reasoning_tokens > 0
+    # The gate ladder is no longer a control: its arms carry zero-bit biographies as iso-token filler, so
+    # they have entities and no attribute information at all.
+    for cell in C.load_cells(CONFIG_ROOT / "gates"):
+        resolved = cell.resolve()
+        assert cell.reasoning_tokens > 0
+        assert cell.bits_per_attribute == 0
+        assert resolved.attribute_bits == 0
 
 
 def test_the_committed_grid_matches_the_generator():
@@ -813,25 +820,35 @@ def test_the_dilution_ladder_varies_reasoning_exposure_and_nothing_else():
     assert volumes == sorted(volumes, reverse=True) and len(set(volumes)) == len(volumes)
 
 
-def test_the_ladder_defaults_to_the_control_so_the_dose_is_the_only_cause():
+def test_the_ladder_dose_is_reasoning_share_and_nothing_else():
     """
-    Diluting reasoning inside a mixture moves the ratio and the token budget too.
+    A dose that also moves training length is not a calibration, and the reasoning-only ladder did.
 
-    Three candidate causes for one drop is not a calibration. With no facts the dose stands alone -- and
-    the control carries no `<compare>` slice, so the arm states zero rather than carrying a number that
-    `reasoning_slice_names` silently drops.
+    Its earlier form carried no facts, so cutting reasoning cut *total* tokens with it and the arms
+    differed in two things at once -- in the opposite direction from the treatment, which pins reasoning
+    and adds facts. Zero-bit biographies now backfill what the dose removes, so every arm trains for the
+    same number of steps on the same number of tokens and only the reasoning *share* moves.
+
+    The filler still carries no `<compare>` slice and nothing to store: `bits_per_attribute=0` means its
+    attribute values are constant, so it contributes tokens and gradients and zero attribute bits.
     """
-    control = C.dilution_ladder_cells("13M")
-    assert all(c.is_control and c.demand_bits_per_param == 0.0 for c in control)
-    assert all(c.related_reasoning_tokens == 0 for c in control)
-    assert all(c.reasoning_slice_names == ("mano",) for c in control)
-    # Total tokens fall with the dose, because reasoning is all there is.
-    totals = [c.resolve().total_tokens(69.2) for c in control]
-    assert totals == sorted(totals, reverse=True)
+    ladder = C.dilution_ladder_cells("13M")
+    assert all(c.related_reasoning_tokens == 0 for c in ladder)
+    assert all(c.reasoning_slice_names == ("mano",) for c in ladder)
+    assert all(c.bits_per_attribute == 0 for c in ladder)
+    assert all(c.resolve().attribute_bits == 0 for c in ladder)
+    # One token budget and one step count across the whole ladder.
+    assert len({c.resolve().steps(42.0) for c in ladder}) == 1
+    totals = [c.resolve().total_tokens(42.0) for c in ladder]
+    assert max(totals) - min(totals) < 20_000  # filler is sized in whole entities, hence not exact
 
     # The mixture-matched variant is available and does carry both slices; its fact volume is untouched
     # by the dose, which is exactly the confound the default avoids.
-    matched = C.dilution_ladder_cells("13M", demand_bits_per_param=1.2)
+    # A mixture-matched ladder is still available, and must say so: under iso_token the zero-bit filler
+    # *is* the fact content, so carrying a demand as well is refused rather than silently overridden.
+    with pytest.raises(OLMoConfigurationError, match="cannot also carry"):
+        C.dilution_ladder_cells("13M", demand_bits_per_param=1.2)
+    matched = C.dilution_ladder_cells("13M", demand_bits_per_param=1.2, iso_token=False)
     assert all(c.reasoning_slice_names == ("mano", "compare") for c in matched)
     assert len({c.resolve().n_entities for c in matched}) == 1
     assert [c.related_reasoning_tokens for c in matched] == [
@@ -1011,3 +1028,41 @@ def test_a_phase_tag_keeps_a_reused_cell_id_from_conflating_two_campaigns():
     assert phase2.qualified_id == "p2_28m_b8"
     assert replace(phase2, replicate=1).qualified_id == "p2_28m_b8_r1"
     assert phase1.qualified_id != phase2.qualified_id
+
+
+def test_the_dilution_ladder_holds_total_tokens_fixed():
+    """
+    The ladder was manipulating something the treatment holds constant, in the opposite direction.
+
+    Its arms cut reasoning 1.0B -> 0.6B at demand 0, so total tokens and optimiser steps fell 40% with the
+    dose. The treatment does the reverse: reasoning is pinned at 1.0B in every cell and facts are *added*,
+    so total tokens rise. As a bare "can the instrument see 2pp" check that is tolerable; as the
+    calibration its docstring claims -- turning "reasoning fell 2pp" into "worth about this much reasoning
+    exposure" -- it is not, because the dose axis was not only reasoning exposure.
+
+    Zero-bit biographies backfill exactly what the dose removed, so the dose becomes reasoning *share*.
+    """
+    iso = C.dilution_ladder_cells("13M")
+    steps = {c.resolve().steps(42.0) for c in iso}
+    assert len(steps) == 1, f"iso-token arms must share a step count, got {sorted(steps)}"
+    reasoning = sorted(c.reasoning_tokens for c in iso)
+    assert reasoning == [600_000_000, 800_000_000, 900_000_000, 950_000_000, 1_000_000_000]
+    # Filler grows as the dose falls, and carries no information to store.
+    by_dose = {c.cell_id: c for c in iso}
+    assert by_dose["13m_dil60"].bits_per_attribute == 0
+    assert by_dose["13m_dil60"].resolve().n_entities > by_dose["13m_dil90"].resolve().n_entities
+    assert by_dose["13m_dil60"].resolve().attribute_bits == 0
+
+    # The old behaviour is still reachable, and still shows the confound it had.
+    legacy = C.dilution_ladder_cells("13M", iso_token=False)
+    assert len({c.resolve().steps(69.21875) for c in legacy}) == 5
+
+
+def test_the_committed_ladder_is_the_iso_token_one():
+    """Regenerating is a command, so the configs cannot drift from the generator that documents them."""
+    on_disk = {c.cell_id: c for c in C.load_cells(CONFIG_ROOT / "gates")}
+    generated = {c.cell_id: c for c in C.dilution_ladder_cells("13M")}
+    assert set(on_disk) == set(generated)
+    for cell_id, cell in on_disk.items():
+        assert cell.to_dict() == generated[cell_id].to_dict()
+        assert cell.bits_per_attribute == 0  # zero-bit filler, not a count cell
