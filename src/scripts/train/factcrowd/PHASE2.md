@@ -176,6 +176,37 @@ the rule.
 
 If nothing clears 23.8%, §6 applies instead of §4.B.
 
+#### `<mano>` is partly a memory task, and the probe says how much
+
+The operator tables have to live in the weights. Two tables of 23x23 entries plus a 23-entry unary map is
+1,058 values at log2(23) bits: **4,786 bits, or 4.8 kbit**, against 114.3 Mbit of demanded fact content at
+b=32 -- **0.0042%** of it. Ordinarily that is too small to argue about. But the design deliberately runs the
+model about 4x oversubscribed, and the marginal thing is exactly what gets evicted there. So if `<mano>`
+falls under fact load, "facts crowded out the arithmetic tables" fits as well as "facts crowded out
+reasoning" -- and the first is knowledge-versus-knowledge, which Physics 3.3 established years ago.
+
+`measure/reasoning.score_table_probe` scores a **length-2 task on the train split** beside the endpoint at
+every checkpoint, reported as `mano_table`. One operation with a memorised expression is a table lookup and
+nothing else, so:
+
+| `mano_table` (L2, train) | `mano` (L10, eval) | reading |
+|---|---|---|
+| flat | falls | composition broke while lookup survived -- **reasoning** |
+| falls | falls | the tables were evicted -- **knowledge vs knowledge**, not this paper's claim |
+| flat | flat | no effect to explain (P3) |
+| falls | flat | incoherent; suspect the harness |
+
+It is a diagnostic, not a gate: no gate consumes it, and adding an unregistered threshold would be
+inventing one. It costs one extra 4,000-item eval pass per checkpoint and it converts the confound into a
+row of the results table. **The train split and length 2 are both deliberate** -- this probe wants the
+memorised case, which is why it does not go through the eval-split guard the endpoint does.
+
+**What the probe cannot do is make `<mano>` the published task.** It is not the task from the phi-3
+claim, it did not work in phase 1, and calibration (§4.A) is what decides whether it works at all. If a
+length clears 23.8% and the probe then shows both curves falling together, the honest write-up says
+knowledge-versus-knowledge and the reasoning claim stays unmade. See §9 for the redesign that removes the
+confound rather than measuring it.
+
 Submit with `--config-dir …/configs/cells/calibration` and `fanout_size: 14`. The index maps by *filename*,
 and `113m` sorts before `13m` because `"113" < "13"` as strings — so **0–6 are the 113M cells and 7–13 are
 the 13M ones**, lengths ascending within each. Verified against the CLI; index 14 is refused.
@@ -212,7 +243,20 @@ B and C show an effect to scale. The 113M rung is defined in `ladder/sizes.py` a
 - **G2** — an untrained checkpoint. `CheckpointerCallback.pre_train_checkpoint` writes step 0; score it.
   Nearly free, and it closes a gate that has been open throughout.
 - **G3** — the premise-ablated probe, which needs a corpus variant.
-- **G8** — the dilution ladder re-run at the calibrated length. 5 cells, 4.25B tokens.
+- **G8** — the dilution ladder re-run at the calibrated length, now **iso-token**. 5 cells, 5.0B tokens.
+
+  The phase-1 ladder was not comparable across its own arms. Cutting reasoning from 1.0B to 0.6B tokens at
+  demand 0 cut total tokens and steps by the same 40% — 2,288 steps at the 60% dose against 3,814 at the
+  0% one — so the dose moved training length in the *opposite* direction to the thing the gate holds
+  constant, and a decline could be read either way. `dilution_ladder_cells(..., iso_token=True)` backfills
+  exactly what the dose removes with **zero-bit biographies** (`b=0`, so schema-shaped tokens carrying no
+  identifying content: 47,619 filler entities at the 60% dose, 11,905 at 90%). Every arm now trains 3,814
+  steps on ~1.000B tokens and only reasoning share moves. `configs/cells/gates/` is regenerated.
+
+  `iso_token=True` with a nonzero `demand_bits_per_param` is **refused**, not silently reconciled: the
+  filler *is* the fact content under iso-token, so a requested demand has nowhere to go. Pass
+  `iso_token=False` for a mixture-matched ladder and read its dose as share *and* length, which is the
+  honest reading of the phase-1 arms.
 
 ---
 
@@ -303,3 +347,87 @@ A crowding result needs, and phase 1 had none of:
 3. the **storage measure named for what it computes** — teacher-forced attribute-value CE reduction on a
    fixed cohort, not Allen-Zhu R(F), which would need the name term and an untaught prefix;
 4. **G1–G3 closed**, which §4.E finishes.
+
+## 9. Two decisions that should be made before §4.B runs
+
+Neither is a defect. Both are choices where the wrong default quietly weakens the result, and both are
+cheaper to settle now than after 108B tokens of treatment.
+
+### 9.1 Whether `<mano>` keeps its tables in the weights
+
+§4.A's probe *measures* the table confound. It does not remove it. The removal is a modest change to
+`ManoTask`: **put the operator table in the prompt**, freshly randomised per example. Nothing about the
+mapping is then memorisable — a model that has stored every table it ever saw still cannot answer, because
+this example's table is new — so a decline under fact load cannot be table eviction. It is the difference
+between reporting a diagnostic and not needing one.
+
+The honest caveat is that the task changes character: it becomes **read-then-compute** rather than
+compute-from-memory. That is a real narrowing (it no longer speaks to stored procedural knowledge at all)
+and it is also much closer to what the phi-3 claim is about, which is chained inference over material in
+context.
+
+The cost is sequence length, because the table has to fit in the prompt. With alphabet `k` the floor is
+about `1/k` and each binary operator costs `k**2` tokens to state:
+
+| `k` | floor | table tokens | item at L=4 | fits `seq_len` 512? |
+|---|---|---|---|---|
+| 8 | 12.5% | 128 | ~150 | yes, comfortably |
+| 10 | 10.0% | 200 | ~214 | yes |
+| 16 | 6.25% | 512 | ~540 | **no** |
+
+`k=23` as it stands is 1,058 table tokens and cannot be done in-context at any useful depth. So the
+in-context version means a smaller alphabet, a **higher floor**, and therefore a smaller floor-to-ceiling
+range for G4 to work in — 87.5 pp at `k=8` against the current 95.3 pp, which is not the binding
+constraint, so this is affordable. Depth is bounded by what is left of the context after the table.
+
+Three ways to go, and this is a judgement call rather than a fact:
+
+- **A — keep memorised `<mano>`, report the probe.** Zero new code. The confound becomes a measured row
+  instead of an objection. If both curves fall together the reasoning claim is not made.
+- **B — switch to in-context tables at `k=10`, calibrate that.** Removes the confound at source. Costs a
+  re-calibration (§4.A pricing, unchanged in shape) and narrows the claim to read-then-compute.
+- **C — run both.** In-context as the confirmatory endpoint, memorised as a secondary. Two calibration
+  sweeps; the reasoning-only cells are the cheap ones, so the delta is calibration, not treatment.
+
+C is the strongest and B is the efficient one. **A is what the committed code does today**, and it is not
+wrong — it is just weaker than the alternatives by exactly the amount the probe has to explain.
+
+### 9.2 Three seeds, or five
+
+The margin should be **computed from the sigma the block measures**, not chosen in advance. `2pp` is a
+comparator — the size of the one published effect, 2.09 pp at Pythia-410M — and not a negligibility
+threshold. Nobody has one of those for this question, and asserting one would be inventing it.
+`analysis/trend.achievable_margin(slope_sd, n_blocks)` answers it directly, and the answer at three seeds
+is unforgiving:
+
+| between-seed slope SD | smallest margin supportable at **3 seeds** | at **5 seeds** |
+|---|---|---|
+| 0.3 pp | 0.98 pp | 0.50 pp |
+| 0.6 pp | 1.96 pp | 1.01 pp |
+| 1.0 pp | 3.26 pp | 1.68 pp |
+| 1.5 pp | 4.90 pp | 2.52 pp |
+| 2.0 pp | 6.53 pp | 3.36 pp |
+
+**Three seeds is df=2, and df=2 is expensive.** One-sided `t(0.95, 2) = 2.920` against `1.796` at `df=11` —
+a **63% penalty** on every interval — and the exact-power MDE multiplier is `3.264*sd` at n=3 against
+`1.682*sd` at n=5. So 67% more compute buys a **1.94x** tighter resolvable margin. That is close to the
+best marginal return anywhere in this plan, and it is better spent here than on §4.D's scale rungs.
+
+Read the trade in the other direction to see the risk: a 2pp claim at three seeds *requires* the per-seed
+slope SD to come in at **≤ 0.613 pp**. Phase 1 never measured that quantity on a treatment — the sigma
+cells sit at demand 0 — so it is currently a hope, and if sigma comes back at 1.5 pp the design supports
+"declines larger than 4.9 pp are excluded", which is nearly vacuous.
+
+Whichever is chosen: **lead with the interval, not the verdict.** `[-1.2, +0.4]pp` is informative at any
+sigma; "equivalent at 2pp" is a claim whose content depends entirely on a sigma the reader cannot see.
+
+### 9.3 A related limit worth stating rather than fixing
+
+**The sigma measured on the sigma cells does not transfer to the count axis.** All nine sit at demand 0.
+One control sigma cannot set one MDE for a sweep whose arms differ in entity count, token budget, steps,
+mixture and optimiser history, because between-seed variance is not guaranteed constant across them — and
+on the count axis it is precisely the arms with more entities that have more to be variable about. The
+entropy axis is iso-token by construction and much closer to safe. For §4.C, either measure sigma at a
+positive demand or state the assumption; do not quote a demand-0 MDE as though it were the axis's.
+
+Same for the `df=2` cost above: it belongs in the write-up out loud, not only in this file.
