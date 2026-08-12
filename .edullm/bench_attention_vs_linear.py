@@ -73,6 +73,7 @@ import olmo_linear_attn  # noqa: E402,F401  (registers the "linear_attention" mi
 from olmo_linear_attn import LinearAttentionConfig  # noqa: E402
 
 from olmo_core.data import TokenizerConfig  # noqa: E402
+from olmo_core.data.utils import get_labels  # noqa: E402
 from olmo_core.nn.attention import AttentionBackendName  # noqa: E402
 from olmo_core.nn.transformer import TransformerConfig  # noqa: E402
 from olmo_core.nn.transformer.config import TransformerBlockConfig  # noqa: E402
@@ -159,11 +160,18 @@ def time_arm(arm: str, seq_len: int, opts, device) -> Dict[str, Any]:
         bs = max(1, opts.batch_tokens // seq_len)
         vocab = TokenizerConfig.dolma2().padded_vocab_size()
         ids = torch.randint(0, vocab, (bs, seq_len), device=device, dtype=torch.long)
-        labels = ids.clone()
+        # get_labels rather than ids.clone(): the model warns loudly that identical labels are a
+        # COPY TASK whose loss collapses without erroring. The FLOPs are the same either way, so
+        # this does not move a timing number -- but a benchmark that trips a correctness warning
+        # on every step is one whose output nobody should trust on sight.
+        labels = get_labels({"input_ids": ids})
 
         def step():
             opt.zero_grad(set_to_none=True)
-            loss = model(input_ids=ids, labels=labels)
+            # forward returns LMOutputWithLoss (a NamedTuple), not a tensor: .loss is the one to
+            # optimize, .ce_loss and .z_loss are for logging.
+            out = model(input_ids=ids, labels=labels)
+            loss = out.loss if hasattr(out, "loss") else out
             (loss if loss.ndim == 0 else loss.mean()).backward()
             opt.step()
 
