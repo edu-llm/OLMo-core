@@ -1,25 +1,19 @@
+# smoke: Does the pipeline run at all, including the in-context endpoint that has never left a CPU?
+#
+# Seconds per cell. Worth it before the 11B-token sweep: <ctxmano> items are 256 tokens with a fresh
+# operator table each and padding that tiles the instance, none of which had run on a GPU.
+#
+# Written by src/scripts/train/factcrowd/plan.py -- edit freely, but keep the dtype in the
+# command text: the precision guard reads the words of the command and cannot see one set in code.
+#
+# Commit this to a branch named edullm/<something> and push. The platform builds the image from the
+# last commit, so nothing uncommitted is part of the run. Then `edullm check --json`, then submit.
 schema_version: 1
 workload_profile: olmo-core-check
-suggested_compute: gpu-1xa10g
-# ONE COMMAND PER REPOSITORY, SO THIS FILE IS EDITED PER SUBMISSION.
-#
-# Currently: re-run M0 to produce a gate report that survives the container.
-#
-# WHY THIS HAS TO RUN AGAIN. run_019fdf85 scored the same three prefixes and reported the same verdict,
-# but `--write-gate-report` used Path().write_text() against an s3:// URI -- which Path collapses to
-# `s3:/...`, so it created a *local directory named `s3:`* and wrote there. The log said the report had
-# been written to S3; nothing was. The file that the whole admission mechanism depends on does not exist.
-#
-# Three prefixes, and all three are needed: the sigma block has no dilution ladder, the ladder has one
-# replicate where G7 needs three, and round two carries the re-runs of the three cells that crashed.
-# `select_complete` resolves each of those to the finished run and drops the crash, so 14 unique cells.
+suggested_compute: gpu-4xa10g
+fanout_size: 5
+fanout_index_parameter: cell
 command: >-
-  bash -lc 'B=s3://sbsandbox-intern-edullm-outputs/teams/memory-split/runs;
-  python src/scripts/train/factcrowd/score_run.py --prefix
-  $B/run_019fd3c0-8d2c-70ce-873e-4c2e333856b6/
-  $B/run_019fd3bf-ece6-708d-9706-08967ddbd557/
-  $B/run_019fdd84-9e11-707b-bcd3-adbadb4468ea/
-  --out ${EDULLM_OUTPUT_PREFIX}m0.csv --work-dir /tmp/g
-  --device cuda --dtype float32 --batch-size 512 --last-only
-  --expect-cells 14
-  --write-gate-report ${EDULLM_OUTPUT_PREFIX}gates-mano.json --gate-endpoint mano --json'
+  bash -lc 'python src/scripts/train/factcrowd/train_cell.py "$EDULLM_RUN_ID" --config-dir
+  src/scripts/train/factcrowd/configs/cells/smoke --cell-index "$AWS_BATCH_JOB_ARRAY_INDEX" --save-folder
+  "${EDULLM_OUTPUT_PREFIX}ckpt" train_module.dp_config.param_dtype=bfloat16'

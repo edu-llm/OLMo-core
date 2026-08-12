@@ -326,29 +326,22 @@ in-context variant the confirmatory endpoint rather than leaving the probe to ca
 
 #### Submitting it
 
-`.edullm/run.yaml` currently holds the M0 gate-report re-score, so it has to be swapped before this block
-goes out, and the swap is a commit on an `edullm/` branch because **the platform builds from the commit, not
-the working tree**. The shape:
+`plan.py` writes `.edullm/run.yaml`, so none of this has to be assembled by hand:
 
-```yaml
-suggested_compute: gpu-4xa10g        # 4x was proven available; 8x returned 1.06x of it
-fanout_size: 11
-fanout_index_parameter: cell
-command: >-
-  bash -lc 'python src/scripts/train/factcrowd/train_cell.py "$EDULLM_RUN_ID"
-  --config-dir src/scripts/train/factcrowd/configs/cells/calibration
-  --cell-index "$AWS_BATCH_JOB_ARRAY_INDEX"
-  --save-folder "${EDULLM_OUTPUT_PREFIX}ckpt"
-  train_module.dp_config.param_dtype=bfloat16'
+```bash
+python src/scripts/train/factcrowd/plan.py list             # the jobs, what each answers, what blocks it
+python src/scripts/train/factcrowd/plan.py stage calibration
 ```
 
-**Name the dtype in the command text.** The precision guard reads the words of the command and cannot see a
-dtype the program sets in code, so a command that omits it is accepted onto a card with no bfloat16 in
-hardware and dies on the first kernel that needs the format — after the machine has been billed.
+It counts `fanout_size` off the directory rather than taking it on trust, prints the **index → cell mapping
+the platform will actually resolve** (filenames sort as strings — `b16` before `b4`, `113m` before `13m`, and
+the phase-1 directory did exactly that), and writes the dtype into the *text* of the command because the
+precision guard cannot see one set in code.
 
-Then `edullm check --json` before `submit`, and **read `cost` and `approval_class` out of that output**. Do
-not take a price from this file; those live in reviewed configuration that changes without anybody being
-told. Match refusals on `code`, never on their prose.
+Then, in order: commit, push to an `edullm/` branch — **the platform builds the image from the last commit,
+so nothing uncommitted is part of the run** — and `edullm check --json` before `submit`. **Read `cost` and
+`approval_class` out of that output.** Do not take a price from this file; those live in reviewed
+configuration that changes without anybody being told. Match refusals on `code`, never on their prose.
 
 ### B. Entropy sweep × 3 seeds — the primary result
 

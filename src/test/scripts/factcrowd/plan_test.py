@@ -27,9 +27,24 @@ def test_every_job_answers_a_question_and_names_its_blockers():
             assert blocker in plan.JOBS_BY_NAME, blocker
     # Exactly the jobs that need calibration's depth say so.
     assert {job.name for job in plan.JOBS if job.needs_lengths} == {"ladder", "entropy", "count"}
-    # And the first two are runnable with nothing else finished.
+    # Runnable with nothing else finished. `score-m0` qualifies because it scores runs that already
+    # exist -- it is orthogonal to the phase-2 sequence rather than part of it, and listed last.
     ready = {job.name for job in plan.JOBS if not job.blocked_by}
-    assert ready == {"smoke", "calibration"}
+    assert ready == {"smoke", "calibration", "score-m0"}
+    assert plan.JOBS[-1].name == "score-m0", "the optional job belongs at the end of the listing"
+    assert plan.JOBS[0].name == "smoke" and plan.JOBS[1].name == "calibration"
+
+
+def test_the_m0_prefixes_survive_being_overwritten_in_run_yaml():
+    """
+    ``.edullm/run.yaml`` holds one command, so staging a phase-2 job overwrites whatever was there. The
+    three phase-1 run prefixes are not recoverable from a run id without ``edullm status``, so they are kept.
+    """
+    assert len(plan.M0_PREFIXES) == 3
+    assert all(one.startswith("s3://") and one.endswith("/") for one in plan.M0_PREFIXES)
+    command = plan.render(plan.JOBS_BY_NAME["score-m0"], endpoint="mano")
+    for prefix in plan.M0_PREFIXES:
+        assert prefix in command
 
 
 @pytest.mark.parametrize("name", ["smoke", "calibration"])

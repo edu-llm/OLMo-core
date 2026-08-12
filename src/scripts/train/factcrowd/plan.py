@@ -150,6 +150,33 @@ JOBS: Tuple[Job, ...] = (
             "calibrate the count architecture too or state that they are not confirmatory.",
         ),
     ),
+    Job(
+        name="score-m0",
+        answers="Re-score phase 1 and write the gate report that never reached S3. Optional; phase 2 supersedes it.",
+        compute=SCORING_COMPUTE,
+        scoring=True,
+        notes=(
+            "The command that was in .edullm/run.yaml before this program overwrote it, preserved so the "
+            "three run prefixes are not lost. Its verdict is already known -- G4 refused the endpoint for "
+            "having no dynamic range -- but the report itself never survived the container.",
+            "It is worth more now than when it was written: G2 can close off the step-0 checkpoints these "
+            "runs already wrote, which nothing could read before.",
+        ),
+    ),
+)
+
+#: The three phase-1 submissions the M0 gate report was assembled from. Kept because ``.edullm/run.yaml``
+#: holds one command and staging a phase-2 job overwrites it -- and these are not recoverable from a run id
+#: without ``edullm status``. The sigma block has no dilution ladder, the ladder has one replicate where G7
+#: needs three, and round two carries the re-runs of three cells that crashed; ``select_complete`` resolves
+#: each to the finished run and drops the crash, giving 14 unique cells.
+M0_PREFIXES: Tuple[str, ...] = (
+    "s3://sbsandbox-intern-edullm-outputs/teams/memory-split/runs/"
+    "run_019fd3c0-8d2c-70ce-873e-4c2e333856b6/",
+    "s3://sbsandbox-intern-edullm-outputs/teams/memory-split/runs/"
+    "run_019fd3bf-ece6-708d-9706-08967ddbd557/",
+    "s3://sbsandbox-intern-edullm-outputs/teams/memory-split/runs/"
+    "run_019fdd84-9e11-707b-bcd3-adbadb4468ea/",
 )
 
 JOBS_BY_NAME: Dict[str, Job] = {job.name: job for job in JOBS}
@@ -252,8 +279,9 @@ def render(job: Job, *, prefixes: Sequence[str] = (), endpoint: str = "ctxmano")
         f"suggested_compute: {job.compute}",
     ]
     if job.scoring:
+        resolved = tuple(prefixes) or (M0_PREFIXES if job.name == "score-m0" else ())
         lines.append("command: >-")
-        lines += [f"  {part}" for part in _fold(scoring_command(prefixes, endpoint=endpoint))]
+        lines += [f"  {part}" for part in _fold(scoring_command(resolved, endpoint=endpoint))]
     else:
         assert job.config_dir is not None
         size = fanout_size(job.config_dir)
