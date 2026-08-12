@@ -480,3 +480,82 @@ def pn_table(p_by_arm: dict[str, float], depths: list[int]) -> dict:
             row["pred_gap_pp"] = 100.0 * (pred[arms[1]] - pred[arms[0]])
         rows.append(row)
     return {"per_hop": dict(p_by_arm), "rows": rows}
+
+
+# ------------------------------------------------------- atomic and bridge docs
+
+# Atomic fact documents. These exist so the DENSE arm can actually memorise the
+# constituent facts -- without them the contrast is vacuous, because both arms
+# would simply read every fact from context and neither would be storing anything.
+# >= 10 templates each, for the same pattern-binding reason as the trace templates.
+_ATOMIC_TEMPLATES: list[tuple[str, str]] = [
+    ("{name}'s {attr} is ", "."),
+    ("The {attr} of {name} is ", "."),
+    ("Records list {name}'s {attr} as ", "."),
+    ("For {name}, the {attr} is ", "."),
+    ("{name} has {attr} ", "."),
+    ("Listed under {name}, the {attr} is ", "."),
+    ("According to the directory, {name}'s {attr} is ", "."),
+    ("{name} -- {attr}: ", "."),
+    ("On file for {name}, the {attr} reads ", "."),
+    ("The directory gives {name}'s {attr} as ", "."),
+]
+
+_BRIDGE_TEMPLATES: list[tuple[str, str]] = [
+    ("{name}'s {rel} is ", "."),
+    ("The {rel} of {name} is ", "."),
+    ("Records name ", " as the {rel} of {name}."),
+    ("{name} counts ", " as a {rel}."),
+    ("Listed beside {name} under \"{rel}\" is ", "."),
+    ("The {rel} assigned to {name} is ", "."),
+    ("{name} has long regarded ", " as a trusted {rel}."),
+    ("For {name}, the {rel} on record is ", "."),
+    ("According to the directory, {name}'s {rel} is ", "."),
+    ("{name} is linked by {rel} to ", "."),
+]
+
+
+def _fact_doc(prefix: str, value: str, suffix: str, kind: str, meta: dict) -> Doc:
+    """One fact, value wrapped as a lookup so the masker can find it."""
+    segs = [(prefix.rstrip(" "), False)]
+    roles = ["plain"]
+    segs.extend(lookup_segments(meta["key_subject"], meta["key_relation"], value))
+    roles.extend(lookup_roles())
+    segs.append((suffix, False))
+    roles.append("plain")
+    segs, roles = merge_plain(segs, roles)
+    return Doc(kind=kind, segments=segs, roles=roles, meta=meta)
+
+
+def render_atomic_doc(rec: BioRecord, attr: str, exposure: int) -> Doc:
+    rng = _rng("atomic", rec.entity_id, attr, exposure)
+    pre, suf = _ATOMIC_TEMPLATES[rng.randrange(len(_ATOMIC_TEMPLATES))]
+    phrase = RELATION_PHRASES[attr]
+    return _fact_doc(
+        pre.format(name=rec.name, attr=phrase),
+        rec.attrs[attr],
+        suf.format(name=rec.name, attr=phrase),
+        "atomic",
+        {"entity_id": rec.entity_id, "attr": attr, "exposure": exposure,
+         "key_subject": rec.name, "key_relation": attr},
+    )
+
+
+def render_bridge_doc(
+    rec: BioRecord, relation: str, target: BioRecord, exposure: int
+) -> Doc:
+    rng = _rng("bridge", rec.entity_id, relation, exposure)
+    pre, suf = _BRIDGE_TEMPLATES[rng.randrange(len(_BRIDGE_TEMPLATES))]
+    return _fact_doc(
+        pre.format(name=rec.name, rel=relation),
+        target.name,
+        suf.format(name=rec.name, rel=relation),
+        "bridge",
+        {"entity_id": rec.entity_id, "relation": relation, "exposure": exposure,
+         "target_id": target.entity_id,
+         "key_subject": rec.name, "key_relation": relation},
+    )
+
+
+def n_atomic_templates() -> dict[str, int]:
+    return {"atomic": len(_ATOMIC_TEMPLATES), "bridge": len(_BRIDGE_TEMPLATES)}
