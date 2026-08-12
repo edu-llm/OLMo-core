@@ -1,0 +1,14 @@
+[project]
+name = "memsplit"
+version = "0.4.0"
+description = "MemorySplit v4: n-hop fact externalisation with corrected instrumentation"
+requires-python = ">=3.11"
+dependencies = ["numpy>=2.0", "torch>=2.6", "PyYAML>=6.0"]
+
+[project.optional-dependencies]
+train = ["tiktoken>=0.7"]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.tiktoken_cache/
+data/
+outputs/
+*.bin
+*.pt
