@@ -885,6 +885,9 @@ itself. A crash in our own code exits, because the same traceback twice costs th
 ### 10.3 Fan-out for the grid
 
 The grid is 14 cells. `fanout_size: 14` with `fanout_index_parameter: cell` gives one submission,
+
+> **`fanout_size` and `fanout_index_parameter` are not fields of `.edullm/run.yaml`.** `edullm check` refuses both with `Extra inputs are not permitted`. They are properties of the *submission record* (`schemas/submission-inputs.schema.json`), which the CLI derives; pass the fan-out to the verb and confirm the spelling with `edullm check --help`. The mentions below are stale and are kept only because the surrounding arithmetic is not.
+
 priced and approved as one; each cell reads `AWS_BATCH_JOB_ARRAY_INDEX` and gets its own
 `EDULLM_CHECKPOINT_DIR` with a `cell-<index>/` segment already in it. `train_cell.py` maps the index
 to a config file. Concurrency is not settable.

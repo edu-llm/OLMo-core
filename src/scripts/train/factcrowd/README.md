@@ -92,6 +92,9 @@ bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone src/sc
 ```
 
 with `fanout_size: 6` and `fanout_index_parameter: cell`. Each cell reads
+
+> **`fanout_size` and `fanout_index_parameter` are not fields of `.edullm/run.yaml`.** `edullm check` refuses both with `Extra inputs are not permitted`. They are properties of the *submission record* (`schemas/submission-inputs.schema.json`), which the CLI derives; pass the fan-out to the verb and confirm the spelling with `edullm check --help`. The mentions below are stale and are kept only because the surrounding arithmetic is not.
+
 `AWS_BATCH_JOB_ARRAY_INDEX` and gets its own checkpoint prefix. Sequential the grid is 14.7 h and about
 $812; three jobs bring the wall clock to 8.8 h, and a failure in one row does not strand the others.
 

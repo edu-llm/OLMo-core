@@ -60,7 +60,11 @@ def test_a_staged_training_job_is_valid_yaml_holding_one_shell_line(name):
     assert parts[:2] == ["bash", "-lc"]
     assert len(parts) == 3, "the whole program must be one argument to -lc"
     assert document["schema_version"] == 1
-    assert document["fanout_index_parameter"] == "cell"
+    # THE FAN-OUT IS NOT A FIELD OF THIS FILE. `edullm check` refuses both spellings outright with
+    # "Extra inputs are not permitted", so a rendered spec must carry neither -- however many places in
+    # this repository's own documentation show them (PRD 8.4 and the factcrowd README both did).
+    assert "fanout_size" not in document
+    assert "fanout_index_parameter" not in document
 
 
 @pytest.mark.parametrize("name", ["smoke", "calibration"])
@@ -75,12 +79,17 @@ def test_the_dtype_is_in_the_command_text_not_only_in_the_code(name):
 
 @pytest.mark.parametrize("name", ["smoke", "calibration"])
 def test_the_fanout_size_is_counted_from_the_directory_not_declared(name):
-    """A size from an older directory runs a different cell under the name the approval was granted for."""
+    """
+    A size from an older directory runs a different cell under the name the approval was granted for.
+
+    Counted, and reported in the rendered comment and the printed invocation rather than as a field, since
+    the file's schema rejects it.
+    """
     job = plan.JOBS_BY_NAME[name]
     assert job.config_dir is not None
-    document = yaml.safe_load(plan.render(job))
     on_disk = len(C.load_cells(plan.CONFIG_ROOT / job.config_dir))
-    assert document["fanout_size"] == on_disk
+    assert plan.fanout_size(job.config_dir) == on_disk
+    assert f"FAN-OUT: {on_disk} cells" in plan.render(job)
 
 
 def test_the_index_mapping_is_printed_because_filenames_sort_as_strings():

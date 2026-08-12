@@ -285,9 +285,17 @@ def render(job: Job, *, prefixes: Sequence[str] = (), endpoint: str = "ctxmano")
     else:
         assert job.config_dir is not None
         size = fanout_size(job.config_dir)
+        # THE FAN-OUT IS NOT A FIELD OF THIS FILE, and putting it here is refused outright:
+        #     fanout_size: Extra inputs are not permitted
+        #     fanout_index_parameter: Extra inputs are not permitted
+        # `schemas/submission-inputs.schema.json` in edu-llm/platform does carry both names, but that schema
+        # is the *submission record*: it requires repository, commit_sha, team, experiment, wandb_project and
+        # compute_profile, and its `command` is an array of strings where this file's is one string. So
+        # run.yaml is a different model and the fan-out reaches the record another way -- printed with the
+        # invocation instead. PRD 887 and README show the flat keys in this file; both are stale.
         lines += [
-            f"fanout_size: {size}",
-            "fanout_index_parameter: cell",
+            f"# FAN-OUT: {size} cells. Not a field of this file -- see the invocation printed by",
+            f"# `plan.py stage {job.name}`, and confirm the flag spelling with `edullm check --help`.",
             "command: >-",
         ]
         lines += [f"  {part}" for part in _fold(train_command(job.config_dir))]
@@ -502,7 +510,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(
         "  3. edullm check --json --experiment <slug> --dataset none   # free, no network, lists refusals"
     )
-    print("  4. read `cost` and `approval_class` from that output, then: edullm submit ...")
+    print("  4. read `cost` and `approval_class` from that output, then submit")
+    if not job.scoring and job.config_dir:
+        size = fanout_size(job.config_dir)
+        print()
+        print(
+            f"THIS JOB IS A FAN-OUT OVER {size} CELLS, and the fan-out is not a field of run.yaml --"
+        )
+        print(
+            "putting it there is refused with `Extra inputs are not permitted`. Pass it to the verb"
+        )
+        print(
+            "instead, and confirm the flag spelling with `edullm check --help` before relying on it:"
+        )
+        print(f"    edullm check --json --fanout-size {size} --fanout-index-parameter cell ...")
+        print()
+        print(
+            "WITHOUT IT ONLY ONE CELL RUNS: $AWS_BATCH_JOB_ARRAY_INDEX is unset outside a fan-out, so"
+        )
+        print("train_cell.py has no index to select with and the rest are never trained.")
+        print()
+        print(mapping(job.config_dir))
     return 0
 
 

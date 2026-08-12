@@ -275,7 +275,7 @@ criterion without a pre-registered threshold would be inventing one. Pre-registe
 the rule.
 
 **The committed configs are now 28M in the entropy architecture, which is where the treatment lives.**
-`configs/cells/calibration/` holds **11 cells, `fanout_size: 11`**, and the index maps by *filename*:
+`configs/cells/calibration/` holds **11 cells**, and the fan-out index maps by *filename*:
 
 | index | cell | endpoint |
 |---|---|---|
@@ -347,6 +347,13 @@ in-context variant the confirmatory endpoint rather than leaving the probe to ca
 
 #### Submitting it
 
+**The fan-out is not a field of `run.yaml`.** `edullm check` refuses `fanout_size` and
+`fanout_index_parameter` there with `Extra inputs are not permitted`; they belong to the submission record the
+CLI derives (`schemas/submission-inputs.schema.json`), so they go to the verb. **This repository's own PRD
+§8.4 and factcrowd README both show them in the file, and both are stale** — following them is what produced
+the first refusal. Without a fan-out **only one cell runs**, because `$AWS_BATCH_JOB_ARRAY_INDEX` is unset and
+`train_cell.py` has no index to select with.
+
 `plan.py` writes `.edullm/run.yaml`, so none of this has to be assembled by hand:
 
 ```bash
@@ -354,7 +361,7 @@ python src/scripts/train/factcrowd/plan.py list             # the jobs, what eac
 python src/scripts/train/factcrowd/plan.py stage calibration
 ```
 
-It counts `fanout_size` off the directory rather than taking it on trust, prints the **index → cell mapping
+It counts the fan-out off the directory rather than taking it on trust, prints the **index → cell mapping
 the platform will actually resolve** (filenames sort as strings — `b16` before `b4`, `113m` before `13m`, and
 the phase-1 directory did exactly that), and writes the dtype into the *text* of the command because the
 precision guard cannot see one set in code.
