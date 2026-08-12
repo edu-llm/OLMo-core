@@ -11,8 +11,9 @@
 schema_version: 1
 workload_profile: olmo-core-check
 suggested_compute: gpu-4xa10g
-# FAN-OUT: 5 cells. Not a field of this file -- see the invocation printed by
-# `plan.py stage smoke`, and confirm the flag spelling with `edullm check --help`.
+fanout:
+  size: 5
+  index_parameter: cell
 command: >-
   bash -lc 'python src/scripts/train/factcrowd/train_cell.py "$EDULLM_RUN_ID" --config-dir
   src/scripts/train/factcrowd/configs/cells/smoke --cell-index "$AWS_BATCH_JOB_ARRAY_INDEX" --save-folder

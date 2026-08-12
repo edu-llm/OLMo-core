@@ -285,17 +285,19 @@ def render(job: Job, *, prefixes: Sequence[str] = (), endpoint: str = "ctxmano")
     else:
         assert job.config_dir is not None
         size = fanout_size(job.config_dir)
-        # THE FAN-OUT IS NOT A FIELD OF THIS FILE, and putting it here is refused outright:
-        #     fanout_size: Extra inputs are not permitted
-        #     fanout_index_parameter: Extra inputs are not permitted
-        # `schemas/submission-inputs.schema.json` in edu-llm/platform does carry both names, but that schema
-        # is the *submission record*: it requires repository, commit_sha, team, experiment, wandb_project and
-        # compute_profile, and its `command` is an array of strings where this file's is one string. So
-        # run.yaml is a different model and the fan-out reaches the record another way -- printed with the
-        # invocation instead. PRD 887 and README show the flat keys in this file; both are stale.
+        # NESTED, AND THIS IS THE FIELD I GOT WRONG TWICE. `RunSpec` in the platform's own
+        # `src/edullm_platform/cli/spec.py` declares `fanout: SpecFanOut | None`, and `SpecFanOut` is
+        # `size` (ge=2) and `index_parameter`. The flat `fanout_size:` / `fanout_index_parameter:` spelling
+        # belongs to `SubmissionInputs`, the record the CLI derives, and in this file it is refused with
+        # "Extra inputs are not permitted".
+        #
+        # This repository's PRD 8.4 and factcrowd README both show the flat form here. Both are stale, and
+        # believing two committed documents over the schema is what cost a refusal -- the platform checkout
+        # sits at ../platform and settles it in one grep.
         lines += [
-            f"# FAN-OUT: {size} cells. Not a field of this file -- see the invocation printed by",
-            f"# `plan.py stage {job.name}`, and confirm the flag spelling with `edullm check --help`.",
+            "fanout:",
+            f"  size: {size}",
+            "  index_parameter: cell",
             "command: >-",
         ]
         lines += [f"  {part}" for part in _fold(train_command(job.config_dir))]
@@ -515,20 +517,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         size = fanout_size(job.config_dir)
         print()
         print(
-            f"THIS JOB IS A FAN-OUT OVER {size} CELLS, and the fan-out is not a field of run.yaml --"
+            f"Fan-out: {size} cells, written into run.yaml as a nested `fanout:` mapping -- which is"
         )
         print(
-            "putting it there is refused with `Extra inputs are not permitted`. Pass it to the verb"
+            "what RunSpec declares in the platform's cli/spec.py. The flat fanout_size spelling belongs"
         )
         print(
-            "instead, and confirm the flag spelling with `edullm check --help` before relying on it:"
+            "to SubmissionInputs and is refused in this file; PRD 8.4 and the README are stale on it."
         )
-        print(f"    edullm check --json --fanout-size {size} --fanout-index-parameter cell ...")
-        print()
-        print(
-            "WITHOUT IT ONLY ONE CELL RUNS: $AWS_BATCH_JOB_ARRAY_INDEX is unset outside a fan-out, so"
-        )
-        print("train_cell.py has no index to select with and the rest are never trained.")
         print()
         print(mapping(job.config_dir))
     return 0

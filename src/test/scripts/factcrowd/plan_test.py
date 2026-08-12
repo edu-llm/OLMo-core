@@ -8,6 +8,7 @@ without one.
 """
 
 import shlex
+from typing import Any, Dict
 
 import pytest
 import yaml
@@ -60,9 +61,10 @@ def test_a_staged_training_job_is_valid_yaml_holding_one_shell_line(name):
     assert parts[:2] == ["bash", "-lc"]
     assert len(parts) == 3, "the whole program must be one argument to -lc"
     assert document["schema_version"] == 1
-    # THE FAN-OUT IS NOT A FIELD OF THIS FILE. `edullm check` refuses both spellings outright with
-    # "Extra inputs are not permitted", so a rendered spec must carry neither -- however many places in
-    # this repository's own documentation show them (PRD 8.4 and the factcrowd README both did).
+    # NESTED. `RunSpec.fanout` is a `SpecFanOut` of `size` and `index_parameter`; the flat spelling belongs
+    # to `SubmissionInputs` and is `extra_forbidden` here, however many places in this repository's own
+    # documentation show it (PRD 8.4 and the factcrowd README both do, and both are stale).
+    assert document["fanout"]["index_parameter"] == "cell"
     assert "fanout_size" not in document
     assert "fanout_index_parameter" not in document
 
@@ -89,7 +91,7 @@ def test_the_fanout_size_is_counted_from_the_directory_not_declared(name):
     assert job.config_dir is not None
     on_disk = len(C.load_cells(plan.CONFIG_ROOT / job.config_dir))
     assert plan.fanout_size(job.config_dir) == on_disk
-    assert f"FAN-OUT: {on_disk} cells" in plan.render(job)
+    assert yaml.safe_load(plan.render(job))["fanout"]["size"] == on_disk
 
 
 def test_the_index_mapping_is_printed_because_filenames_sort_as_strings():
@@ -150,3 +152,92 @@ def test_the_plan_quotes_no_price():
     assert not re.search(r"\$\s*\d", text), "a price in the source is a price that goes stale"
     for word in ("approval_class", "cost"):
         assert word in text, f"{word} should be pointed at, just not quoted"
+
+
+# --- validated against the platform's own schema, not against a reading of it ---------------------
+
+
+def _platform_spec_module():
+    """
+    The platform's ``RunSpec``, or ``None`` when its checkout is not beside this one.
+
+    **This is the test that should have existed first.** ``run.yaml``'s schema was guessed twice from
+    documentation -- once from this repository's PRD 8.4 and README, which show the flat
+    ``fanout_size:``/``fanout_index_parameter:`` keys, and once from
+    ``schemas/submission-inputs.schema.json``, which carries those names for a different model entirely.
+    Both readings were wrong and the second cost a refused submission. The authority is
+    ``src/edullm_platform/cli/spec.py``, and when the platform is checked out beside this repository there
+    is no reason to read documentation about it at all.
+
+    Skipped rather than failed when absent: the checkout is a convenience of one machine, and a test that
+    demands it would fail in CI for a reason unrelated to this repository.
+    """
+    import importlib
+    import sys
+    from pathlib import Path
+
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent.parent / "platform" / "src"
+        if (candidate / "edullm_platform" / "cli" / "spec.py").is_file():
+            if str(candidate) not in sys.path:
+                sys.path.insert(0, str(candidate))
+            try:
+                return importlib.import_module("edullm_platform.cli.spec")
+            except ImportError:  # pragma: no cover - pydantic absent
+                return None
+    return None
+
+
+@pytest.mark.parametrize("name", ["smoke", "calibration", "score-calibration", "score-m0"])
+def test_a_staged_spec_validates_against_the_platforms_own_run_spec(name):
+    """Not against a reading of the schema. Against the model the CLI actually loads."""
+    spec_module = _platform_spec_module()
+    if spec_module is None:
+        pytest.skip("the platform checkout is not beside this repository")
+    job = plan.JOBS_BY_NAME[name]
+    text = plan.render(job, prefixes=["s3://bucket/runs/run_a/"] if job.scoring else ())
+    spec = spec_module.RunSpec.model_validate(yaml.safe_load(text))
+    assert spec.schema_version == 1
+    assert spec.argv[0] == "bash"
+    if job.scoring:
+        assert spec.fanout is None, "a scoring pass is one process, and size has a floor of 2"
+    else:
+        assert spec.fanout is not None
+        assert spec.fanout.index_parameter == "cell"
+        assert spec.fanout.size == plan.fanout_size(job.config_dir or "")
+
+
+def test_the_fanout_is_nested_and_the_flat_spelling_is_refused():
+    """
+    The exact mistake, pinned. ``RunSpec.fanout`` is a ``SpecFanOut`` of ``size`` and ``index_parameter``;
+    the flat names belong to ``SubmissionInputs``, which the CLI derives, and in this file they are
+    ``extra_forbidden``.
+    """
+    spec_module = _platform_spec_module()
+    if spec_module is None:
+        pytest.skip("the platform checkout is not beside this repository")
+    # Annotated, or mypy reads each `{**base, ...}` merge as updating with an incompatible value type.
+    base: Dict[str, Any] = {
+        "schema_version": 1,
+        "workload_profile": "olmo-core-check",
+        "command": "bash -lc 'true'",
+    }
+    nested = spec_module.RunSpec.model_validate(
+        {**base, "fanout": {"size": 5, "index_parameter": "cell"}}
+    )
+    assert nested.fanout is not None and nested.fanout.size == 5
+
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as caught:
+        spec_module.RunSpec.model_validate(
+            {**base, "fanout_size": 5, "fanout_index_parameter": "cell"}
+        )
+    message = str(caught.value)
+    assert "fanout_size" in message and "extra_forbidden" in message
+    # And a one-cell fan-out is refused, which is why the scoring jobs carry none at all.
+    with pytest.raises(ValidationError):
+        spec_module.RunSpec.model_validate(
+            {**base, "fanout": {"size": 1, "index_parameter": "cell"}}
+        )

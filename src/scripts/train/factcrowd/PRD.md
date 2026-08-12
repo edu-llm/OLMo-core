@@ -886,7 +886,15 @@ itself. A crash in our own code exits, because the same traceback twice costs th
 
 The grid is 14 cells. `fanout_size: 14` with `fanout_index_parameter: cell` gives one submission,
 
-> **`fanout_size` and `fanout_index_parameter` are not fields of `.edullm/run.yaml`.** `edullm check` refuses both with `Extra inputs are not permitted`. They are properties of the *submission record* (`schemas/submission-inputs.schema.json`), which the CLI derives; pass the fan-out to the verb and confirm the spelling with `edullm check --help`. The mentions below are stale and are kept only because the surrounding arithmetic is not.
+> **The spelling above is stale.** `RunSpec` in the platform's `cli/spec.py` declares a **nested** `fanout:` mapping — `size` (at least 2) and `index_parameter` — and refuses the flat `fanout_size:`/`fanout_index_parameter:` keys in this file with `Extra inputs are not permitted`. Those flat names belong to `SubmissionInputs`, the record the CLI derives from this file. Write:
+>
+> ```yaml
+> fanout:
+>   size: 11
+>   index_parameter: cell
+> ```
+>
+> `plan.py` emits this, and a test validates every job against the platform's own model. The cell counts and arithmetic below are unaffected.
 
 priced and approved as one; each cell reads `AWS_BATCH_JOB_ARRAY_INDEX` and gets its own
 `EDULLM_CHECKPOINT_DIR` with a `cell-<index>/` segment already in it. `train_cell.py` maps the index

@@ -347,12 +347,18 @@ in-context variant the confirmatory endpoint rather than leaving the probe to ca
 
 #### Submitting it
 
-**The fan-out is not a field of `run.yaml`.** `edullm check` refuses `fanout_size` and
-`fanout_index_parameter` there with `Extra inputs are not permitted`; they belong to the submission record the
-CLI derives (`schemas/submission-inputs.schema.json`), so they go to the verb. **This repository's own PRD
-§8.4 and factcrowd README both show them in the file, and both are stale** — following them is what produced
-the first refusal. Without a fan-out **only one cell runs**, because `$AWS_BATCH_JOB_ARRAY_INDEX` is unset and
-`train_cell.py` has no index to select with.
+**The fan-out is a nested mapping, and it took two wrong guesses to establish that.** `RunSpec` in the
+platform's `cli/spec.py` declares `fanout:` with `size` (at least 2) and `index_parameter`; the flat
+`fanout_size:`/`fanout_index_parameter:` keys belong to `SubmissionInputs`, the record the CLI *derives* from
+this file, and in the file itself they are refused with `Extra inputs are not permitted`. **This repository's
+PRD §8.4 and factcrowd README both show the flat form here, and both are stale** — believing two committed
+documents over the schema is what cost a refusal. The platform is checked out at `../platform` and one grep
+of `cli/spec.py` settles it; `plan.py` now emits the nested form and a test validates every job against that
+model rather than against a reading of it.
+
+A fan-out below two cells is refused, which is why the scoring jobs declare none at all. And without one
+**only a single cell runs**: `$AWS_BATCH_JOB_ARRAY_INDEX` is unset outside a fan-out, so `train_cell.py` has
+no index to select with.
 
 `plan.py` writes `.edullm/run.yaml`, so none of this has to be assembled by hand:
 
