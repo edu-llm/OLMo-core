@@ -1,0 +1,61 @@
+# GDN HALF-KV, RESTARTED FROM SCRATCH ON PLATFORM DATA.
+#
+#   edullm check  --spec .edullm/run-gdn-halfkv.yaml --experiment gdn-family-eval --dataset olmo-150b-dolma2-v1
+#   edullm submit --spec .edullm/run-gdn-halfkv.yaml --experiment gdn-family-eval --dataset olmo-150b-dolma2-v1
+#
+# WHY RESTART RATHER THAN RESUME, AND WHAT IT COSTS. Resuming gdn-halfkv from its step3179
+# checkpoint needs the 6,914 shards its data_paths.txt names, every one under s3://edullm-datasets,
+# which the GPU workload role cannot read -- filed as platform issue 449. A restart needs no
+# original data at all, so it is unblocked today. What it gives up is the token stream: the
+# original half-KV pair saw the same 10B water-fill sample, and this arm will see a different
+# sample of the same corpus, drawn by build_mixture. Same corpus, same budget, same architecture,
+# different tokens. That is a weaker pairing with linear-halfkv than a resume would have been and
+# the write-up has to say so; it is not a different experiment.
+#
+# THE ARCHITECTURE IS VERIFIED AGAINST THE ORIGINAL, not assumed. Built from this command's flags
+# and compared field by field with the config.json in gdn-halfkv/step3179: mixer
+# GatedDeltaNetConfig, d_model 1024, 16 layers, n_heads 16, n_v_heads 16, head_dim 32,
+# expand_v 1.0, conv_size 4, allow_neg_eigval True, 449,447,936 total and 346,687,488
+# non-embedding params -- identical on every field.
+#
+# --head-dim 32 IS THE HALF-KV ABLATION. It halves the key and value projections and the recurrent
+# state together, against the full arms' 64. Everything else about the geometry is the full arms'.
+#
+# allow_neg_eigval IS LEFT UNSET DELIBERATELY, so it resolves to GatedDeltaNet's own default of
+# True, which is what the baseline trained with. It was briefly wrong: the flag defaulted to False
+# for GDN-2's sake and that default propagated onto GDN, changing the erase gate from [0, 2] to
+# [0, 1]. The two settings have IDENTICAL parameter counts, so no shape or size check anywhere
+# would have caught it -- only the recurrence differs. It resolves per mixer now.
+#
+# THE RECIPE MATCHES THE ORIGINAL WHERE IT CAN. The original used skip_step_adamw at 7.965e-4 with
+# z_loss 1e-5 on a 786,432 global batch and 500 warmup steps. Those are set below rather than
+# inherited, because this entry point's defaults are train_on_corpus.py's (adamw, no z-loss), not
+# train_mixer.py's. --steps 12716 is 10B tokens at that batch size, which is what the original
+# declared as max_duration.
+#
+# gpu-8xa100 and olmo-core-train: a full 10B-token run, ~10-11h at the 25.4% MFU an equivalent
+# run measured, so roughly $240 of the profile's 24h ceiling.
+#
+# --rank-microbatch-size 16384 rather than the original's 32768, which ran on a B200. On
+# A100-40GB the loss path's five (N,V) fp32 tensors at N=32,768 against a 100,352 vocab come to
+# ~67 GiB against ~38 GiB usable (A100-MFU-PLAYBOOK.md B3/B4) and an OOM gets no Batch retry.
+# 786,432 / 8 ranks / 16,384 = 6 micro-steps. Gradient accumulation is mathematically equivalent,
+# so this moves step time and not the model.
+#
+# TRITON_F32_DEFAULT=ieee: the mixer is a Triton kernel and Triton lowers tl.dot to TF32 on
+# Ampere+ by its own default, which torch's allow_tf32=False does not reach. Playbook B9 measures
+# 166x of relative error from that one variable, and it participates in kernel codegen.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export TRITON_F32_DEFAULT=ieee &&
+  python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_gdn2.py "$EDULLM_RUN_ID" --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --mixer gdn --model-factory olmo3_370M
+  --n-heads 16 --head-dim 32 --expand-v 1.0 --conv-size 4
+  --sequence-length 4096 --global-batch-size 786432 --rank-microbatch-size 16384
+  --learning-rate 7.965255828243755e-4 --warmup-steps 500 --steps 12716
+  --save-interval 1000 --param-dtype bfloat16
+  --mixture on --mixture-total 10000000000
+  train_module.optim.type=skip_step_adamw train_module.z_loss_multiplier=1e-5'

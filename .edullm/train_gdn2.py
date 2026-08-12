@@ -58,31 +58,56 @@ from typing import Any, Dict, Iterator, List
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import train_on_corpus as toc  # noqa: E402
+from olmo_linear_attn import LinearAttentionConfig  # noqa: E402
 
-from olmo_core.nn.attention import GatedDeltaNet2Config  # noqa: E402
+from olmo_core.nn.attention import (  # noqa: E402
+    GatedDeltaNet2Config,
+    GatedDeltaNetConfig,
+)
 from olmo_core.nn.transformer import TransformerConfig  # noqa: E402
 from olmo_core.nn.transformer.config import TransformerBlockConfig  # noqa: E402
 
 
-def mixer_config(opts) -> GatedDeltaNet2Config:
-    """Build the GDN-2 mixer config from the parsed flags.
+def mixer_config(opts):
+    """Build the chosen mixer's config from the parsed flags.
 
     ``head_dim`` and ``n_v_heads`` are passed through as ``None`` when unset rather than
     computed here, because the layer's own defaults (``d_model // n_heads`` and ``n_heads``)
     depend on a ``d_model`` this function has no honest way to know -- the model factory
     decides it.
+
+    THE GEOMETRY IS SHARED ACROSS MIXERS ON PURPOSE. ``n_heads``, ``n_v_heads``, ``head_dim``,
+    ``expand_v`` and ``conv_size`` mean the same thing in all three, so passing one set of flags
+    is what makes two arms differ ONLY in their recurrence. ``--head-dim 32`` is the half-KV
+    ablation: it halves the key and value projections and the recurrent state together.
     """
-    return GatedDeltaNet2Config(
+    common = dict(
         n_heads=opts.n_heads,
         n_v_heads=opts.n_v_heads,
         head_dim=opts.head_dim,
         expand_v=opts.expand_v,
-        allow_neg_eigval=opts.allow_neg_eigval,
         conv_size=opts.conv_size,
     )
+    # allow_neg_eigval RESOLVES PER MIXER WHEN UNSET, AND SHARING ONE DEFAULT WAS A BUG.
+    # GatedDeltaNet's own default is True and the 370M baseline arms trained with True.
+    # GDN-2's paper keeps the erase gate in [0, 1] and its Table 5 finds the widened [0, 2]
+    # range gives no consistent gain, so its default is False. Passing one flag default to both
+    # silently gave GDN the GDN-2 answer -- and because the two settings have IDENTICAL parameter
+    # counts, no size or shape check anywhere would have caught it. Only the recurrence changes.
+    neg = opts.allow_neg_eigval
+    if opts.mixer == "gdn2":
+        return GatedDeltaNet2Config(allow_neg_eigval=False if neg is None else neg, **common)
+    if opts.mixer == "gdn":
+        return GatedDeltaNetConfig(allow_neg_eigval=True if neg is None else neg, **common)
+    if opts.mixer == "linear":
+        # qk_l2norm=True and normalize=False are the baseline's settings: the pure ungated
+        # cumulative sum, which is the honest gate/delta ablation of GatedDeltaNet rather than a
+        # differently-normalised linear attention.
+        return LinearAttentionConfig(qk_l2norm=True, normalize=False, **common)
+    raise ValueError(f"unknown --mixer {opts.mixer!r}")
 
 
-def swap_sequence_mixer(model_config: TransformerConfig, mixer: GatedDeltaNet2Config) -> int:
+def swap_sequence_mixer(model_config: TransformerConfig, mixer) -> int:
     """Replace the sequence mixer on every block, and return how many were replaced.
 
     Three shapes are reachable: one shared block config, a dict of them keyed by name, and
@@ -112,7 +137,7 @@ def swap_sequence_mixer(model_config: TransformerConfig, mixer: GatedDeltaNet2Co
 
 
 @contextmanager
-def factory_with_gdn2(factory_name: str, mixer: GatedDeltaNet2Config) -> Iterator[None]:
+def factory_with_gdn2(factory_name: str, mixer) -> Iterator[None]:
     """Temporarily wrap one `TransformerConfig` factory so its blocks come back as GDN-2.
 
     The attribute is restored on the way out. ``opts.model_factory`` is deliberately left
@@ -151,7 +176,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.prog = "train_gdn2"
     parser.description = "Train a Gated DeltaNet-2 transformer on a published eduLLM corpus."
 
-    group = parser.add_argument_group("Gated DeltaNet-2")
+    group = parser.add_argument_group("recurrent sequence mixer")
+    group.add_argument(
+        "--mixer",
+        choices=["gdn2", "gdn", "linear"],
+        default="gdn2",
+        help="Which recurrence to put in every block. All three take the same geometry flags "
+        "below, so two arms that differ only in this flag differ only in their recurrence.",
+    )
     group.add_argument(
         "--n-heads",
         type=int,
@@ -187,11 +219,12 @@ def build_parser() -> argparse.ArgumentParser:
     group.add_argument(
         "--allow-neg-eigval",
         action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Widen the erase gate from [0, 1] to [0, 2] to admit negative eigenvalues. The "
-        "write gate is left alone. Off by default because the paper's headline model is the "
-        "[0, 1] one and its Table 5 finds the widened range gives no consistent gain at 1.3B -- "
-        "note that GatedDeltaNet's equivalent flag defaults the other way.",
+        default=None,
+        help="Widen the erase gate from [0, 1] to [0, 2] to admit negative eigenvalues. Unset, "
+        "it resolves PER MIXER to that mixer's own correct default: False for gdn2 (its paper's "
+        "headline model, whose Table 5 finds the widened range gives no consistent gain) and "
+        "True for gdn (its own default, and what the 370M baseline arms trained with). Pass it "
+        "explicitly to override either.",
     )
 
     mix = parser.add_argument_group("source mixture")
