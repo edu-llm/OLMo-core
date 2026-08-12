@@ -157,3 +157,33 @@ def test_kaplan_n_matches_the_closed_form():
     blocks = sum(p.numel() for n, p in m.named_parameters() if n.startswith("blocks."))
     # 12*n_layer*d^2 is the standard approximation; norms are the only slack.
     assert abs(f["kaplan"]["n_params"] - blocks) / blocks < 0.001
+
+
+def test_embedding_share_is_reported_because_it_dominates():
+    """At d40m with a 50k vocab, embedding+head is ~2/3 of all parameters."""
+    rep = build_model("d40m").param_report()
+    assert rep["embedding_plus_head_share"] > 0.6, rep
+    assert rep["blocks"] < rep["embedding"] + rep["head"], rep
+    assert rep["nonembed"] < rep["total"]
+    assert "never 'total'" in rep["capacity_basis_note"]
+
+
+def test_capacity_basis_differs_by_3x_between_conventions():
+    """A bits/param claim on total params would be off by ~3x at this scale."""
+    m = build_model("d40m")
+    cap = m.capacity_bits(bits_per_param=1.0)
+    assert cap["basis_total_bits_DO_NOT_USE"] / cap["basis_blocks_bits"] > 2.5
+    assert "exposures" in cap["caveat"]
+
+
+def test_n800k_fact_load_against_the_d40m_ceiling():
+    """The reason to shrink the model: 42.4 Mbit is >= a 40M model's 1-bit ceiling.
+
+    Growing the corpus to reach capacity is far more expensive than shrinking the
+    model. On blocks-basis at 1 bit/param this configuration is oversubscribed,
+    which is the regime the previous sweep never reached.
+    """
+    m = build_model("d40m")
+    demanded = 800_000 * 41.47  # entities * bits/entity from bios.bits_per_entity
+    ceiling_1bit = m.capacity_bits(1.0)["basis_blocks_bits"]
+    assert demanded / ceiling_1bit > 1.0, (demanded, ceiling_1bit)

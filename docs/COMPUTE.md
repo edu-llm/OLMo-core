@@ -1,0 +1,123 @@
+# Where to run: Colab A100 vs the edullm platform
+
+## The premise needs correcting first
+
+**There is no H100 option on the platform.** The `compute_profile` dropdown in the
+submission workflow carries 14 options and both H100 shapes were removed, so the
+form cannot express one; the CLI refuses it. Provisioning a new shape is a
+four-edit infrastructure change (compute environment + queue + job definition, a
+row in the execution targets, an entry in `CONTAINER_SHAPES`, and a `provisioned`
+flag). A profile present in the catalog but absent from `CONTAINER_SHAPES` is
+rejected at admission.
+
+So the real choice is **Colab A100 vs a platform L4-class shape** (`gpu-1xl4`,
+$0.8048/hr, the scaffold's default for training because it screens for bfloat16
+support and so declines to hand you a T4).
+
+## OLMo integration is not required
+
+This was the other open question, and the answer is no. `edullm-p1-train` is
+precedent for exactly our situation: a custom non-OLMo entrypoint that execs its
+own `torchrun` internally, taking the launcher waiver because the platform's
+text-reading guard cannot see inside the program:
+
+```
+bash -lc 'EDULLM_LAUNCH_CHECK=waived python experiments/.../platform_array_entrypoint.py \
+    --checkpoint-prefix "$EDULLM_CHECKPOINT_DIR"'
+```
+
+`.edullm/train.py` here matches the scaffold's auto-generated signature (positional
+run id, `--save-folder`), so `edullm check` should produce a valid first spec
+without hand-editing. We are single-GPU at these model sizes, so no launcher
+waiver is needed at all.
+
+One caveat worth knowing: in the platform's recorded evidence, every command that
+has actually run is either `python -c '...'` or `python -m olmo_core.train`. The
+custom-entrypoint path is architecturally supported and configured, but we would
+be **proving that path rather than following it**. Budget a check-profile job for
+that.
+
+## Throughput and cost
+
+Measured anchors, all single-GPU, ctx=1024, micro-batch 32, compiled:
+
+| | d8m | d40m | d160m |
+|---|---:|---:|---:|
+| L40S (measured) | 462,611 tok/s | 184,671 tok/s | ~132,000 tok/s |
+| A100 40GB (measured) | — | — | ~185,000 tok/s @ ctx=2048 |
+
+At these sizes training is memory-bandwidth bound rather than FLOP bound, which
+is why the A100 beat the L40S by 1.40x at d160m *despite running twice the
+context*. Scaling by bandwidth (A100 1555 GB/s, L40S 864, L4 300):
+
+| d40m, 2B tokens | tok/s | hours/run | 12 runs | cost |
+|---|---:|---:|---:|---:|
+| Colab A100 | ~258,000 (est.) | 2.2 | 26 h | subscription |
+| Platform L4 | ~64,000 (est.) | 8.7 | 104 h | **~$84** |
+
+At the longer 8.17B budget the crowding stage needs: A100 ~105 h total, L4 ~425 h
+= **~$342**.
+
+**The L4 numbers are estimated by bandwidth scaling, not measured.** First action
+either way is a 1-hour check-profile job that trains ~50 steps and reports
+`tok_s`, so the estimate is replaced by a measurement before anything large is
+committed. `scripts/train.py` prints `tok_s` per log line already.
+
+## Recommendation: platform for the matrix, Colab for iteration
+
+The 4x per-GPU speed advantage is real and does not matter much here, because:
+
+* The matrix is 12 independent single-GPU runs. Twelve jobs queued in parallel
+  beat one interactive session that is 4x faster, and the dollar cost is ~$84.
+* **Colab loses runs.** The previous generation's split arm died at 0.87B of 1.0B
+  tokens when a session ended, and the 0.797B snapshot was then compared against
+  the dense arm's 0.996B one. That is not a hypothetical failure mode; it is the
+  reason one of the two headline anchors is not iso-token.
+* The platform enforces a checkpoint contract (`resume_required: true` on every
+  train profile but one), so a preempted attempt resumes rather than restarting.
+  Our `checkpoint_io.ResumeGuard` raises if a second attempt finds nothing to load,
+  which is the failure a sibling repo shipped: it gated its load on
+  `os.path.exists()` against an `s3://` URI -- always false -- so every retry
+  silently repeated the previous attempt at full price.
+* Cost is visible per run and manifests are hash-pinned, so the matrix is
+  auditable after the fact. The previous line could not reproduce Experiment 1
+  from its own tree.
+
+Use Colab for: the calibration gate (it needs **no GPU at all** -- pure CPU, and
+it is the thing that must run first), interactive debugging, and single pilot runs
+where turnaround matters more than durability.
+
+### The one thing that would change this
+
+**Max concurrent job quota is unknown.** If the platform allows only one or two
+concurrent GPU jobs, the parallelism argument collapses and the A100's 4x starts to
+dominate. Check that before committing to the matrix, because it is the only input
+that flips the recommendation.
+
+Two smaller unknowns: per-profile walltime caps (the one train profile with a
+visible limit is 10 h, which a 2B-token L4 run fits at ~8.7 h but an 8.17B run does
+not -- that one needs ~4 attempts with resume), and whether jobs are preemptible.
+
+## Practical notes
+
+* Checkpoints go to `$EDULLM_CHECKPOINT_DIR`, an S3 prefix under
+  `s3://sbsandbox-intern-edullm-outputs/teams/`. Never hardcode a bucket; the
+  literal that appears in older fixtures points at a bucket that is no longer the
+  convention.
+* Node Python is 3.12.13; egress is limited to ports 443/80, so dependencies can
+  be installed but plan on the image rather than runtime downloads. `tiktoken` must
+  be in the image -- the byte-level fallback here is for tests, and
+  `require_production_tokenizer` refuses to write a trainable corpus with it.
+* Multi-GPU launchers are matched textually from a fixed list; wrapper scripts
+  (`./scripts/train.sh`) are refused because the guard cannot see into them.
+* `experiment` groups runs in the cost view but is not part of the hashed lineage
+  record, so use it freely for organisation.
+
+## Suggested sequence
+
+1. Calibration gate locally or on Colab CPU: `scripts/calibrate_nhop.py`. No GPU,
+   must pass before anything trains.
+2. One platform **check** profile job (1 h) running ~50 steps of `d40m` to measure
+   real `tok_s` and prove the custom-entrypoint path end to end.
+3. Re-cost the matrix from that measurement; submit the 12-run depth matrix.
+4. Keep Colab for the mechanistic probes, which are interactive and short.

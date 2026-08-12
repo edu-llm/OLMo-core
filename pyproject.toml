@@ -1,5 +1,5 @@
 [project]
-name = "memsplit"
+name = "memsplit-hop"
 version = "0.4.0"
 description = "MemorySplit v4: n-hop fact externalisation with corrected instrumentation"
 requires-python = ">=3.11"

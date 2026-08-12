@@ -1,0 +1,24 @@
+# Depth stage: 40M params, mixed depths {1,2,3} trained, {4,5,6} held out.
+#
+# 40M rather than 160M is deliberate. Reaching demanded-bits >= capacity is far
+# cheaper by shrinking the model than by growing the corpus: the existing n800k
+# fact load is ~42.4 Mbit, which is 13% of a 162M model's 2-bit ceiling but 53%
+# of a 40M model's and 106% of its 1-bit ceiling.
+name: depth_d40m
+preset: d40m
+ctx: 1024
+micro_batch_size: 8
+tokens_per_step: 524288
+# 2B tokens = 50 tokens/param, well past compute-optimal, and it fits inside a
+# single platform walltime slot on an L4 (~8.7h) so most runs need one attempt.
+# The crowding stage needs a longer budget for exposures; the depth stage does not.
+total_tokens: 2_000_000_000
+lr: 1.5e-3
+warmup_steps: 300
+weight_decay: 0.1
+grad_clip: 1.0
+checkpoint_minutes: 20
+log_every: 20
+data_root: data/nhop_v1
+device: auto
+compile: false

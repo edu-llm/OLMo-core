@@ -251,6 +251,64 @@ class GPT(nn.Module):
 
     # ------------------------------------------------------------- accounting
 
+    def param_report(self) -> dict:
+        """Parameter breakdown, because the embedding share is large and decisive.
+
+        At `d40m` with a 50,304-token vocabulary, embedding + head is **67% of all
+        parameters** (51.5M of 77.2M). A capacity claim quoted against *total*
+        parameters is therefore wrong by about 3x. Every bits-per-parameter
+        statement must use `blocks` (or `nonembed`), and must say which.
+
+        The previous line's own design review made this point about a different
+        configuration -- "for an experiment about non-embedding capacity, spending
+        half the model on an embedding table is self-defeating" -- and recommended
+        a smaller domain vocabulary. That remains the better fix if the corpus
+        stays purely synthetic; the 50,304 GPT-2 vocabulary is kept here only so a
+        natural-language slice can be mixed in later without retokenising.
+        """
+        cfg = self.cfg
+        emb = self.wte.weight.numel()
+        head = 0 if cfg.tie_embeddings else self.lm_head.weight.numel()
+        blocks = sum(
+            p.numel() for n, p in self.named_parameters() if n.startswith("blocks.")
+        )
+        total = self.n_params(include_embeddings=True)
+        return {
+            "total": total,
+            "blocks": blocks,
+            "embedding": emb,
+            "head": head,
+            "nonembed": total - emb,
+            "embedding_plus_head_share": (emb + head) / total,
+            "vocab_size": cfg.vocab_size,
+            "tied": cfg.tie_embeddings,
+            "capacity_basis_note": (
+                "quote bits/param against 'blocks' or 'nonembed', never 'total'"
+            ),
+        }
+
+    def capacity_bits(self, bits_per_param: float = 1.0) -> dict:
+        """Storage ceiling on the defensible basis, with the exposure caveat.
+
+        `bits_per_param` is a *band*, not a constant: 2 bits/param is measured at
+        ~1000 exposures per fact and drops to ~1 bit/param at ~100 exposures.
+        Junk dilution cuts it further -- with 1/8 useful content at 100 exposures
+        the useful-knowledge ratio degrades by up to 20x, recovering to ~1.3x only
+        by 1000 exposures, and a per-source domain token is what buys most of that
+        back. So report a band and state the exposure count, never a single number.
+        """
+        rep = self.param_report()
+        return {
+            "basis_blocks_bits": rep["blocks"] * bits_per_param,
+            "basis_nonembed_bits": rep["nonembed"] * bits_per_param,
+            "basis_total_bits_DO_NOT_USE": rep["total"] * bits_per_param,
+            "bits_per_param_assumed": bits_per_param,
+            "caveat": (
+                "2 bits/param is measured at ~1000 exposures/fact; ~1 bit/param at "
+                "~100. Report exposures per fact alongside any occupancy figure."
+            ),
+        }
+
     def n_params(self, include_embeddings: bool = True) -> int:
         total = sum(p.numel() for p in self.parameters())
         if include_embeddings:

@@ -1,4 +1,4 @@
-# memsplit-v4
+# memsplit-hop
 
 Does a small language model reason better when arbitrary fact *values* are kept
 out of its weights and supplied by an exact external store?
@@ -46,13 +46,17 @@ memsplit/
   scorers.py      one stated mode per scorer; chance and floors always reported
   calibration.py  pre-training endpoint gate
   metrics.py      JSD/KL, rank shift, noise floor, compute-to-threshold
+  data.py         packed stream + per-condition sidecars, resumable cursor
+  trainer.py      fixed-divisor loss, atomic resume, log-spaced snapshots
+  checkpoint_io.py  local or s3://, plus a guard against silent restarts
+.edullm/train.py  platform entrypoint (positional run id, --save-folder)
 tests/            67 tests, CPU-only, no GPU and no tiktoken required
 ```
 
 ## Running
 
 ```bash
-cd /workspace/edullm/memsplit-v4
+cd /workspace/edullm/memsplit-hop
 MEMSPLIT_TOKENIZER=byte python -m pytest tests/ -q     # offline, ~25s
 python scripts/calibrate_nhop.py --depths 1 2 3 4 5    # gate, no training
 ```
@@ -73,9 +77,11 @@ Landed, with tests:
 - endpoint calibration gate that refuses no-range, leaky and flat endpoints
 - metrics: bounded JSD, rank shift, seed floor, bracketed compute-to-threshold
 
-Not yet written: the corpus builder that materialises `.bin` + sidecars, the
-training loop wrapper, the eval driver, and the mid-training/replay arm. Design
-for all four is in the audit document, sections 4 and 5.
+Not yet written: the corpus builder that materialises `.bin` + sidecars, the eval
+driver, and the mid-training/replay arm. Design is in the audit document, sections
+4 and 5. Where to run it: `docs/COMPUTE.md` -- note there is **no H100 option** on
+the platform, so the real choice is Colab A100 vs an L4-class shape, and OLMo-core
+integration is *not* required.
 
 ## The one thing to keep in mind
 
