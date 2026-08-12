@@ -72,6 +72,17 @@ from olmo_core.utils import get_default_device  # noqa: E402
 log = logging.getLogger("eval_arms")
 
 
+def phase(msg: str) -> None:
+    """Print a locatable marker and flush it.
+
+    run_019ff4dc exited 1 with no traceback inside the fifty lines `edullm logs` returns -- the
+    last thing it printed was the model build, so the failure could have been anywhere after it.
+    A killed process (host OOM, for instance) leaves no traceback at all, so the only way to know
+    where it stopped is to have said where it was. Flushed because a buffered marker is no marker.
+    """
+    print(f"[PHASE] {msg}", flush=True)
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     p = argparse.ArgumentParser(description="Compare trained sequence mixers.")
@@ -82,7 +93,11 @@ def main() -> int:
     p.add_argument("--max-windows", type=int, default=64)
     p.add_argument("--micro-batch", type=int, default=1)
     p.add_argument("--ce-chunk", type=int, default=4096)
-    p.add_argument("--niah-lens", default="1024,2048,4096,8192,16384")
+    # NIAH scores argmax over the vocabulary, so it needs FULL (B, T, V) logits where the length
+    # sweep needs only per-token CE. At L=16384 against a 100,352 vocab that is 3.3 GiB in bf16
+    # for a single sequence before anything is cast to fp32, which is why its ceiling is lower
+    # than the sweep's and why it is capped here rather than sharing --seq-lens.
+    p.add_argument("--niah-lens", default="1024,2048,4096,8192")
     p.add_argument("--niah-depths", default="0.1,0.5,0.9")
     p.add_argument("--niah-keys", default="1,4")
     p.add_argument("--niah-items", type=int, default=32)
@@ -121,13 +136,16 @@ def main() -> int:
         for L, w in windows.items():
             log.info(f"  L={L}: {len(w)} window(s)")
 
+        phase(f"windows built for {len(windows)} length(s)")
         results: Dict[str, Any] = {}
         markers = pool = freq = None
 
         for name, ckpt in arms:
-            log.info(f"=== {name} <- {ckpt}")
+            phase(f"{name}: loading {ckpt}")
             model, model_cfg = _load_model(ckpt, device, os.path.join(opts.work_dir, name))
+            phase(f"{name}: loaded, {model_cfg.num_params:,} params")
             if markers is None:
+                phase("choosing needle markers by measured rarity")
                 markers, pool, freq = pick_marker_ids(
                     streams, n_markers=max(niah_keys) + 4, vocab=model_cfg.vocab_size
                 )
@@ -143,6 +161,7 @@ def main() -> int:
 
             # ---- NIAH first, while the LM head is still intact (it needs full logits) --------
             if not opts.skip_niah:
+                phase(f"{name}: NIAH begins")
                 for K in niah_keys:
                     for L in niah_lens:
                         for d in niah_depths:
@@ -181,6 +200,7 @@ def main() -> int:
 
             # ---- length sweep. The head is patched for chunked CE and cannot give logits
             # afterwards, which is why NIAH runs above rather than below. --------------------
+            phase(f"{name}: NIAH done; length sweep begins")
             _patch_head_for_chunked_ce(model, chunk=opts.ce_chunk)
             for L in seq_lens:
                 w = windows[L]
@@ -201,6 +221,7 @@ def main() -> int:
                 }
                 log.info(f"  len L={L:<6} ce={ce:.4f} ppl={math.exp(min(ce, 20.0)):.3f}")
 
+            phase(f"{name}: complete")
             results[name] = arm
             del model
             gc.collect()
