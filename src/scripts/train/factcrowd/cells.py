@@ -1000,9 +1000,10 @@ def mano_calibration_cells(
         calibration configs were written on the count axis while the primary treatment ran on the entropy
         one. Defaults to ``"entropy"`` because that is where the treatment lives.
 
-        An ``"entropy"`` calibration cell carries ``bits_per_attribute=0`` and a single entity: the axis
-        requires a positive entity count, and one zero-bit biography is 8,400 tokens against 1.0B of
-        reasoning, so the demand is nil and the vocabulary is the treatment's.
+        An ``"entropy"`` calibration cell carries ``bits_per_attribute=0`` and **two** entities: the axis
+        requires a positive count and the name space refuses anything below two, so two zero-bit
+        biographies -- 16,800 tokens against 1.0B of reasoning -- is the smallest fact slice the pipeline
+        will build. The demand is nil and the vocabulary is the treatment's, which is the point.
     :param overrides: Applied to every cell, e.g. ``seed``.
 
     :returns: One reasoning-only cell per (row, length).
@@ -1027,7 +1028,10 @@ def mano_calibration_cells(
     placement: Dict[str, Any] = (
         {"sweep": "count", "demand_bits_per_param": 0.0}
         if architecture == "count"
-        else {"sweep": "entropy", "bits_per_attribute": 0, "n_entities": 1}
+        # Two, not one. `EntityTable.name_codes` refuses a name space below 2, so a single-entity cell
+        # builds fine with `with_streams=False` and dies when the trainer asks for the stream -- which is
+        # after submission. Two zero-bit biographies are 16,800 tokens against 1.0B of reasoning.
+        else {"sweep": "entropy", "bits_per_attribute": 0, "n_entities": 2}
     )
     settings: Dict[str, Any] = {
         "reasoning_tokens": REASONING_TOKENS,

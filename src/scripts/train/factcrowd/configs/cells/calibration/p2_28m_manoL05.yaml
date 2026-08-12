@@ -9,7 +9,7 @@ global_batch_size: 262144
 learning_rate: 0.003
 mano_length: 5
 mano_variant: memorised
-n_entities: 1
+n_entities: 2
 notes: 'memorised mano calibration in the entropy architecture: reasoning only, expression
   length 5'
 phase: p2

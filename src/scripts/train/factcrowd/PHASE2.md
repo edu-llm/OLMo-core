@@ -238,8 +238,17 @@ sorting before `13m` for the same reason, which is the sort of thing that trains
 
 The 13M and 113M width-response sweep for G6 moved to `configs/cells/calibration_width/` (8 cells,
 in-context only) and runs after a length is frozen, not before. An entropy-axis reasoning-only cell carries
-`bits_per_attribute: 0` and one entity — the axis requires a positive count, and one zero-bit biography is
-8,400 tokens against 1.0B of reasoning, so the demand is nil and the vocabulary is the treatment's.
+`bits_per_attribute: 0` and **two** entities — the axis requires a positive count and the name space refuses
+anything below two, so 16,800 tokens against 1.0B of reasoning is the smallest fact slice the pipeline will
+build. The demand is nil and the vocabulary is the treatment's, which is the point.
+
+**Verified by `--dry-run`, not by inspection.** Index 0 resolves to `28m_ctxmanoL02` at 3,906,250 items —
+1.0B ÷ 256 exactly, so the padded width is live — index 4 to `28m_manoL02` at 125,000,000, index 10 to
+`28m_manoL10` at 41,666,666, index 11 is refused, and all eleven arms come out at **3,814 steps on 1.000B
+tokens and 31,426,944 parameters**, which is the entropy architecture rather than the count axis's. The
+sweep is iso-token, so a depth response cannot be a training-length response. The first draft of these
+configs carried `n_entities: 1`, which passed every structural check and died in `BioStream`; a test now
+builds all eleven **with streams**.
 
 If nothing clears 23.8%, §6 applies instead of §4.B.
 
@@ -269,14 +278,35 @@ row of the results table. **The train split and length 2 are both deliberate** -
 memorised case, which is why it does not go through the eval-split guard the endpoint does.
 
 **What the probe cannot do is make `<mano>` the published task.** It is not the task from the phi-3
-claim, it did not work in phase 1, and calibration (§4.A) is what decides whether it works at all. If a
-length clears 23.8% and the probe then shows both curves falling together, the honest write-up says
-knowledge-versus-knowledge and the reasoning claim stays unmade. See §9 for the redesign that removes the
-confound rather than measuring it.
+claim, it did not work in phase 1, and calibration is what decides whether it works at all. If a length
+clears 23.5% and the probe then shows both curves falling together, the honest write-up says
+knowledge-versus-knowledge and the memorised reading is simply unavailable — which is why §9.1 made the
+in-context variant the confirmatory endpoint rather than leaving the probe to carry the argument alone.
 
-Submit with `--config-dir …/configs/cells/calibration` and `fanout_size: 14`. The index maps by *filename*,
-and `113m` sorts before `13m` because `"113" < "13"` as strings — so **0–6 are the 113M cells and 7–13 are
-the 13M ones**, lengths ascending within each. Verified against the CLI; index 14 is refused.
+#### Submitting it
+
+`.edullm/run.yaml` currently holds the M0 gate-report re-score, so it has to be swapped before this block
+goes out, and the swap is a commit on an `edullm/` branch because **the platform builds from the commit, not
+the working tree**. The shape:
+
+```yaml
+suggested_compute: gpu-4xa10g        # 4x was proven available; 8x returned 1.06x of it
+fanout: {size: 11, index_parameter: cell}
+command: >-
+  bash -lc 'python src/scripts/train/factcrowd/train_cell.py "$EDULLM_RUN_ID"
+  --config-dir src/scripts/train/factcrowd/configs/cells/calibration
+  --cell-index "$AWS_BATCH_JOB_ARRAY_INDEX"
+  --save-folder "${EDULLM_OUTPUT_PREFIX}ckpt"
+  train_module.dp_config.param_dtype=bfloat16'
+```
+
+**Name the dtype in the command text.** The precision guard reads the words of the command and cannot see a
+dtype the program sets in code, so a command that omits it is accepted onto a card with no bfloat16 in
+hardware and dies on the first kernel that needs the format — after the machine has been billed.
+
+Then `edullm check --json` before `submit`, and **read `cost` and `approval_class` out of that output**. Do
+not take a price from this file; those live in reviewed configuration that changes without anybody being
+told. Match refusals on `code`, never on their prose.
 
 ### B. Entropy sweep × 3 seeds — the primary result
 

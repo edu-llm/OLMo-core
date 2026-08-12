@@ -944,6 +944,54 @@ def test_the_calibration_sweep_brackets_the_length_that_failed():
         C.mano_calibration_cells(("28M",), variant="both")
 
 
+def test_every_calibration_config_builds_its_streams():
+    """
+    **With streams, which is the part that matters.** ``with_streams=False`` skips ``BioStream``, so a cell
+    that cannot build one passes every check up to submission and then dies on the platform.
+
+    That is not hypothetical: the in-context calibration cells were first written with ``n_entities: 1``,
+    which satisfies the entropy axis's "positive count" rule and is refused by
+    ``EntityTable.name_codes``, whose name space needs at least two. Every structural assertion passed. A
+    ``--dry-run`` found it, four commits after it was introduced.
+
+    Also pins the two things a reader of the fanout has to trust: the filename ordering the index maps
+    through, and that every arm is iso-token so a depth response is not confounded with training length.
+    """
+    import tempfile
+
+    from factcrowd.corpus.build import BuiltCorpus
+
+    cells = C.load_cells(CONFIG_ROOT / "calibration")
+    assert [c.qualified_id for c in cells] == [
+        "p2_28m_ctxmanoL02",
+        "p2_28m_ctxmanoL03",
+        "p2_28m_ctxmanoL04",
+        "p2_28m_ctxmanoL05",
+        "p2_28m_manoL02",
+        "p2_28m_manoL03",
+        "p2_28m_manoL04",
+        "p2_28m_manoL05",
+        "p2_28m_manoL06",
+        "p2_28m_manoL08",
+        "p2_28m_manoL10",
+    ], "the fanout index maps by filename, so this ordering IS the submission"
+
+    widths = {}
+    for cell in cells:
+        resolved = cell.resolve()
+        with tempfile.TemporaryDirectory() as raw:
+            corpus = BuiltCorpus(resolved, Path(raw), split="train", with_streams=True)
+            (task,) = corpus.tasks
+            widths[cell.qualified_id] = task.tokens_per_item
+            # Every in-context item must tile the instance, or half of them are cut by a boundary.
+            if task.name == "ctxmano":
+                assert cell.sequence_length % task.tokens_per_item == 0
+                assert task.tokens_per_item == 256
+            # Iso-token across the sweep: a depth response must not also be a length response.
+            assert 0.999e9 < sum(s.num_tokens for s in corpus.task_streams) <= 1.0e9
+    assert set(widths.values()) == {256, 8, 10, 12, 14, 16, 20, 24}
+
+
 def test_the_compare_pools_are_disjoint_across_splits():
     """
     The leak that made `<compare>` unusable, closed by construction rather than by retuning.
