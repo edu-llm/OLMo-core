@@ -314,6 +314,27 @@ told. Match refusals on `code`, never on their prose.
 `mano_variant: both` so one run yields the confirmatory in-context endpoint, the secondary memorised one and
 the table probe. Token totals are recomputed in §7 for the extra reasoning slice.
 
+**Its configs are deliberately not committed, and that is the whole lesson of phase 1.** The block reads
+`ctxmano_length` and `mano_length` from §4.A's result, so writing them now would mean choosing the lengths
+before measuring them — which is precisely how eighteen cells came to be trained at a depth where the
+endpoint had no dynamic range. One line generates them once a length is frozen:
+
+```python
+cells.write_cells(
+    cells.replicate_block(
+        cells.entropy_sweep_cells(row="28M", mano_variant="both",
+                                  ctxmano_length=<calibrated>, mano_length=<calibrated>, phase="p2"),
+        3,
+    ),
+    ".../configs/cells/entropy_p2",
+)
+```
+
+Verified to produce 18 cells with distinct `qualified_id`s, and replicates that differ in **initialisation
+and data order only** — `seed` is held at 1234 across all three so the corpus is identical, while
+`init_seed` moves 1234 → 11207 → 21180. That is what makes the set a paired block and the per-seed slope
+the right inferential unit rather than a cell-level standard error 2.83× too small.
+
 First because it is the **identified** axis: iso-token by construction, so entity count, token budget and
 mixture are held and only entropy varies. Half the cost of the count axis at the same row, and three seeds
 make it the first block in this project capable of an equivalence or non-inferiority statement —
