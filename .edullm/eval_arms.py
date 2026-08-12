@@ -52,6 +52,7 @@ sys.path.insert(
 )
 
 import olmo_linear_attn  # noqa: E402,F401  (registers the linear_attention mixer)
+from _survive import survive  # noqa: E402
 from eval_long_context import (  # noqa: E402
     BASE_LEN,
     _eval_length,
@@ -107,6 +108,7 @@ def main() -> int:
     p.add_argument("--skip-niah", action="store_true")
     p.add_argument("--upload-to", default=None)
     opts, _ = p.parse_known_args()
+    survive(f"eval_arms_{opts.run_name}")
 
     arms = []
     for spec in opts.arms.split(","):

@@ -70,6 +70,7 @@ sys.path.insert(
 )
 
 import olmo_linear_attn  # noqa: E402,F401  (registers the "linear_attention" mixer)
+from _survive import survive  # noqa: E402
 from olmo_linear_attn import LinearAttentionConfig  # noqa: E402
 
 from olmo_core.data import TokenizerConfig  # noqa: E402
@@ -210,9 +211,29 @@ def time_arm(arm: str, seq_len: int, opts, device) -> Dict[str, Any]:
         # No `del` of the closed-over locals: `step` holds them in a cell, and the function
         # returns here anyway, so the `finally` below is what actually reclaims the memory.
         return out
-    except torch.cuda.OutOfMemoryError:
-        # A finding, not a failure. Where the quadratic arm stops fitting is half the point.
-        return {"arm": arm, "seq_len": seq_len, "oom": True}
+    except Exception as exc:  # noqa: BLE001 -- the message IS the result; see below
+        # AN OOM IS A FINDING, BUT ONLY IF IT SAYS SO. The first version caught
+        # torch.cuda.OutOfMemoryError and returned {"oom": True} with nothing else, and
+        # run_019ff657 then reported OOM for every cell INCLUDING L=1024 -- which cannot run a
+        # 45 GiB card out of memory with a 474M model. The reason was not out of view, it was
+        # discarded, so a wrong number was indistinguishable from a real limit.
+        #
+        # So: catch broadly, keep the exception's type and text, and decide whether it was a
+        # memory problem from the message rather than from the class. A CUDA OOM does not always
+        # arrive as OutOfMemoryError -- it surfaces as a plain RuntimeError from some kernels,
+        # and as a different class again from an allocator hook.
+        text = f"{type(exc).__name__}: {exc}"
+        looks_like_oom = any(
+            w in text.lower() for w in ("out of memory", "outofmemory", "cuda error: out")
+        )
+        print(f"    !! {arm} L={seq_len}: {text[:300]}", flush=True)
+        return {
+            "arm": arm,
+            "seq_len": seq_len,
+            "oom": looks_like_oom,
+            "error": text[:1000],
+            "failed": True,
+        }
     finally:
         gc.collect()
         torch.cuda.empty_cache()
@@ -236,6 +257,7 @@ def main() -> int:
     p.add_argument("--compile", action="store_true", default=False)
     p.add_argument("--output", default=None)
     opts = p.parse_args()
+    survive(f"bench_attn_vs_linear_{opts.run_name}")
 
     if not torch.cuda.is_available():
         print("FATAL no CUDA device; this benchmark measures a GPU")
@@ -285,16 +307,25 @@ def main() -> int:
         r_lin = find("reverse", "linear", L)
         if not f_full or not f_lin:
             continue
-        v_oom, l_oom = f_full["oom"], f_lin["oom"]
-        v = "OOM" if v_oom else f"{f_full['tokens_per_s']:,.0f}"
-        ln = "OOM" if l_oom else f"{f_lin['tokens_per_s']:,.0f}"
-        sp = "-" if (v_oom or l_oom) else f"{f_lin['tokens_per_s'] / f_full['tokens_per_s']:.2f}x"
-        vg = "-" if v_oom else f"{f_full['peak_gib']:.2f}"
-        lg = "-" if l_oom else f"{f_lin['peak_gib']:.2f}"
+        v_oom, l_oom = f_full.get("oom", False), f_lin.get("oom", False)
+
+        def cell(rec, oom):
+            if oom:
+                return "OOM"
+            if rec.get("failed"):
+                return "ERR"  # broke for a reason that was not memory; see `error` in the JSON
+            return f"{rec['tokens_per_s']:,.0f}"
+
+        v = cell(f_full, v_oom)
+        ln = cell(f_lin, l_oom)
+        bad = f_full.get("failed") or f_lin.get("failed")
+        sp = "-" if bad else f"{f_lin['tokens_per_s'] / f_full['tokens_per_s']:.2f}x"
+        vg = "-" if f_full.get("failed") else f"{f_full['peak_gib']:.2f}"
+        lg = "-" if f_lin.get("failed") else f"{f_lin['peak_gib']:.2f}"
         # drift: how much the reversed pass moved the same arm. If this rivals `speedup`,
         # order effects are the size of the effect and the comparison is not clean.
         drift = "-"
-        if r_lin and not r_lin["oom"] and not l_oom:
+        if r_lin and not r_lin.get("failed") and not f_lin.get("failed"):
             drift = (
                 f"{abs(r_lin['tokens_per_s'] - f_lin['tokens_per_s']) / f_lin['tokens_per_s']:.1%}"
             )
@@ -311,6 +342,17 @@ def main() -> int:
     with open(out, "w") as f:
         json.dump({"opts": vars(opts), "results": results}, f, indent=2)
     print(f"\nwrote {out}")
+    prefix = os.environ.get("EDULLM_OUTPUT_PREFIX")
+    if prefix:
+        # The JSON holds every cell's error text and per-step timings, which the fifty-line
+        # window cannot. Uploading it is what makes a failed sweep diagnosable after the fact.
+        try:
+            from olmo_core.io import upload
+
+            upload(out, f"{prefix.rstrip('/')}/bench_attn_vs_linear.json", save_overwrite=True)
+            print(f"uploaded -> {prefix.rstrip('/')}/bench_attn_vs_linear.json")
+        except Exception as exc:  # noqa: BLE001
+            print(f"upload failed (results are still in the log): {exc}")
     return 0
 
 
