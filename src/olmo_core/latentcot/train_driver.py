@@ -252,21 +252,39 @@ def load_checkpoint(model, path: str, *, strict: bool = True) -> None:
     ``train_codi.py``) or an OLMo-core checkpoint directory/URL — local **or remote**
     (e.g. ``s3://…``, loaded via ``load_model_and_optim_state`` with ``pre_download``).
 
-    Used to fork every arm from the shared base checkpoint (the "best model").
+    Used to fork every arm from the shared base checkpoint (the "best model"), and to read a
+    finished arm's own ``model.pt``/``stepN.pt`` back for evaluation.
 
-    A checkpoint *directory* is probed for both layouts OLMo-core writes, because
-    ``load_model_and_optim_state`` only reads ``<dir>/.metadata`` while ``Checkpointer`` saves
-    the sharded state under ``<dir>/model_and_optim/`` — see
-    :meth:`~olmo_core.train.checkpoint.Checkpointer.dir_is_checkpoint`, which checks both. Passing
-    a step directory saved the second way otherwise fails with "is not a distributed checkpoint
-    folder", which is what killed run ``run_019fde62`` twelve seconds in.
+    Three layouts are handled, in this order:
 
-    :raises FileNotFoundError: If neither layout is present, naming both prefixes probed. Note
-        that S3 reads through ``cached_path`` surface a denied read as a missing file, so this
-        can equally mean "no permission" — check the grant before assuming the path is wrong.
+    1. A **local** file — loaded straight through ``torch.load``.
+    2. A **remote single file** ending ``.pt`` — staged locally by ``cached_path`` first. This
+       case needs its own branch because :class:`pathlib.Path` mangles a URI, so
+       ``Path("s3://b/k/model.pt").is_file()`` is ``False`` for a file that certainly exists and
+       the plain-state_dict branch above can never fire for one. Without it, every ``stepN.pt``
+       an arm mirrored to S3 was unreadable and reported as a missing *distributed* checkpoint,
+       which is a misleading way to say "wrong kind of path".
+    3. A checkpoint **directory**, probed for both layouts OLMo-core writes, because
+       ``load_model_and_optim_state`` only reads ``<dir>/.metadata`` while ``Checkpointer`` saves
+       the sharded state under ``<dir>/model_and_optim/`` — see
+       :meth:`~olmo_core.train.checkpoint.Checkpointer.dir_is_checkpoint`, which checks both.
+       Passing a step directory saved the second way otherwise fails with "is not a distributed
+       checkpoint folder", which is what killed run ``run_019fde62`` twelve seconds in.
+
+    :raises FileNotFoundError: If neither directory layout is present, naming both prefixes
+        probed. Note that S3 reads through ``cached_path`` surface a denied read as a missing
+        file, so this can equally mean "no permission" — check the grant before assuming the
+        path is wrong.
     """
     if Path(str(path)).is_file():
         model.load_state_dict(torch.load(path, map_location="cpu"), strict=strict)
+        return
+
+    if is_remote(path) and str(path).endswith(".pt"):
+        from cached_path import cached_path
+
+        local = cached_path(str(path), quiet=True)
+        model.load_state_dict(torch.load(local, map_location="cpu"), strict=strict)
         return
 
     from olmo_core.distributed.checkpoint import load_model_and_optim_state

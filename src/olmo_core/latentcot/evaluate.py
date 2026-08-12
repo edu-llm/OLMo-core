@@ -33,10 +33,13 @@ __all__ = [
     "codi_answer_margin_fn",
     "solve_rate_by_depth",
     "overall_accuracy",
+    "solve_rates_and_overall",
     "gate_a_curve",
     "linear_slope",
     "inference_token_cost",
     "mean_decodability",
+    "eval_one_arm",
+    "assemble_gates",
     "run_eval",
 ]
 
@@ -154,6 +157,40 @@ def overall_accuracy(model, examples, arm_mode: str) -> float:
     return correct / len(examples)
 
 
+@torch.no_grad()
+def solve_rates_and_overall(
+    model, examples, arm_mode: str, **kwargs
+) -> Tuple[float, Dict[int, float]]:
+    """
+    Both accuracy figures from **one** pass over ``examples``.
+
+    :func:`overall_accuracy` and :func:`solve_rate_by_depth` each walk the whole set, so asking
+    for both predicts every example twice for numbers that come from the same counts -- the
+    overall rate is just the depth-bucketed counts summed before dividing. On ``explicit_cot``,
+    where one prediction is an entire greedy generation with no KV cache, that second walk is
+    the single largest avoidable cost in an eval.
+
+    Both are kept as public functions: they are the readable thing to call for one number, and
+    other callers already pin them.
+
+    :param model: The model to evaluate.
+    :param examples: Encoded test examples.
+    :param arm_mode: One of the :data:`ARM_MODES` values.
+    :param kwargs: Forwarded to :func:`predict_reachable` (e.g. ``max_new_tokens``).
+
+    :returns: ``(overall_accuracy, solve_rate_by_depth)``.
+    """
+    correct: Dict[int, int] = defaultdict(int)
+    total: Dict[int, int] = defaultdict(int)
+    for ex in examples:
+        total[ex["depth"]] += 1
+        correct[ex["depth"]] += int(
+            predict_reachable(model, ex, arm_mode, **kwargs) == ex["reachable"]
+        )
+    overall = sum(correct.values()) / sum(total.values())
+    return overall, {d: correct[d] / total[d] for d in sorted(total)}
+
+
 def gate_a_curve(continuous: Dict[int, float], discrete: Dict[int, float]) -> Dict[int, float]:
     """``acc_continuous(D) - acc_discrete(D)`` for depths present in both."""
     return {d: continuous[d] - discrete[d] for d in sorted(continuous) if d in discrete}
@@ -207,28 +244,41 @@ def mean_decodability(model, examples) -> float:
     return sum(values) / len(values)
 
 
-def run_eval(models_by_arm: Dict[str, Any], examples) -> dict:
+def eval_one_arm(model, examples, arm: str, **kwargs) -> dict:
     """
-    Run the full evaluation for the arms whose models are provided.
+    Build one arm's report entry: accuracy, solve-rate-by-depth, and decodability for CODI arms.
 
-    :param models_by_arm: e.g. ``{"A0": model, "A2": model, "A3": model, ...}``.
-    :returns: A report dict with per-arm accuracy / solve-rate-by-depth / decodability,
-        the gate-A curve + slope (continuous A2 minus discrete A0), and the gate-B table
-        (A2/A3/A4 accuracy + decodability).
+    :param model: The model for this arm. Put into ``eval()`` mode here.
+    :param examples: Encoded test examples.
+    :param arm: Arm name, used to look up its mode in :data:`ARM_MODES`.
+    :param kwargs: Forwarded to :func:`predict_reachable` (e.g. ``max_new_tokens``).
+
+    :returns: The per-arm entry.
     """
-    per_arm: Dict[str, dict] = {}
-    for arm, model in models_by_arm.items():
-        mode = ARM_MODES[arm]
-        model.eval()
-        entry = {
-            "mode": mode,
-            "overall_acc": overall_accuracy(model, examples, mode),
-            "solve_rate_by_depth": solve_rate_by_depth(model, examples, mode),
-        }
-        if mode == "codi":
-            entry["decodability"] = mean_decodability(model, examples)
-        per_arm[arm] = entry
+    mode = ARM_MODES[arm]
+    model.eval()
+    overall, by_depth = solve_rates_and_overall(model, examples, mode, **kwargs)
+    entry = {"mode": mode, "overall_acc": overall, "solve_rate_by_depth": by_depth}
+    if mode == "codi":
+        entry["decodability"] = mean_decodability(model, examples)
+    return entry
 
+
+def assemble_gates(per_arm: Dict[str, dict]) -> dict:
+    """
+    Assemble both gates from whatever per-arm entries exist.
+
+    Split out of :func:`run_eval` so a caller evaluating arms one at a time -- to hold one model
+    in memory rather than all five, or to publish a partial report after each arm -- produces a
+    report of exactly the same shape.
+
+    Gate A needs **both** A2 and A0 and is simply absent otherwise; gate B reports whichever of
+    A2/A3/A4 are present and is an empty mapping when none are. So a report over only the A0/A1
+    anchors carries no gate at all, which is a real outcome rather than an error.
+
+    :param per_arm: Per-arm entries from :func:`eval_one_arm`.
+    :returns: A report dict with ``per_arm``, optional ``gate_a``, and ``gate_b``.
+    """
     report: dict = {"per_arm": per_arm}
     if "A2" in per_arm and "A0" in per_arm:
         curve = gate_a_curve(
@@ -241,3 +291,19 @@ def run_eval(models_by_arm: Dict[str, Any], examples) -> dict:
         if arm in per_arm
     }
     return report
+
+
+def run_eval(models_by_arm: Dict[str, Any], examples, **kwargs) -> dict:
+    """
+    Run the full evaluation for the arms whose models are provided.
+
+    :param models_by_arm: e.g. ``{"A0": model, "A2": model, "A3": model, ...}``.
+    :param kwargs: Forwarded to :func:`predict_reachable` (e.g. ``max_new_tokens``).
+    :returns: A report dict with per-arm accuracy / solve-rate-by-depth / decodability,
+        the gate-A curve + slope (continuous A2 minus discrete A0), and the gate-B table
+        (A2/A3/A4 accuracy + decodability).
+    """
+    per_arm = {
+        arm: eval_one_arm(model, examples, arm, **kwargs) for arm, model in models_by_arm.items()
+    }
+    return assemble_gates(per_arm)
