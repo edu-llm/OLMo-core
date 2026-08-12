@@ -208,6 +208,26 @@ def score_checkpoint(
                 floor_sample=floor_sample,
             )
         )
+    # THE DEFAULT COHORT IS CONTAMINATED WHERE `<compare>` EXISTS, AND ONLY THERE. `<compare>` states
+    # `min(year(A), year(B)) = Y` about entities drawn from the probe window, which is direct birth-year
+    # supervision -- measured at 328x chance for `birth_year` against 1.1x for the best other attribute. The
+    # bit cohort starts at `entity_offset`, so at the default 0 it *is* that window.
+    #
+    # Not changed to a nonzero default, because a cell with few entities has no uncontaminated window to
+    # move into and would start failing instead. Not silent either: the entropy axis carries no `<compare>`
+    # at all, so the primary block is unaffected and a blanket warning would be noise. Warned exactly where
+    # it applies.
+    probe_window = 0 if loaded.corpus.table is None else int(loaded.corpus.table.probe_ids.size)
+    if "compare" in loaded.resolved.spec.reasoning_slice_names and bit_offset < probe_window:
+        log.warning(
+            "cell %s carries <compare>, whose items state a birth year about entities 0..%d, and the bit "
+            "cohort starts at %d -- so it overlaps that window and birth_year is directly supervised. Pass "
+            "--bit-offset %d for an uncontaminated cohort from the same checkpoints.",
+            loaded.resolved.spec.cell_id,
+            probe_window - 1,
+            bit_offset,
+            probe_window,
+        )
     achieved = bits_module.score_checkpoint(
         loaded,
         forward,

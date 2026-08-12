@@ -99,6 +99,18 @@ run §5.2 first.
 
 ---
 
+### The default bit cohort is the one `<compare>` contaminates
+
+`--bit-offset` defaults to 0, and entities 0–24,999 are exactly the `<compare>` probe window — whose items
+state `min(year(A), year(B)) = Y`, which is direct birth-year supervision. Measured on `13m_d2p4`:
+`birth_year` reconstructs at **328× chance** where the best other attribute manages 1.1×.
+
+**Not changed to a nonzero default**, because a cell with few entities has no uncontaminated window to move
+into and would start failing rather than start being right. **Not left silent either.** The entropy axis
+carries no `<compare>` at all, so the primary block is unaffected and a blanket warning would be noise;
+`score_run` now warns exactly where the cell carries `<compare>` *and* the cohort overlaps the window, and
+names the offset to pass instead.
+
 ### The depth sweep gave shallow arms three times the examples of deep ones
 
 The worst of the defects found, because it was in the experiment that gates every other one.
