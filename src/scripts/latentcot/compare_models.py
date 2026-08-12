@@ -2,7 +2,7 @@
 Benchmark our latent-CoT arms against the "best model" baseline (PRD Phase 6, head-to-head).
 
 The "best model" is a general pretrained OLMo-370M checkpoint
-(``s3://edullm-olmo-370m-ckpts/olmo3-370m/run-10b-equal/step12716/``,
+(``s3://edullm-checkpoints/olmo-370m/olmo3-370m/run-10b-equal/step12716/``,
 W&B run ``f08ey8cm``). Per the experiment design, it does **not** appear zero-shot — it has
 never seen our symbolic graph-reachability format and would score ~chance. Instead every arm
 is *forked from it* (``train_codi.py --rung olmo3_370M --init-checkpoint s3://…``), and the

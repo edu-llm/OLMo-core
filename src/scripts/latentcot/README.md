@@ -34,7 +34,7 @@ A0; Gate B = A3 > A2 *and* A3 > A4. See the PRD TL;DR for the full statement.
 
 ```bash
 # 1. pre-flight (S3 needs AWS creds; --device auto-detects cuda)
-verify_checkpoint.py --init-checkpoint s3://edullm-olmo-370m-ckpts/olmo3-370m/run-10b-equal/step12716/ --model olmo3_370M
+verify_checkpoint.py --init-checkpoint s3://edullm-checkpoints/olmo-370m/olmo3-370m/run-10b-equal/step12716/ --model olmo3_370M
 preflight.py
 
 # 2. train each arm x seed, all forking the shared best model

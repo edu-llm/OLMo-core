@@ -18,7 +18,7 @@ nothing has exercised yet:
 Usage::
 
     .venv/bin/python src/scripts/latentcot/verify_checkpoint.py \
-        --init-checkpoint s3://edullm-olmo-370m-ckpts/olmo3-370m/run-10b-equal/step12716/ \
+        --init-checkpoint s3://edullm-checkpoints/olmo-370m/olmo3-370m/run-10b-equal/step12716/ \
         --model olmo3_370M     # S3 needs AWS creds; --device auto-detects cuda
 
     # or dry-run the forward path with no checkpoint (random init):
@@ -31,7 +31,13 @@ import torch
 
 from olmo_core.latentcot.cot import embed_tokens, run_continuous_thoughts
 from olmo_core.latentcot.tokens import TOKENIZER_CONFIG
-from olmo_core.latentcot.train_driver import load_checkpoint, resolve_device
+from olmo_core.latentcot.train_driver import (
+    PRECISIONS,
+    autocast_ctx,
+    configure_precision,
+    load_checkpoint,
+    resolve_device,
+)
 from olmo_core.nn.transformer import TransformerConfig
 
 
@@ -49,13 +55,23 @@ def main() -> None:
         "--device", default="auto", help="'auto' (cuda if available else cpu), 'cuda', or 'cpu'"
     )
     parser.add_argument(
+        "--precision",
+        default="bf16",
+        choices=PRECISIONS,
+        help="the dtype the forwards below run under, defaulting to what the arms train in. "
+        "flash_2 accepts fp16 and bf16 only and raises on fp32, so an unwrapped forward on an "
+        "olmo3_* model fails inside the kernel -- which is what run_019fecf1 hit, after the "
+        "checkpoint had already strict-loaded. Pass fp32 only with --attn-backend torch.",
+    )
+    parser.add_argument(
         "--attn-backend",
         default=None,
         choices=["torch", "flash_2", "flash_3", "flash_4", "te"],
         help="override the attention backend. The olmo3_* factories hardcode flash_2, which "
-        "raises at construction on an image without flash-attn (the eduLLM research image has "
-        "none) -- pass 'torch' there. Same attention math, different kernel; the 4096 sliding "
-        "window is a no-op at our ~300-token sequences.",
+        "raises at construction on an image without flash-attn -- pass 'torch' there. The "
+        "eduLLM research image carries the wheel since .edullm/Dockerfile added it, so this "
+        "is for local CPU work rather than for the platform. Same attention math, different "
+        "kernel; the 4096 sliding window is a no-op at our ~300-token sequences.",
     )
     args = parser.parse_args()
 
@@ -77,10 +93,11 @@ def main() -> None:
         print("no --init-checkpoint: testing the forward path on random init")
 
     model.to(device)
+    configure_precision(args.precision, device)
 
     # 1. plain forward
     model.eval()
-    with torch.no_grad():
+    with torch.no_grad(), autocast_ctx(args.precision, device):
         ids = torch.randint(0, vocab, (1, args.seq_len), device=device)
         logits = model(ids)
     assert logits.shape == (1, args.seq_len, vocab), logits.shape
@@ -90,8 +107,12 @@ def main() -> None:
     model.train()
     k = args.num_continuous_thoughts
     prefix_ids = torch.randint(0, vocab, (1, args.seq_len), device=device)
-    prefix_embeds = embed_tokens(model, prefix_ids)
-    thoughts, embeds = run_continuous_thoughts(model, prefix_embeds, k)
+    # The forward under autocast and the backward outside it, which is what
+    # train_driver.autocast_ctx documents: autograd replays each op in the dtype it ran in,
+    # so wrapping the backward as well would be redundant and is not what the arms do.
+    with autocast_ctx(args.precision, device):
+        prefix_embeds = embed_tokens(model, prefix_ids)
+        thoughts, embeds = run_continuous_thoughts(model, prefix_embeds, k)
     d_model = prefix_embeds.shape[-1]
     assert thoughts.shape == (1, k, d_model), thoughts.shape
     assert embeds.shape == (1, args.seq_len + k, d_model), embeds.shape

@@ -79,7 +79,7 @@ the pre-registration gate, or the arms train on nothing:
 bash -lc 'EDULLM_LAUNCH_CHECK=waived
 set -uo pipefail
 DATA=data/latentcot/graph-reachability-depth/conversations
-BASE=s3://edullm-olmo-370m-ckpts/olmo3-370m/run-10b-equal/step12716/
+BASE=s3://edullm-checkpoints/olmo-370m/olmo3-370m/run-10b-equal/step12716/
 python src/scripts/latentcot/gen_graph_data.py
 python src/scripts/latentcot/preflight.py \
   --train-data $DATA/train-00000.jsonl --test-data $DATA/heldout-00000.jsonl || exit 1
@@ -196,7 +196,7 @@ baseline), `A1` no-CoT, `A2` CODI, `A3` CODI+R1 (the fix), `A4` CODI+L2 (control
 
 ```bash
 DATA=data/latentcot/graph-reachability-depth/conversations
-BASE=s3://edullm-olmo-370m-ckpts/olmo3-370m/run-10b-equal/step12716/  # needs AWS creds
+BASE=s3://edullm-checkpoints/olmo-370m/olmo3-370m/run-10b-equal/step12716/  # needs AWS creds
 SEED=1                       # pilot: one seed, identical for every arm
 for arm in A0 A1 A2 A3 A4; do
   .venv/bin/python src/scripts/latentcot/train_codi.py \
@@ -305,7 +305,7 @@ fix that LR for all arms in the seeded sweep. `--lr`/`--warmup-steps` are record
 
 ## 4b. Benchmark vs the "best model"
 Head-to-head against the general pretrained 370M baseline
-(`s3://edullm-olmo-370m-ckpts/olmo3-370m/run-10b-equal/step12716/`, W&B run `f08ey8cm`). The
+(`s3://edullm-checkpoints/olmo-370m/olmo3-370m/run-10b-equal/step12716/`, W&B run `f08ey8cm`). The
 baseline is **not** run zero-shot — it never saw our graph format and would score ~chance.
 Instead every arm forks it as the shared init (§3, `--rung olmo3_370M --init-checkpoint s3://…`),
 and **A0** = that best model fine-tuned the *normal* way (explicit CoT, no continuous thoughts,
@@ -348,7 +348,7 @@ would violate the §11 pre-registration terms.
 - `train_codi.py` builds from a seeded init by default (no external base checkpoint needed); pass
   `--init-checkpoint <state_dict.pt | dir | s3://…>` if you have a shared pretrained base (use the
   SAME file for every arm) — e.g. the best model
-  `s3://edullm-olmo-370m-ckpts/olmo3-370m/run-10b-equal/step12716/` with `--rung olmo3_370M`.
+  `s3://edullm-checkpoints/olmo-370m/olmo3-370m/run-10b-equal/step12716/` with `--rung olmo3_370M`.
   `load_checkpoint` handles a plain `.pt` state_dict or a local/S3 OLMo-core checkpoint dir (S3
   needs AWS creds). Either way, keep `--init-seed` identical across arms.
 - Publishing the dataset to the platform is separate (`publish_dataset.py`, needs AWS creds) and
