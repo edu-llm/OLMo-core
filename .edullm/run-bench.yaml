@@ -1,0 +1,41 @@
+# EFFICIENCY: VANILLA SOFTMAX ATTENTION vs PLAIN LINEAR ATTENTION, ONE CARD.
+#
+#   edullm check  --spec .edullm/run-bench.yaml --experiment gdn-family-eval --dataset none
+#   edullm submit --spec .edullm/run-bench.yaml --experiment gdn-family-eval --dataset none
+#
+# --dataset none, and it is a statement rather than an omission: this benchmark reads no corpus
+# and needs no checkpoint. Step time, throughput and peak memory do not depend on what a weight
+# contains, so both arms are randomly initialised and nothing here waits on the checkpoint hunt.
+#
+# gpu-1xl40s AT 45,776 MiB IS THE CHOICE, and the reason is the shape of the question. The point
+# of this benchmark is where the quadratic arm stops being affordable, so the useful card is the
+# largest single one this account can start -- an A10G at 22,888 MiB would hit its ceiling a
+# sequence-length step or two earlier and truncate the interesting end of the sweep. It places
+# after a wait rather than instantly; `edullm check --json` prints what that wait has been.
+#
+# ONE CARD RATHER THAN EIGHT, DELIBERATELY. Nothing here is distributed: adding ranks would add
+# FSDP collectives to both arms and measure the interconnect, which the A100 playbook's own
+# headline says dominates everything else by 7.9x. A single card is what isolates the mixer.
+#
+# olmo-core-check: one attempt, and nothing worth resuming. The launcher check does not fire
+# because the command starts one process on a one-card shape, which is the right count.
+#
+# NO DTYPE TOKEN IN THE COMMAND, and that is correct here rather than an oversight. The script
+# casts both arms to bfloat16 in code, identically, and the shape is an L40S -- Ada, which has
+# bfloat16 in hardware. The precision guard exists to stop a bfloat16 run reaching a T4; naming
+# a dtype on a command that cannot land on one would be noise. If this spec is ever pointed at a
+# T4 shape, the cast in the script is what has to change, not this line.
+#
+# TRITON_F32_DEFAULT=ieee because the linear arm's kernel is Triton (fla.ops.linear_attn) and
+# Triton lowers tl.dot to TF32 on Ampere+ by its own default, which torch's allow_tf32=False does
+# not reach. Playbook B9. It matters less for a timing run than for a training one -- but a
+# benchmark whose two arms run at different effective precisions is not a fair benchmark, and
+# the softmax arm goes through SDPA where torch's own TF32 setting applies.
+schema_version: 1
+workload_profile: olmo-core-check
+suggested_compute: gpu-1xl40s
+command: >-
+  bash -lc 'export TRITON_F32_DEFAULT=ieee &&
+  python .edullm/bench_attention_vs_linear.py "$EDULLM_RUN_ID"
+  --seq-lens 1024,2048,4096,8192,16384,32768,65536
+  --batch-tokens 16384 --warmup 20 --steps 50'
