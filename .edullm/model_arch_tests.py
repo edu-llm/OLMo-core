@@ -89,7 +89,7 @@ log = logging.getLogger(__name__)
 ARMS = (
     "mamba-b3",
     "xlstm",
-    "mamba3-siso-pd",
+    "mamba3-pd",
     "native-pd",
     "gdn",
     "kda",
@@ -114,7 +114,7 @@ INIT_SEEDS_BY_ARM = {
         240028: 143029,
         250035: 153036,
     },
-    "mamba3-siso-pd": {
+    "mamba3-pd": {
         210007: 116009,
         220014: 126016,
         230021: 136023,
@@ -185,8 +185,8 @@ PARAMETER_TOLERANCE = 195_068
 EXACT_PARAMETER_COUNTS = {
     "mamba-b3": 390_154_112,
     "xlstm": 390_143_056,
-    "mamba3-siso-pd": 390_169_664,
-    "native-pd": 390_142_976,
+    "mamba3-pd": 390_170_432,
+    "native-pd": 390_143_744,
     "gdn": 390_119_360,
     "kda": 390_119_360,
     "kda-hh-r2": 390_119_360,
@@ -238,7 +238,7 @@ WEIGHT_DECAY_EXEMPT_PATTERNS_BY_ARM: dict[str, tuple[str, ...]] = {
     # gates toward zero -- an input gate at -10 exists to start closed, and 0.01 of weight
     # decay is a force pushing it open. Every other arm in this table exempts its equivalent.
     "xlstm": ("*.w_if.bias", "*._bias_"),
-    "mamba3-siso-pd": ("*.A_log", "*.dt_bias", "*.D"),
+    "mamba3-pd": ("*.A_log", "*.dt_bias", "*.D"),
     "native-pd": ("*.A_log", "*.dt_bias", "*.D"),
     "gdn": ("*.A_log", "*.dt_bias"),
     "kda": ("*.A_log", "*.dt_bias"),
@@ -568,8 +568,9 @@ def _treatment_mixer(arm: str, layer_index: int):
             # 64, MEASURED, NOT THE 128 THIS ARM WAS FIRST WRITTEN WITH. `paper_backward` took
             # 2.98-3.00 ms a layer-step at 128 against 2.59-2.72 ms at 64, with the forwards
             # level: about 0.3 ms a layer-step across twelve layers. The chunk blocks the scan
-            # and shapes no weight, so this moved no parameter -- the arm's solved widths and
-            # its 390,142,976 exact count are the ones the four-arm study was described with,
+            # and shapes no weight, so this moved no parameter -- the arm's solved widths are
+            # the ones the four-arm study was described with (the exact count later moved by the
+            # 768 weights of the output norm below, which is a weight and not a chunk),
             # and `test_native_pd_chunk_size_is_64_and_the_change_shaped_no_weights` asserts
             # exactly that rather than leaving it assumed.
             chunk_size=64,
@@ -578,9 +579,25 @@ def _treatment_mixer(arm: str, layer_index: int):
             backend=NativePDBackend.CUDA,
             conv_kernel_size=4,
             fuse_input_projections=False,
+            # THE ONLY ARM THAT NORMALIZED NOTHING. As published, this block computes
+            # `out_proj(y * silu(gate))`: it gates, but no norm stands anywhere between the
+            # residual stream and the output projection. Every one of its seven peers has one --
+            # `gdn` and the three KDA arms through `fla`'s `FusedRMSNormGated`, `mamba-b3`
+            # through norm-before-gate, `mamba3-pd` through this same flag -- and the shape here
+            # is theirs: RMS over `d_state` within a head, then the gate, then `out_proj`.
+            #
+            # Measured on the readout entering `out_proj`, at input x1/x10/x100: 0.000, 0.030,
+            # 3.973 without it against 0.075, 1.112, 12.705 with it. Two separate defects show
+            # up in that row. The unnormalized branch grows about quadratically, because the
+            # readout and the gate both scale with the input, and at x1 it is not merely small
+            # but arithmetically dead -- this arm spends early training with its recurrence
+            # contributing almost nothing. Normalized, the growth is linear and the branch
+            # carries unit-scale signal from step 0.
+            output_norm=True,
+            norm_eps=1e-6,
             dtype=MASTER_DTYPE,
         )
-    if arm == "mamba3-siso-pd":
+    if arm == "mamba3-pd":
         return NativeFlashPDMamba3SISOMixerConfig(
             n_heads=16,
             d_state=64,
@@ -592,29 +609,39 @@ def _treatment_mixer(arm: str, layer_index: int):
             backend=NativePDBackend.CUDA,
             bc_norm=True,
             norm_eps=1e-6,
-            output_norm=False,
+            # On, for the reason spelled out on `native-pd`: this is the gated output RMSNorm
+            # that GDN, KDA, and faithful mamba-b3 all carry, and this arm already had the flag
+            # and was the only Mamba-3 descendant leaving it off.
+            output_norm=True,
             fuse_input_projections=False,
             dtype=MASTER_DTYPE,
         )
     raise ValueError(f"unsupported arm: {arm}")
 
 
-# Every arm feeds its mixer the reordered (post-)norm block that the wave was frozen with, except
-# the two whose recurrences are documented to want a normalized input.
+# WHICH ARMS SEE A NORMALIZED INPUT, AND WHY IT IS NOT AN ARBITRARY SPLIT.
 #
-# `mamba-b3`: published Mamba is pre-norm, and the fidelity audit found that feeding the raw
-# residual stream through a post-norm shell was one of this arm's deviations.
+# `reordered_norm` computes `x + norm(f(x))`, so the residual path stays an identity and the mixer
+# is handed the RAW residual stream, whose magnitude grows with depth. That is free for a mixer
+# that normalizes its own inputs and expensive for one that does not, which is exactly how this
+# list divides.
 #
-# `xlstm`: the A/B run while chasing the step-1 NaN put 132 non-finite parameter gradients on the
-# post-norm shell against none on pre-norm at the same sequence length. The mlstm-kernels chunk-256
-# defect turned out to be the primary cause and the arm now trains cleanly either way, but post-norm
-# was plainly the amplifier, and leaving the one arm we have direct evidence against in the shell we
-# rejected for Mamba is an asymmetry rather than a control.
+# THE FOUR THAT NEED IT. `mamba-b3` and `xlstm` are here on direct evidence: the xLSTM shell A/B
+# measured 132 non-finite parameter gradients on post-norm against none on pre-norm, and the A100
+# rerun then scored 3.5582 against 3.7124 on an identical seed -- 0.154 nats for free. `native-pd`
+# and `mamba3-pd` join them because they are the remaining arms with no q/k normalization: their
+# reference lineage is pre-norm too, and they are the only ones left exposed to the raw stream.
+#
+# THE FOUR THAT DO NOT. `gdn` and the three KDA arms L2-normalize q and k, which both papers state
+# is a stability measure in as many words -- "L2 normalization applied to q, k for training
+# stability" (Gated DeltaNet) and "normalized using L2Norm to ensure eigenvalues stability" (Kimi
+# Delta Attention) -- and both add a gated output RMSNorm. They are invariant to the input scale by
+# construction, so the shell cannot reach them and moving them would buy nothing.
 #
 # The switch is free in both senses: reordered_norm and default carry the same two norms and the
 # same parameters, so no count or FFN width moves, and a paired block benchmark put the two within
 # 0.5% -- well inside the run-to-run spread -- so no throughput is traded for it either.
-_PRE_NORM_ARMS = frozenset({"mamba-b3", "xlstm"})
+_PRE_NORM_ARMS = frozenset({"mamba-b3", "xlstm", "native-pd", "mamba3-pd"})
 
 
 def _block_type(arm: str) -> TransformerBlockType:

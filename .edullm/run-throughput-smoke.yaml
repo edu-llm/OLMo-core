@@ -18,7 +18,7 @@ command: >-
   bash -lc 'export TRITON_F32_DEFAULT=ieee PYTHONDONTWRITEBYTECODE=1
   TORCH_LOGS=graph_breaks,recompiles &&
   I=${AWS_BATCH_JOB_ARRAY_INDEX:-0} &&
-  ARMS=(mamba-b3 xlstm mamba3-siso-pd native-pd gdn kda kda-hh-r2 kda-gconv) &&
+  ARMS=(mamba-b3 xlstm mamba3-pd native-pd gdn kda kda-hh-r2 kda-gconv) &&
   ISEEDS=(110007 113008 116009 119010 122011 125012 128013 131014) &&
   python -m torch.distributed.run --nproc-per-node=8 --standalone
   .edullm/train_core6_arm.py "$EDULLM_RUN_ID"

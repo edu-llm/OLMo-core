@@ -9,7 +9,7 @@ training recipe, which recurrent architecture offers the best held-out
 cross-entropy, steady-state training throughput, and peak-memory trade-off?
 
 The control is `mamba-b3`. The treatments are `xlstm`,
-`mamba3-siso-pd`, `native-pd`, `gdn`, `kda`, `kda-hh-r2`, and `kda-gconv`.
+`mamba3-pd`, `native-pd`, `gdn`, `kda`, `kda-hh-r2`, and `kda-gconv`.
 
 ## Frozen design
 
@@ -19,8 +19,8 @@ eight arms. Init seeds are not paired across arms because the parameter names,
 shapes, and draw order differ.
 
 Every cell consumes exactly 599,785,472 tokens: 1,144 steps at global batch
-524,288. The exact models contain 390,094,784–390,169,664 parameters, giving
-TPP 1.53724–1.53754. This matches the measured mixer-bakeoff Run 1 budget;
+524,288. The exact models contain 390,094,784–390,170,432 parameters, giving
+TPP 1.53723–1.53754. This matches the measured mixer-bakeoff Run 1 budget;
 its original 1,907-step plan would have been TPP about 2.56, and the later
 3,721-step Run 2 used TPP about 5. Sequence length is 4096 and every cell uses eight A100
 GPUs, BF16 parameters, FP32 gradient reduction, compilation, the same
@@ -42,7 +42,7 @@ LIV-style depthwise-gated. Each differs from `kda` in one mechanism, so a
 `kda-hh-r2 − kda-gconv` difference is not and will not be reported as one.
 
 Weight decay is uniform across the arms. Every arm exempts the timescale
-parameters it has and names none it lacks: `mamba3-siso-pd` and `native-pd`
+parameters it has and names none it lacks: `mamba3-pd` and `native-pd`
 exempt `A_log`, `dt_bias`, and `D`; `mamba-b3`, `gdn`, and the three KDA arms
 exempt `A_log` and `dt_bias`, having no `D`; `xlstm` exempts nothing beyond the
 embeddings, because neither of its recurrences carries such a parameter. The
@@ -184,3 +184,35 @@ submission, so any later replacement is a documented deviation.
   comparable with the four-arm study already described off them. It does mean
   `native-pd`'s throughput endpoint is not comparable with any figure measured
   on the earlier chunk.
+- After the 24-cell wave and before the rerun, four arms moved from the
+  reordered post-norm shell to the pre-norm one, and the two PD arms gained a
+  head-wise gated output RMSNorm. `mamba3-siso-pd` was renamed `mamba3-pd` in
+  the same change; it is the same arm at the same index, and the completed wave
+  logged it under the old name.
+
+  The shell moved for `mamba-b3`, `xlstm`, `mamba3-pd`, and `native-pd`, which
+  are the four arms that normalize nothing at their mixer input. `gdn` and the
+  three KDA arms stay post-norm because they L2-normalize `q` and `k` and gate a
+  normalized output, so the shell cannot reach them. The evidence is an `xlstm`
+  A/B: 132 non-finite parameter gradients under post-norm against none under
+  pre-norm, then 3.5582 against 3.7124 held-out CE on an identical seed. The
+  block type moves no parameter and measured within 0.5% on throughput.
+
+  The output norm is head-wise over `d_state`, applied before the gate, which is
+  the shape `fla`'s `FusedRMSNormGated` already gave `gdn` and the KDA arms and
+  `norm_before_gate` gave `mamba-b3`. `mamba3-pd` had the option and had it off.
+  `native-pd` had no normalization anywhere: as published it computes
+  `out_proj(y · silu(gate))`, and the readout entering `out_proj` measured
+  0.000, 0.030, and 3.973 at input ×1, ×10, and ×100 — superlinear, and
+  arithmetically dead at initialization — against 0.075, 1.112, and 12.705 with
+  the norm. This is a capacity change of 768 weights an arm, one gain a
+  head-width across twelve layers. The parameter band widens from
+  390,094,784–390,169,664 to 390,094,784–390,170,432 and TPP narrows from
+  1.53724–1.53754 to 1.53723–1.53754, both still well inside the frozen
+  ±195,068 tolerance.
+
+  These are architecture changes to four of eight arms, so their cells are not
+  comparable with the completed wave's and are reported as a second wave rather
+  than pooled with it. The control is still `mamba-b3`, itself changed, so no
+  contrast in the first wave carries over. Budget, batch, sequence length,
+  corpus, seeds, and the four attention layers are untouched.

@@ -19,11 +19,17 @@ and TPP about 1.54. The source of truth is
 
 Every arm has 16 layers, `d_model=1024`, a tied 100,352-token embedding/LM
 head, sequence length 4096, and PyTorch fused-SDPA GQA layers at indices 3, 7,
-11, and 15. Those four attention layers are byte-identical across the six
-post-norm arms; `mamba-b3` and `xlstm` are pre-norm throughout, so their
-attention layers differ from the others only in that norm ordering. The block
+11, and 15. Those four attention layers are byte-identical within each half of a
+4/4 split on norm ordering, and differ across it only in that ordering. The block
 type is parameter-neutral and measured within 0.5% on throughput, so it moves no
 count, no FFN width, and no speed — only what the mixer sees at its input.
+
+The split is not arbitrary. `reordered_norm` computes `x + norm(f(x))`, handing
+the mixer the raw residual stream, whose magnitude grows with depth. `gdn` and
+the three KDA arms L2-normalize `q` and `k` and add a gated output RMSNorm, so
+they are invariant to that scale by construction and stay post-norm. The four
+that normalize nothing at their input — `mamba-b3`, `xlstm`, `mamba3-pd`, and
+`native-pd` — are pre-norm.
 
 - `mamba-b3`: twelve faithful published Mamba-3 SISO layers with the single
   intentional deviation that SO(2) is generalized to SO(3) b=3. Faithful means
@@ -47,9 +53,21 @@ count, no FFN width, and no speed — only what the mixer sees at its input.
   gradients on the post-norm shell against none on pre-norm, and while the
   mlstm-kernels chunk-256 defect was the primary cause, post-norm was the
   amplifier and there is no reason to leave this arm in it.
-- `mamba3-siso-pd`: twelve native SISO PD-SSM layers with the Mamba-3
-  projection, normalization, and discretization improvements.
-- `native-pd`: twelve published native Flash PD-SSM layers.
+- `mamba3-pd`: twelve native SISO PD-SSM layers with the Mamba-3 projection,
+  normalization, and discretization improvements. Pre-norm, and its head-wise
+  gated output RMSNorm is now on — the block always had the option and was the
+  only Mamba-3 descendant leaving it off. Renamed from `mamba3-siso-pd`; the
+  completed 24-cell wave logged it under the old name and without the output norm.
+- `native-pd`: twelve published native Flash PD-SSM layers, plus the same
+  head-wise gated output RMSNorm, which the published block does not have. As
+  published this arm normalizes nothing anywhere: it computes
+  `out_proj(y · silu(gate))`, so neither its input nor its output is bounded,
+  which is also why it is pre-norm. Measured on the readout entering `out_proj`
+  at input ×1/×10/×100: 0.000, 0.030, 3.973 without the norm against 0.075,
+  1.112, 12.705 with it — unnormalized it grows about quadratically and is
+  arithmetically dead at initialization. The norm is head-wise over `d_state`,
+  applied before the gate, which is the shape `fla`'s `FusedRMSNormGated` gives
+  the GDN and KDA arms and the shape `norm_before_gate` gives `mamba-b3`.
 - `gdn`: twelve frozen measured GatedDeltaNet2 layers, on `fla`'s `chunk_gdn2`
   from the pinned FLA/fla-core 0.5.1.
 - `kda`: twelve shipped Kimi Delta Attention layers, on `fla`'s KDA kernels from
@@ -70,8 +88,8 @@ only recurrent-layer FFN widths. Exact totals are:
 
 - `mamba-b3`: 390,154,112 parameters.
 - `xlstm`: 390,143,056 parameters.
-- `mamba3-siso-pd`: 390,169,664 parameters.
-- `native-pd`: 390,142,976 parameters.
+- `mamba3-pd`: 390,170,432 parameters.
+- `native-pd`: 390,143,744 parameters.
 - `gdn`: 390,119,360 parameters.
 - `kda`: 390,119,360 parameters.
 - `kda-hh-r2`: 390,119,360 parameters.
@@ -95,7 +113,7 @@ attributable.
 
 Weight decay is uniform across the wave: every arm exempts the timescale
 parameters it actually has, and no arm names one it does not. `mamba-b3`,
-`mamba3-siso-pd`, and `native-pd` exempt `A_log`, `dt_bias`, and `D` (the
+`mamba3-pd`, and `native-pd` exempt `A_log`, `dt_bias`, and `D` (the
 faithful Mamba arm now carries a learned `D` skip); `gdn` and all three KDA arms
 exempt `A_log` and `dt_bias`, having no `D`; `xlstm` exempts nothing beyond the
 embeddings, because neither of its recurrences carries such a parameter. The
@@ -116,7 +134,7 @@ Each cell runs 1,144 steps at a 524,288-token global batch:
 
 `1,144 × 524,288 = 599,785,472 tokens`.
 
-That is TPP 1.53724–1.53754 across the eight exact parameter totals. This is the
+That is TPP 1.53723–1.53754 across the eight exact parameter totals. This is the
 measured Run 1 budget; the bakeoff's original 1,907-step plan would have been
 TPP about 2.56, while its later Run 2 used 3,721 steps and TPP about 5. The step
 count, corpus release, sequence length, global batch, DP world size, and data
@@ -127,7 +145,7 @@ Cells are arm-major:
 
 - indices 0–2: `mamba-b3` (control);
 - 3–5: `xlstm`;
-- 6–8: `mamba3-siso-pd`;
+- 6–8: `mamba3-pd`;
 - 9–11: `native-pd`;
 - 12–14: `gdn`;
 - 15–17: `kda`;
@@ -195,7 +213,7 @@ distributed collectives, and checkpoint writing. It explicitly skips the full
 held-out pass, so `val_ce` is null.
 
 Both smoke specs cover all eight arms, in the wave's order, one cell each:
-`mamba-b3`, `xlstm`, `mamba3-siso-pd`, `native-pd`, `gdn`, `kda`, `kda-hh-r2`,
+`mamba-b3`, `xlstm`, `mamba3-pd`, `native-pd`, `gdn`, `kda`, `kda-hh-r2`,
 `kda-gconv`. The three KDA arms were appended, so indices 0–4 are the five cells
 these specs ran before and `--fanout-size 5` still reproduces exactly that
 submission. They were added because nine of the wave's 24 cells would otherwise

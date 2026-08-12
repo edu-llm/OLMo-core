@@ -785,7 +785,7 @@ def test_xlstm_refuses_a_card_that_is_not_sm80(installed, flashrnn, monkeypatch)
     "arm, symbols",
     [
         ("native-pd", ("forward", "paper_backward")),
-        ("mamba3-siso-pd", ("mamba3_forward", "paper_backward")),
+        ("mamba3-pd", ("mamba3_forward", "paper_backward")),
     ],
 )
 def test_a_flash_pd_arm_passes_when_the_extension_exports_the_entry_points_it_calls(
@@ -805,8 +805,8 @@ def test_a_flash_pd_arm_passes_when_the_extension_exports_the_entry_points_it_ca
         # for the other's.
         ("native-pd", ("forward",), "paper_backward"),
         ("native-pd", ("paper_backward",), "forward"),
-        ("mamba3-siso-pd", ("forward", "paper_backward"), "mamba3_forward"),
-        ("mamba3-siso-pd", ("mamba3_forward",), "paper_backward"),
+        ("mamba3-pd", ("forward", "paper_backward"), "mamba3_forward"),
+        ("mamba3-pd", ("mamba3_forward",), "paper_backward"),
     ],
 )
 def test_a_flash_pd_arm_names_the_extension_symbol_its_build_is_missing(
@@ -821,7 +821,7 @@ def test_a_flash_pd_arm_names_the_extension_symbol_its_build_is_missing(
     assert missing in refused.value.explanation
 
 
-@pytest.mark.parametrize("arm", ["native-pd", "mamba3-siso-pd"])
+@pytest.mark.parametrize("arm", ["native-pd", "mamba3-pd"])
 def test_a_flash_pd_arm_refuses_a_host_with_no_cuda_device(arm, native_extension, monkeypatch):
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     native_extension("forward", "backward", "mamba3_forward", "paper_backward")
@@ -1251,9 +1251,9 @@ def test_an_arm_whose_mixer_declares_no_head_dimension_reports_no_footprint(arm,
 def test_siso_pd_decode_reports_its_complex_state_and_previous_value_cache(monkeypatch):
     """The exact decoder threads ``(h_real, h_imag, v_real, v_imag)`` per head and state lane."""
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-    mixer = _recurrent_mixers("mamba3-siso-pd")[0]
+    mixer = _recurrent_mixers("mamba3-pd")[0]
 
-    probe = entry.decode_probe(arm_name="mamba3-siso-pd")
+    probe = entry.decode_probe(arm_name="mamba3-pd")
 
     elements_per_layer = 4 * mixer.n_heads * mixer.d_state
     assert probe["decode_state_layout"] == "complex h_t plus previous complex v_t"
@@ -1288,7 +1288,7 @@ def test_decode_state_receipts_cover_every_tensor_in_the_siso_cache():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for decode timing")
 def test_siso_pd_decode_probe_threads_the_real_cache_on_cuda():
     """Exercise the same cached recurrence used by ``NativeFlashPDMamba3SISOMixer.decode_step``."""
-    probe = entry.decode_probe(arm_name="mamba3-siso-pd", batch_sizes=(1,))
+    probe = entry.decode_probe(arm_name="mamba3-pd", batch_sizes=(1,))
 
     assert probe["decode_path_taken"] is True
     assert probe["decode_fast_path_taken"] is False

@@ -1,0 +1,59 @@
+# PD wave: rerun the six `mamba3-pd` and `native-pd` cells after giving both arms the pre-norm
+# shell and a head-wise gated output RMSNorm. These were the last two arms whose configuration
+# still differed from the code, so this closes the eight-arm comparison.
+#
+# WHAT CHANGED, AND WHY IT IS TWO CHANGES AND NOT ONE.
+#
+# The shell. `reordered_norm` computes `x + norm(f(x))`, which hands the mixer the raw residual
+# stream. These two are the only arms left with no normalization on their own input, so they join
+# `mamba-b3` and `xlstm` on the pre-norm shell. `gdn` and the three KDA arms stay post-norm because
+# they L2-normalize q/k and are invariant to that scale by construction. The evidence is the xLSTM
+# A/B at three seeds each, identical but for the shell: 3.7012 post-norm against 3.5495 pre-norm,
+# 0.152 nats for +0.4% throughput, against a seed spread under 0.02.
+#
+# The output norm. `mamba3-pd` had the option and had it off; `native-pd` had no normalization
+# anywhere, computing `out_proj(y * silu(gate))` as published. Measured on the readout entering
+# `out_proj` at input x1/x10/x100: 0.000, 0.030, 3.973 without it against 0.075, 1.112, 12.705
+# with it -- superlinear growth, and arithmetically dead at initialization. Both now carry the
+# head-wise RMS-over-d_state-then-gate that `fla`'s `FusedRMSNormGated` gives GDN and KDA and that
+# `norm_before_gate` gives `mamba-b3`. It costs 768 weights an arm.
+#
+# The two overlap: both bound the same scale, so a gain here is NOT attributable to either one.
+#
+# Check:
+#   edullm check --json \
+#     --experiment mamba-comparison-pd-norms \
+#     --dataset reservoir-dolma2-v1 \
+#     --team memory-split \
+#     --wandb-project linear-comparison \
+#     --spec .edullm/run-pd-rerun.yaml \
+#     --compute gpu-8xa100 --hours 3 --attempts 1 \
+#     --fanout-size 6 \
+#     --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX
+#
+# Submit by replacing `check --json` with `submit`. The data seeds, init seeds, optimizer recipe
+# (LR 3e-4, AdamW beta2 .999 via the entrypoint default, weight decay .01, clip 1.0, no z-loss),
+# token budget, and hardware shape are byte-identical to cells 6-11 of the V2 wave, so these six
+# rows REPLACE those rows rather than being a separately-tuned follow-up. `mamba3-pd` is the arm
+# the completed wave logged as `mamba3-siso-pd`; only the name and the two norms differ.
+#
+# Arm-major, and `mamba3-pd` first, so the order matches the ledger's arm tuple and a truncated
+# fan-out loses a whole arm rather than half of each.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export TRITON_F32_DEFAULT=ieee PYTHONDONTWRITEBYTECODE=1 &&
+  I=${AWS_BATCH_JOB_ARRAY_INDEX:-0} &&
+  ARMS=(mamba3-pd mamba3-pd mamba3-pd
+  native-pd native-pd native-pd) &&
+  DSEEDS=(210007 220014 230021
+  210007 220014 230021) &&
+  ISEEDS=(116009 126016 136023
+  119010 129017 139024) &&
+  python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_core6_arm.py "$EDULLM_RUN_ID"
+  --arm "${ARMS[$I]}" --data-seed "${DSEEDS[$I]}" --init-seed "${ISEEDS[$I]}"
+  --sequence-length 4096 --steps 1144 --warmup-steps 114 --learning-rate 3e-4
+  --global-batch-size 524288 --rank-microbatch-size 8192 --save-interval 572
+  --save-folder "$EDULLM_CHECKPOINT_DIR" --param-dtype bfloat16'

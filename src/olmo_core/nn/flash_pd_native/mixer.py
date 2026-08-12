@@ -123,6 +123,8 @@ class NativeFlashPDMixer(SequenceMixer):
         backend: NativePDBackend | str = NativePDBackend.AUTO,
         conv_kernel_size: int = 4,
         fuse_input_projections: bool = True,
+        output_norm: bool = False,
+        norm_eps: float = 1e-6,
         dtype: torch.dtype = torch.float32,
         init_device: str = "cpu",
     ):
@@ -137,6 +139,8 @@ class NativeFlashPDMixer(SequenceMixer):
         )
         if conv_kernel_size < 1:
             raise ValueError("conv_kernel_size must be positive")
+        if norm_eps <= 0:
+            raise ValueError("norm_eps must be positive")
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_state = d_state
@@ -147,6 +151,8 @@ class NativeFlashPDMixer(SequenceMixer):
         self.backend = NativePDBackend(backend)
         self.conv_kernel_size = conv_kernel_size
         self.fuse_input_projections = fuse_input_projections
+        self.output_norm_enabled = output_norm
+        self.norm_eps = norm_eps
         self.last_metadata: Optional[ScanMetadata] = None
 
         factory = {"dtype": dtype, "device": init_device}
@@ -180,6 +186,14 @@ class NativeFlashPDMixer(SequenceMixer):
         self.A_log._no_weight_decay = True  # type: ignore[attr-defined]
         self.dt_bias._no_weight_decay = True  # type: ignore[attr-defined]
         self.D._no_weight_decay = True  # type: ignore[attr-defined]
+        # Head-wise RMS gain over `d_state`, applied to the readout before the gate. Shaped
+        # and placed to match the SISO block's `output_norm`, which is itself the shape of
+        # `fla`'s `FusedRMSNormGated` that the GDN and KDA arms use.
+        self.output_norm_weight: Optional[nn.Parameter]
+        if output_norm:
+            self.output_norm_weight = nn.Parameter(torch.ones(d_state, **factory))
+        else:
+            self.register_parameter("output_norm_weight", None)
 
     def _projection_sizes(self) -> tuple[int, ...]:
         """Return the output width of each post-convolution projection, in order."""
@@ -342,6 +356,15 @@ class NativeFlashPDMixer(SequenceMixer):
             - readout[..., 1].float() * states_imag.float()
         ).reshape(batch, time, self.d_model)
         y = readout_real + self.D.view(1, 1, -1) * u.float()
+        if self.output_norm_enabled:
+            assert self.output_norm_weight is not None
+            # Reduced over `d_state` within each head, not over the flat `d_model`, so one
+            # loud head cannot rescale the others. `y` is already FP32 here, so the reduction
+            # is FP32 without an explicit upcast.
+            heads = y.view(batch, time, self.n_heads, self.d_state)
+            variance = heads.square().mean(dim=-1, keepdim=True)
+            heads = heads * torch.rsqrt(variance + self.norm_eps) * self.output_norm_weight
+            y = heads.view(batch, time, self.d_model)
         return self.out_proj((y * F.silu(gate).float()).to(x.dtype))
 
     def apply_tp(
@@ -426,6 +449,11 @@ class NativeFlashPDMixer(SequenceMixer):
         dt = torch.empty_like(self.dt_bias).uniform_(0.001, 0.1, generator=generator)
         self.dt_bias.copy_(dt + torch.log(-torch.expm1(-dt)))
         self.D.fill_(1)
+        if self.output_norm_enabled:
+            assert self.output_norm_weight is not None
+            # `fill_` writes the whole tensor, so it stays correct once FSDP has made this a
+            # sharded `DTensor`. A slice assignment here would not.
+            self.output_norm_weight.fill_(1)
         output_std = std
         if init_method in (InitMethod.llama, InitMethod.normalized):
             output_std = std / (2 * num_blocks) ** 0.5
@@ -444,6 +472,9 @@ class NativeFlashPDMixer(SequenceMixer):
             layer.weight.numel() for layer in (self.in_proj, *post_convolution, self.out_proj)
         )
         recurrence = 16 * self.d_model
+        if self.output_norm_enabled:
+            # Square and accumulate over d_model, scale by the gain, one rsqrt a head.
+            recurrence += 3 * self.d_model + self.n_heads
         dictionary = (self.n_heads * self.dictionary_size * self.d_state * self.d_state) // max(
             seq_len, 1
         )
@@ -482,6 +513,10 @@ class NativeFlashPDMixerConfig(SequenceMixerConfig[NativeFlashPDMixer]):
     # (`test_projection_layouts_initialize_identically_from_one_seed`), and
     # `_convert_projection_state_dict` converts a checkpoint written in either layout exactly.
     fuse_input_projections: bool = False
+    # Head-wise RMSNorm on the readout, before the gate. Off by default so the published
+    # block this arm reproduces is what a bare config still builds.
+    output_norm: bool = False
+    norm_eps: float = 1e-6
     dtype: DType = DType.float32
 
     def num_params(self, d_model: int) -> int:
@@ -508,6 +543,8 @@ class NativeFlashPDMixerConfig(SequenceMixerConfig[NativeFlashPDMixer]):
         )
         convolution = d_model * self.conv_kernel_size + d_model
         stable = 3 * d_model
+        if self.output_norm:
+            stable += self.d_state
         return dictionary + linear_weights + convolution + stable
 
     def build(
@@ -532,6 +569,8 @@ class NativeFlashPDMixerConfig(SequenceMixerConfig[NativeFlashPDMixer]):
             backend=self.backend,
             conv_kernel_size=self.conv_kernel_size,
             fuse_input_projections=self.fuse_input_projections,
+            output_norm=self.output_norm,
+            norm_eps=self.norm_eps,
             dtype=self.dtype.as_pt(),
             init_device=init_device,
         )

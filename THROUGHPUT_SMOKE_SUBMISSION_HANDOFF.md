@@ -12,7 +12,7 @@ cd /home/vs/AlphaAI/eduLLM/OLMo-core-flash-pd
 | --- | --- | --- |
 | 0–2 | `mamba-b3` | 210007, 220014, 230021 |
 | 3–5 | `xlstm` | 210007, 220014, 230021 |
-| 6–8 | `mamba3-siso-pd` | 210007, 220014, 230021 |
+| 6–8 | `mamba3-pd` | 210007, 220014, 230021 |
 | 9–11 | `native-pd` | 210007, 220014, 230021 |
 | 12–14 | `gdn` | 210007, 220014, 230021 |
 | 15–17 | `kda` | 210007, 220014, 230021 |
@@ -128,7 +128,7 @@ config, so either one separates them without counting indices.
 - recurrent-state bytes per sequence;
 - arm, data seed, init seed, world size, steps, parameter count, and image SHA.
 
-For `mamba3-siso-pd`, `decode_path_kind=exact_reference_recurrent`: it times the exact cached
+For `mamba3-pd`, `decode_path_kind=exact_reference_recurrent`: it times the exact cached
 recurrence used by the mixer's `decode_step`, not a fused CUDA fast path. Its fixed cache is
 196,608 bytes per sequence across 12 layers (`h_real`, `h_imag`, and the previous complex
 value). Compare its latency only with that path label visible; `decode_fast_path_taken=false`

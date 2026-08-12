@@ -31,7 +31,7 @@ command: >-
   I=${AWS_BATCH_JOB_ARRAY_INDEX:-0} &&
   ARMS=(mamba-b3 mamba-b3 mamba-b3
   xlstm xlstm xlstm
-  mamba3-siso-pd mamba3-siso-pd mamba3-siso-pd
+  mamba3-pd mamba3-pd mamba3-pd
   native-pd native-pd native-pd
   gdn gdn gdn
   kda kda kda

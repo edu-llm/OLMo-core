@@ -18,6 +18,7 @@ RUN_CONFIG = ROOT / ".edullm/run.yaml"
 COMPARISON_RUN_CONFIG = ROOT / ".edullm/run-comparison.yaml"
 XLSTM_RERUN_CONFIG = ROOT / ".edullm/run-xlstm-rerun.yaml"
 MAMBA_FAITHFUL_RERUN_CONFIG = ROOT / ".edullm/run-mamba-b3-faithful.yaml"
+PD_RERUN_CONFIG = ROOT / ".edullm/run-pd-rerun.yaml"
 SEED_SCHEDULE = ROOT / "docs/mamba-comparison/seeds.json"
 RUN_GUIDE = ROOT / "MODEL_ARCH_RUNS.md"
 
@@ -291,8 +292,8 @@ def test_treatment_mixers_are_strict_and_parameter_matched():
     expected_counts = {
         "mamba-b3": 390_154_112,
         "xlstm": 390_143_056,
-        "mamba3-siso-pd": 390_169_664,
-        "native-pd": 390_142_976,
+        "mamba3-pd": 390_170_432,
+        "native-pd": 390_143_744,
         "gdn": 390_119_360,
         "kda": 390_119_360,
         "kda-hh-r2": 390_119_360,
@@ -303,7 +304,7 @@ def test_treatment_mixers_are_strict_and_parameter_matched():
         # arm buys back much less FFN than it used to: ~3,680 a recurrent slot against ~4,704.
         "mamba-b3": (3680,) * 11 + (3648,),
         "xlstm": (4672,) * 8 + (4640,) * 4,
-        "mamba3-siso-pd": (2752,) * 11 + (2720,),
+        "mamba3-pd": (2752,) * 11 + (2720,),
         "native-pd": (2432,) * 6 + (2400,) * 6,
         "gdn": (3808,) + (3776,) * 11,
         "kda": (4480,) * 3 + (4448,) * 9,
@@ -387,14 +388,14 @@ def test_treatment_mixers_are_strict_and_parameter_matched():
             assert all(mixer.gate_rank is None for mixer in mixers)
             assert all(mixer.allow_neg_eigval is False for mixer in mixers)
         else:
-            assert arm == "mamba3-siso-pd"
+            assert arm == "mamba3-pd"
             assert all(isinstance(mixer, NativeFlashPDMamba3SISOMixerConfig) for mixer in mixers)
         if arm in ("kda", "kda-hh-r2", "kda-gconv"):
             assert all(mixer.n_heads == 16 for mixer in mixers)
             assert all(mixer.head_dim == 64 for mixer in mixers)
             assert all(mixer.expand_v == 1.0 for mixer in mixers)
             assert all(mixer.conv_size == 4 for mixer in mixers)
-        if arm in ("native-pd", "mamba3-siso-pd"):
+        if arm in ("native-pd", "mamba3-pd"):
             assert all(mixer.backend == NativePDBackend.CUDA for mixer in mixers)
             assert all(mixer.mode == NativePDMode.GENERAL_SCATTER for mixer in mixers)
         if arm == "native-pd":
@@ -413,7 +414,7 @@ def test_five_seed_eight_arm_matrix_and_parser_rejects_mismatches():
     assert module.ARM_ORDER == (
         "mamba-b3",
         "xlstm",
-        "mamba3-siso-pd",
+        "mamba3-pd",
         "native-pd",
         "gdn",
         "kda",
@@ -433,7 +434,7 @@ def test_five_seed_eight_arm_matrix_and_parser_rejects_mismatches():
     # ledgers are separate but both are printed into the same run record.
     five_arm_seeds = {
         seed
-        for arm in ("mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd", "gdn")
+        for arm in ("mamba-b3", "xlstm", "mamba3-pd", "native-pd", "gdn")
         for seed in module.INIT_SEEDS_BY_ARM[arm].values()
     }
     kda_seeds = {
@@ -571,7 +572,7 @@ def test_commands_docs_and_reader_contract_are_complete():
     assert "reservoir-dolma2-v1" in guide
     assert "24 cells" in guide
     assert "10 mLSTM" in guide
-    assert "TPP 1.53724–1.53754" in guide
+    assert "TPP 1.53723–1.53754" in guide
     assert "--fanout-size 24" in guide
     # The shorter prefixes stay runnable and documented, because that is the whole reason every
     # arm after the fourth was appended rather than inserted.
@@ -623,7 +624,7 @@ def test_eight_arm_comparison_uses_full_3_to_1_architectures_at_matched_tpp():
     assert module.ARMS == (
         "mamba-b3",
         "xlstm",
-        "mamba3-siso-pd",
+        "mamba3-pd",
         "native-pd",
         "gdn",
         "kda",
@@ -642,11 +643,12 @@ def test_eight_arm_comparison_uses_full_3_to_1_architectures_at_matched_tpp():
         assert abs(config.num_params - module.PARAMETER_TARGET) <= module.PARAMETER_TOLERANCE
         tpp = module.FROZEN_STEPS * module.FROZEN_GLOBAL_BATCH_SIZE / config.num_params
         # The band the run guide and the pre-registration both quote, and it is the arms that
-        # set it: `mamba3-siso-pd` is the low end at 1.53724 and `kda-gconv`, now the smallest
-        # exact model at 390,094,784, the high at 1.53754. The band is a REPORTED consequence of
+        # set it: `mamba3-pd` is the low end at 1.53723, having become the largest exact model
+        # at 390,170,432 when the output norm added 768 weights, and `kda-gconv`, the smallest
+        # at 390,094,784, the high at 1.53754. The band is a REPORTED consequence of
         # the ledger and not a constraint on it -- the frozen constraint is the +/-195,068
         # parameter tolerance asserted above, and every arm is well inside it.
-        assert 1.53724 <= tpp <= 1.53754, (arm, tpp)
+        assert 1.53723 <= tpp <= 1.53754, (arm, tpp)
 
         recurrent = [
             mixer for index, mixer in enumerate(mixers) if index not in module.ATTENTION_LAYERS
@@ -656,7 +658,7 @@ def test_eight_arm_comparison_uses_full_3_to_1_architectures_at_matched_tpp():
             assert all(isinstance(mixer, Mamba3MixerConfig) for mixer in recurrent)
         elif arm == "native-pd":
             assert all(isinstance(mixer, NativeFlashPDMixerConfig) for mixer in recurrent)
-        elif arm == "mamba3-siso-pd":
+        elif arm == "mamba3-pd":
             assert all(isinstance(mixer, NativeFlashPDMamba3SISOMixerConfig) for mixer in recurrent)
         elif arm == "gdn":
             assert all(type(mixer) is GatedDeltaNet2Config for mixer in recurrent)
@@ -679,7 +681,7 @@ def test_comparison_wave_is_arm_major_three_seed_single_image_fanout():
     expected_arms = [
         "mamba-b3",
         "xlstm",
-        "mamba3-siso-pd",
+        "mamba3-pd",
         "native-pd",
         "gdn",
         "kda",
@@ -751,6 +753,59 @@ def test_xlstm_rerun_spec_is_exactly_the_three_failed_cells():
     assert "--rank-microbatch-size 8192" in rerun_yaml
     assert "--save-interval 572" in rerun_yaml
     assert "--param-dtype bfloat16" in rerun_yaml
+
+
+def test_pd_rerun_spec_is_exactly_the_six_pd_cells_at_their_own_ledger_seeds():
+    """The PD wave must rerun the two PD arms only, under the unchanged V2 recipe.
+
+    Same data seeds, optimizer flags, token budget, and hardware shape as cells 6-11 of the V2
+    wave, and each arm's init seeds read out of the ledger rather than hand-copied, so these six
+    rows replace those rows instead of being a separately-tuned follow-up. Arm-major and
+    `mamba3-pd` first, matching the ledger's arm order, so a truncated fan-out loses a whole arm.
+    """
+    module = load_entrypoint()
+    assert PD_RERUN_CONFIG.is_file()
+    rerun_yaml = PD_RERUN_CONFIG.read_text()
+
+    arrays = {}
+    for name in ("ARMS", "DSEEDS", "ISEEDS"):
+        match = re.search(rf"{name}=\((.*?)\) &&", rerun_yaml, flags=re.DOTALL)
+        assert match is not None, name
+        arrays[name] = match.group(1).split()
+
+    assert arrays["ARMS"] == ["mamba3-pd"] * 3 + ["native-pd"] * 3
+    assert arrays["DSEEDS"] == ["210007", "220014", "230021"] * 2
+    assert arrays["ISEEDS"] == [
+        str(module.INIT_SEEDS_BY_ARM[arm][int(seed)])
+        for arm, seed in zip(arrays["ARMS"], arrays["DSEEDS"])
+    ]
+    # The same seeds cells 6-11 of the wave ran, so the two waves are paired per replicate.
+    assert arrays["ISEEDS"] == ["116009", "126016", "136023", "119010", "129017", "139024"]
+
+    # Byte-identical recipe. A drift in any of these makes the rerun a different experiment.
+    for flag in (
+        "--sequence-length 4096",
+        "--steps 1144",
+        "--warmup-steps 114",
+        "--learning-rate 3e-4",
+        "--global-batch-size 524288",
+        "--rank-microbatch-size 8192",
+        "--save-interval 572",
+        "--param-dtype bfloat16",
+    ):
+        assert flag in rerun_yaml, flag
+    assert "AWS_BATCH_JOB_ARRAY_INDEX" in rerun_yaml
+    assert ".edullm/train_core6_arm.py" in rerun_yaml
+    assert "--fanout-size 6" in rerun_yaml
+    # The decode probe stays on: the wave rows these replace carry one.
+    assert "--no-decode-probe" not in rerun_yaml
+
+    # And the arms this spec names are the ones actually carrying both changes.
+    for arm in ("mamba3-pd", "native-pd"):
+        assert arm in module._PRE_NORM_ARMS
+        assert all(
+            module._treatment_mixer(arm, index).output_norm for index in module.RECURRENT_LAYERS
+        )
 
 
 def test_mamba_b3_faithful_rerun_spec_is_exactly_the_three_mamba_cells():
@@ -928,12 +983,14 @@ def test_native_pd_chunk_size_is_64_and_the_change_shaped_no_weights():
     at_128 = replace(mixers[0], chunk_size=128)
     assert at_128.num_params(module.D_MODEL) == mixers[0].num_params(module.D_MODEL)
 
-    # And the arm's solved widths and exact total are the ones the four-arm study was
-    # described with, unchanged.
+    # And the arm's solved widths are the ones the four-arm study was described with,
+    # unchanged. The exact total is 768 higher than that study's, which is the output norm's
+    # one gain a head-width across twelve layers and nothing else.
     assert module.solve_widths("native-pd") == (2432,) * 6 + (2400,) * 6
-    assert module.EXACT_PARAMETER_COUNTS["native-pd"] == 390_142_976
+    assert module.EXACT_PARAMETER_COUNTS["native-pd"] == 390_143_744
     config = module.build_model_config("native-pd", module.valid_init_seeds("native-pd")[0])
-    assert config.num_params == 390_142_976
+    assert config.num_params == 390_143_744
+    assert config.num_params - 390_142_976 == 12 * 64
 
 
 def test_siso_pd_projection_layout_is_explicitly_unfused():
@@ -941,17 +998,103 @@ def test_siso_pd_projection_layout_is_explicitly_unfused():
     module = load_entrypoint()
     from inspect import getsource
 
-    mixers = [module._treatment_mixer("mamba3-siso-pd", index) for index in module.RECURRENT_LAYERS]
+    mixers = [module._treatment_mixer("mamba3-pd", index) for index in module.RECURRENT_LAYERS]
     assert all(mixer.fuse_input_projections is False for mixer in mixers)
 
     source = getsource(module._treatment_mixer)
-    siso_section = source.split('if arm == "mamba3-siso-pd":', 1)[1]
+    siso_section = source.split('if arm == "mamba3-pd":', 1)[1]
     assert "fuse_input_projections=False" in siso_section
 
-    config = module.build_model_config(
-        "mamba3-siso-pd", module.valid_init_seeds("mamba3-siso-pd")[0]
+    config = module.build_model_config("mamba3-pd", module.valid_init_seeds("mamba3-pd")[0])
+    assert config.num_params == 390_170_432
+
+
+def test_both_pd_arms_normalize_the_readout_before_the_gate():
+    """Every arm now carries a gated output norm; the two PD arms were the last without one."""
+    module = load_entrypoint()
+    from dataclasses import replace
+
+    for arm in ("native-pd", "mamba3-pd"):
+        mixers = [module._treatment_mixer(arm, index) for index in module.RECURRENT_LAYERS]
+        assert all(mixer.output_norm for mixer in mixers), arm
+        # Head-wise, so one loud head cannot rescale the others: one gain per d_state, not
+        # per d_model, and twelve layers of it is the whole parameter delta.
+        assert all(mixer.norm_eps > 0 for mixer in mixers), arm
+        delta = sum(
+            mixer.num_params(module.D_MODEL)
+            - replace(mixer, output_norm=False).num_params(module.D_MODEL)
+            for mixer in mixers
+        )
+        assert delta == len(module.RECURRENT_LAYERS) * 64, arm
+
+
+def test_the_native_pd_output_norm_is_head_wise_and_bounds_the_readout():
+    """The norm reduces within a head, and the published block without it is dead at init."""
+    module = load_entrypoint()
+    import torch
+    from dataclasses import replace as _replace
+
+    from olmo_core.nn.transformer.init import InitMethod
+
+    d_model, n_heads, d_state = 256, 4, 64
+    on = _replace(
+        module._treatment_mixer("native-pd", module.RECURRENT_LAYERS[0]),
+        n_heads=n_heads,
+        d_state=d_state,
+        backend=module.NativePDBackend.REFERENCE,
     )
-    assert config.num_params == 390_169_664
+    off = _replace(on, output_norm=False)
+
+    def build(config):
+        mixer = config.build(d_model, layer_idx=0, n_layers=2)
+        generator = torch.Generator().manual_seed(9)
+        with torch.no_grad():
+            mixer.init_weights(
+                init_method=InitMethod.normal,
+                d_model=d_model,
+                block_idx=0,
+                num_blocks=2,
+                generator=generator,
+            )
+        return mixer
+
+    mixer_on, mixer_off = build(on), build(off)
+    assert mixer_on.load_state_dict(mixer_off.state_dict(), strict=False).missing_keys == [
+        "output_norm_weight"
+    ]
+
+    captured: dict = {}
+
+    def capture(tag):
+        return lambda module_, inputs, output: captured.__setitem__(tag, inputs[0].detach())
+
+    torch.manual_seed(0)
+    x = torch.randn(2, 8, d_model)
+    for tag, mixer in (("off", mixer_off), ("on", mixer_on)):
+        handle = mixer.out_proj.register_forward_hook(capture(tag))
+        mixer(x)
+        handle.remove()
+
+    # The scale the norm applied, per element. Constant inside a head, different between
+    # heads: that is what makes it head-wise rather than a single norm over d_model.
+    scale = (captured["on"] / captured["off"]).view(2, 8, n_heads, d_state)
+    assert (scale.amax(dim=-1) - scale.amin(dim=-1)).abs().max() < 1e-2
+    assert scale[..., 0].std(dim=-1).mean() > 1e-3
+
+    # Unnormalized, the readout entering out_proj is ~0 at init and grows superlinearly.
+    # Normalized, it carries signal immediately.
+    def readout_rms(mixer, tag, multiplier):
+        handle = mixer.out_proj.register_forward_hook(capture(tag))
+        mixer(x * multiplier)
+        handle.remove()
+        return float(captured[tag].square().mean().sqrt())
+
+    assert readout_rms(mixer_off, "off", 1.0) < 0.01 < readout_rms(mixer_on, "on", 1.0)
+    growth_off = readout_rms(mixer_off, "off", 100.0) / max(
+        readout_rms(mixer_off, "off", 10.0), 1e-9
+    )
+    growth_on = readout_rms(mixer_on, "on", 100.0) / max(readout_rms(mixer_on, "on", 10.0), 1e-9)
+    assert growth_on < growth_off
 
 
 def test_every_arm_declares_one_fp32_master_dtype_and_keeps_its_bf16_kernels():
@@ -963,7 +1106,7 @@ def test_every_arm_declares_one_fp32_master_dtype_and_keeps_its_bf16_kernels():
     assert module.RUNNABLE_ARMS == (
         "mamba-b3",
         "xlstm",
-        "mamba3-siso-pd",
+        "mamba3-pd",
         "native-pd",
         "gdn",
         "kda",
@@ -990,7 +1133,7 @@ def test_every_arm_declares_one_fp32_master_dtype_and_keeps_its_bf16_kernels():
     assert module._slstm_mixer().kernel_dtype == "bfloat16"
     assert module._slstm_mixer().backend == "cuda_fused"
     assert module._treatment_mixer("mamba-b3", 0).prefer_official_kernel is True
-    for arm in ("native-pd", "mamba3-siso-pd"):
+    for arm in ("native-pd", "mamba3-pd"):
         mixer = module._treatment_mixer(arm, 0)
         assert mixer.backend == NativePDBackend.CUDA
         assert mixer.mode == NativePDMode.GENERAL_SCATTER
@@ -1002,7 +1145,7 @@ def test_every_arm_declares_one_fp32_master_dtype_and_keeps_its_bf16_kernels():
     [
         "mamba-b3",
         "xlstm",
-        "mamba3-siso-pd",
+        "mamba3-pd",
         "native-pd",
         "gdn",
         "kda",
@@ -1034,7 +1177,7 @@ def test_every_built_block_holds_exactly_one_fp32_parameter_dtype(arm):
     [
         "mamba-b3",
         "xlstm",
-        "mamba3-siso-pd",
+        "mamba3-pd",
         "native-pd",
         "gdn",
         "kda",

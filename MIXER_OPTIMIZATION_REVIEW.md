@@ -69,7 +69,7 @@ pattern that matches nothing. Measured against the built models:
 | --- | ---: | --- |
 | mamba-b3 | 24 (`A_log`, `dt_bias`) | `*.D` |
 | xlstm | 0 | `*.A_log`, `*.dt_bias`, `*.D` |
-| mamba3-siso-pd | 36 (`A_log`, `dt_bias`, `D`) | none |
+| mamba3-pd | 36 (`A_log`, `dt_bias`, `D`) | none |
 | native-pd | 36 (`A_log`, `dt_bias`, `D`) | none |
 | gdn | 0 | `*.D` |
 
@@ -124,7 +124,7 @@ path, and a test asserts the module is absent so the import cannot return.
 
 Per-head decode state resolves only for arms whose mixer declares a head
 dimension: `gdn` at 16 x 64 x 64 per layer and `mamba-b3` at 16 x 96 x 64.
-`xlstm`, `native-pd`, and `mamba3-siso-pd` declare none, so those fields are
+`xlstm`, `native-pd`, and `mamba3-pd` declare none, so those fields are
 null with a stated reason rather than a plausible guess, because that number
 sizes a serving fleet.
 
@@ -132,7 +132,7 @@ The probe remains off by default and no run spec changed.
 
 ## Executive conclusions
 
-1. `mamba3-siso-pd` and `native-pd` do **not** execute Mamba-b3, SO(3),
+1. `mamba3-pd` and `native-pd` do **not** execute Mamba-b3, SO(3),
    quaternion, Rodrigues, or a rotation-prefix scan. Their only rotation-like
    operation is an independent complex phase on each diagonal state value
    (`magnitude * exp(i * phase)`), equivalent to an abelian per-coordinate
@@ -393,7 +393,7 @@ The current eight-arm wave uses the measured Run 1 per-cell budget:
 - Save interval 572.
 - Global batch 524,288 tokens.
 - 599,785,472 tokens/cell.
-- TPP 1.53724–1.53754 across exact arm parameter counts.
+- TPP 1.53723–1.53754 across exact arm parameter counts.
 
 It uses eight arms by three replicates, arm-major, with three shared data seeds.
 It is therefore **budget- and seed-count-aligned to Run 1**, not a copy of Run

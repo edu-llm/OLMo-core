@@ -3290,12 +3290,12 @@ GDN2_PINNED_VERSIONS = {
 #: PER ARM RATHER THAN ONE UNION, because the two mixers use different halves of the build and a
 #: wheel that carries one arm's symbols is no evidence for the other's. ``native-pd`` runs
 #: ``_NativeFlashPDPaperTraining`` (``forward`` for the scan, ``paper_backward`` for the
-#: Appendix-C gradient) and ``mamba3-siso-pd`` runs the ``flash_pd_native::mamba3_siso`` op
+#: Appendix-C gradient) and ``mamba3-pd`` runs the ``flash_pd_native::mamba3_siso`` op
 #: (``mamba3_forward``, with ``paper_backward`` behind its autograd). A union would refuse a
 #: build that is perfectly able to run the arm that was selected.
 NATIVE_PD_EXTENSION_SYMBOLS = {
     "native-pd": ("forward", "paper_backward"),
-    "mamba3-siso-pd": ("mamba3_forward", "paper_backward"),
+    "mamba3-pd": ("mamba3_forward", "paper_backward"),
 }
 
 #: Which recurrence each KDA arm actually calls, as ``(module, callable)``.
@@ -3884,7 +3884,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--arm",
         default="mamba-b3",
-        help="Frozen comparison arm: mamba-b3, xlstm, mamba3-siso-pd, or native-pd.",
+        help="Frozen comparison arm: mamba-b3, xlstm, mamba3-pd, or native-pd.",
     )
     parser.add_argument(
         "--slice-mask-uri",

@@ -7,7 +7,7 @@
   "arms": [
     "mamba-b3",
     "xlstm",
-    "mamba3-siso-pd",
+    "mamba3-pd",
     "native-pd",
     "gdn",
     "kda",
@@ -27,9 +27,9 @@
     "xlstm",
     "xlstm",
     "xlstm",
-    "mamba3-siso-pd",
-    "mamba3-siso-pd",
-    "mamba3-siso-pd",
+    "mamba3-pd",
+    "mamba3-pd",
+    "mamba3-pd",
     "native-pd",
     "native-pd",
     "native-pd",
@@ -66,7 +66,7 @@
       123015,
       133022
     ],
-    "mamba3-siso-pd": [
+    "mamba3-pd": [
       116009,
       126016,
       136023
@@ -106,7 +106,7 @@
       143029,
       153036
     ],
-    "mamba3-siso-pd": [
+    "mamba3-pd": [
       146030,
       156037
     ],
@@ -142,11 +142,11 @@
       11,
       15
     ],
-    "attention": "4 identical GQA FlashAttention-2 layers in every arm (pre-norm in the mamba-b3 and xlstm arms, post-norm elsewhere; the block type moves no parameter and no measurable throughput)",
+    "attention": "4 identical GQA FlashAttention-2 layers in every arm (pre-norm in the mamba-b3, xlstm, mamba3-pd and native-pd arms, which normalize nothing at their mixer input; post-norm in gdn and the three kda arms, which L2-normalize q/k and gate a normalized output and so are invariant to the input scale; the block type moves no parameter and no measurable throughput)",
     "mamba-b3": "12 faithful Mamba-3 SISO layers (expand=2 32x64, dynamic A, post-BCNorm bias, D skip, norm-before-gate, pre-norm shell) with rotation block size 3 over half of d_state 192 and official_fast SSD; the rotation timescale is group-shared rather than per-head, the one deliberate deviation, which keeps B/C one group wide and the scan on GQA",
     "xlstm": "10 mLSTM + 2 sLSTM layers in [m,m,m,a,m,m,s,a] x 2, pre-norm shell, mLSTM chunk 128",
-    "mamba3-siso-pd": "12 Mamba-3-improved native SISO PD-SSM layers",
-    "native-pd": "12 published native Flash PD-SSM layers",
+    "mamba3-pd": "12 Mamba-3-improved native SISO PD-SSM layers, pre-norm shell, head-wise gated output RMSNorm (renamed from mamba3-siso-pd; the completed 24-cell wave logged the old name and ran without the output norm)",
+    "native-pd": "12 published native Flash PD-SSM layers, pre-norm shell, head-wise gated output RMSNorm added (the published block normalizes nothing; the completed 24-cell wave ran without it)",
     "gdn": "12 frozen measured GatedDeltaNet2 layers",
     "kda": "12 shipped Kimi Delta Attention layers, plain SiLU short convolutions",
     "kda-hh-r2": "12 Kimi Delta Attention layers with 2 Householder factors and negative eigenvalues",
@@ -157,8 +157,8 @@
   "parameters_by_arm": {
     "mamba-b3": 390154112,
     "xlstm": 390143056,
-    "mamba3-siso-pd": 390169664,
-    "native-pd": 390142976,
+    "mamba3-pd": 390170432,
+    "native-pd": 390143744,
     "gdn": 390119360,
     "kda": 390119360,
     "kda-hh-r2": 390119360,
@@ -193,7 +193,7 @@
       4640,
       4640
     ],
-    "mamba3-siso-pd": [
+    "mamba3-pd": [
       2752,
       2752,
       2752,
@@ -285,8 +285,8 @@
   "tokens_per_parameter_by_arm": {
     "mamba-b3": 1.53730399,
     "xlstm": 1.53734755,
-    "mamba3-siso-pd": 1.53724271,
-    "native-pd": 1.53734787,
+    "mamba3-pd": 1.53723969,
+    "native-pd": 1.53734484,
     "gdn": 1.53744093,
     "kda": 1.53744093,
     "kda-hh-r2": 1.53744093,

@@ -124,15 +124,15 @@ def test_entrypoint_freezes_eight_full_architecture_arms():
     assert values["ARMS"] == (
         "mamba-b3",
         "xlstm",
-        "mamba3-siso-pd",
+        "mamba3-pd",
         "native-pd",
         "gdn",
         "kda",
         "kda-hh-r2",
         "kda-gconv",
     )
-    assert values["ARMS"][:4] == ("mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd")
-    assert values["ARMS"][:5] == ("mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd", "gdn")
+    assert values["ARMS"][:4] == ("mamba-b3", "xlstm", "mamba3-pd", "native-pd")
+    assert values["ARMS"][:5] == ("mamba-b3", "xlstm", "mamba3-pd", "native-pd", "gdn")
     assert values["ATTENTION_LAYERS"] == (3, 7, 11, 15)
     assert values["FROZEN_STEPS"] == 1144
     assert values["FROZEN_GLOBAL_BATCH_SIZE"] == 524288
@@ -145,7 +145,7 @@ def test_arm_major_three_seed_wave_is_machine_readable():
     expected_arms = [
         "mamba-b3",
         "xlstm",
-        "mamba3-siso-pd",
+        "mamba3-pd",
         "native-pd",
         "gdn",
         "kda",
@@ -418,7 +418,7 @@ def test_smoke_specs_separate_functional_and_throughput_measurements():
     # One literal for both specs, because a smoke that rehearses a different set of arms from
     # the other smoke is worse than either of them alone: the functional gate would clear an
     # arm the timed one never runs, and nothing would say so.
-    wave_arms = "ARMS=(mamba-b3 xlstm mamba3-siso-pd native-pd gdn kda kda-hh-r2 kda-gconv)"
+    wave_arms = "ARMS=(mamba-b3 xlstm mamba3-pd native-pd gdn kda kda-hh-r2 kda-gconv)"
 
     functional = FUNCTIONAL_SMOKE_SPEC.read_text()
     assert "--steps 10" in functional
