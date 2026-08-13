@@ -4,6 +4,12 @@
 # experiment, dataset, compute_profile. Those are submit-time flags, because one
 # commit run by two people belongs to two teams.
 #
+# workload_profile is OLMo-core's existing `olmo-core-train`: 24 h, 2 attempts, and
+# a checkpoint contract with resume_required: true. We satisfy that contract for
+# real -- checkpoint_io writes to s3:// and ResumeGuard raises rather than silently
+# restarting -- which is the failure a sibling repo shipped by gating its load on
+# os.path.exists() against an s3:// URI.
+#
 # PRIMARY shape is gpu-8xa100: 8 A100s, one independent arm per GPU, so 8 cells of
 # the matrix finish in the wall-clock time of one. There is no single-GPU A100
 # shape, which is why the entrypoint spawns its own processes.
@@ -15,7 +21,7 @@
 # MEMSPLIT_CELLS selects the arms; --compute at submit time selects the shape. On a
 # single-GPU shape drop the waiver and set MEMSPLIT_CONDITION/MEMSPLIT_SEED instead.
 schema_version: 1
-workload_profile: memsplit-hop-train
+workload_profile: olmo-core-train
 suggested_compute: gpu-8xa100
 
 command: >-

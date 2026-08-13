@@ -1,3 +1,8 @@
+# Smoke / fallback spec: one arm on one GPU, against OLMo-core's existing
+# `olmo-core-check` profile (1 h, 1 attempt, no checkpoint contract). The checkpoint
+# path stays on the command line anyway: it costs nothing and puts the save location
+# in the manifest the approver reads.
+#
 # Fallback spec: one arm on one GPU. Use when gpu-8xa100 is unavailable or when
 # only a single cell is wanted (e.g. the smoke job).
 #
@@ -6,7 +11,7 @@
 # card the d40m throughput figure (184,671 tok/s) was actually measured on -- the
 # A10G number is an estimate.
 schema_version: 1
-workload_profile: memsplit-hop-train
+workload_profile: olmo-core-check
 suggested_compute: gpu-1xl40s
 
 command: >-

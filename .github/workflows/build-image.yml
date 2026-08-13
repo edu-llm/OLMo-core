@@ -11,12 +11,10 @@
 # without it. Its absence is finding `no_workflow_calls_the_platform_build`, which
 # exits 1 -- a RegistrationRefused, not an unreadable-repo error.
 #
-# `AWS_ECR_PUBLISHER_ROLE_ARN` must be set BY HAND as a repository variable; there
-# is no organization-level default:
-#
-#     gh variable set AWS_ECR_PUBLISHER_ROLE_ARN --repo edu-llm/memsplit-hop --body <arn>
-#
-# Missing it yields `publisher_role_arn_is_empty` at build time rather than here.
+# `AWS_ECR_PUBLISHER_ROLE_ARN` is already set on OLMo-core -- all six research
+# repositories carry it -- so nothing needs creating. That is the whole reason this
+# branch lives here rather than in a repository of its own: registering a new one
+# ends in widening an IAM stack that is applied from a laptop, not from CI.
 name: Build research image
 
 on:
@@ -35,7 +33,9 @@ jobs:
   build:
     uses: edu-llm/platform/.github/workflows/build-research-image.yml@main
     with:
-      repository: memsplit-hop
+      # OLMo-core, not memsplit-hop: this branch lives in OLMo-core, and the
+      # publisher role's trust policy and ECR resource list name that repository.
+      repository: OLMo-core
       publisher_role_arn: ${{ vars.AWS_ECR_PUBLISHER_ROLE_ARN }}
       aws_region: us-east-1
       # Runs in the built image, so it proves the image can actually import and
