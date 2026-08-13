@@ -2982,6 +2982,285 @@ that is known, not left to reach its wall.** It is not accruing anything that su
 the fifteen were still running when the bound error was understood and every one of them was
 allowed to reach its wall regardless, which is about $385 of the total.
 
+## The downstream pre-registration of 2026-08-12, written before the scoring job was submitted
+
+**This section and `.edullm/downstream_analysis.py` were committed while
+`.edullm/run.score-stage.yaml` was staged and unsent. No document of
+`edullm.hyper-connections.downstream.v1` existed anywhere — not in S3, not on a laptop, not in a
+log — so no downstream data existed at the time and none of the choices below could have been
+made to suit one.** That is a stronger statement than "before the analyst looked at the results",
+which is the most any analysis written after a job lands can make, and it is the only reason this
+section is worth the space. Every choice in it — the primary estimand, the null the slope is
+tested against, which contrasts are declared under-powered and by how much, what is in the
+multiplicity family, what the report refuses to compute — is free today and is a researcher
+degree of freedom the moment twenty-five headlines are visible.
+
+`downstream_analysis.py --self-test` drives the estimators over synthetic tranches with a
+*planted* slope, and `test_downstream_analysis.py` re-derives the under-power declarations below
+from the frozen in-loop endpoints, so a flag edited later to suit an outcome fails a test rather
+than passing unnoticed.
+
+### The primary is a regression, and that is the substantive decision
+
+**The question the literature actually leaves open for this method is not an arm ordering. It is
+whether loss and downstream move together at all.** The full-text read of 2026-08-12 established
+that Table 7 of arXiv 2605.20798 reports validation loss for six methods — Softpick, QK-Norm,
+Baseline, Sigmoid Attention, SSMax, AttnRes — and that **hyper-connections' validation loss
+appears nowhere in the paper**. So its residual-side classification, "loss increases consistent
+with their downstream drops", rests on no evidence at all for the one mechanism this module is
+about. Nobody has measured the loss-to-downstream relationship for hyper-connections, and
+twenty-five checkpoints spanning **0.0176 BPB** of in-loop endpoint measure it directly.
+
+The model, on all twenty-five cells:
+
+```
+downstream_headline = α + β · (in-loop endpoint − mean in-loop endpoint) + ε
+```
+
+Both sides are bits per byte of a gold continuation, so β is dimensionless and **the null is
+β = 1, not β = 0**.
+
+- **β = 1** is the coupled world: an arm that is 0.0146 BPB better in loop is 0.0146 BPB better
+  downstream, and the downstream number carries nothing the in-loop number did not already carry.
+  This is what a "loss increases consistent with downstream drops" classification asserts.
+- **β significantly below 1** is decoupling in the precise sense this module cares about: the loss
+  gain is real and does not arrive. **This is the thing Frank was warned about at the outset**,
+  restored to a testable form after the citation that used to justify it was retired.
+- **β indistinguishable from 0** is total decoupling: the in-loop tranche predicts nothing about
+  the suite, and every in-loop conclusion in this document stops generalising at the loss.
+- **β above 1** is amplification, and would be a result in its own right.
+
+**One is a reference value and not a law, and the write-up says so.** The held-out endpoint is
+seven in-distribution sources of long text; the suite is thirteen short out-of-distribution
+continuations. Nothing guarantees the transfer rate between two text distributions is exactly one
+even where nothing anybody would call decoupling is happening. So the reported quantity is the
+**interval on β**, one and zero are the landmarks it is read against, and a rejection of one is
+written up as "transfer is not one-for-one" and never as "the method decouples".
+
+**There is no regression dilution here and it is worth saying because the bias would point at the
+finding.** Classical errors-in-variables shrinks a slope towards zero, which is exactly the
+direction "decoupling" lives in. It does not apply: *x* is not a noisy estimate of a cell's
+in-loop endpoint, it **is** that cell's endpoint — a deterministic read of one checkpoint against
+one fixed held-out set — and *y* is the same read of the same checkpoint against one fixed suite.
+The 0.00061 BPB in-loop floor is variation *between cells*, which is the signal this regression
+rests on and not error in the predictor. What is left is finite-evaluation-set sampling, common to
+every cell because every cell is scored on the same documents, which moves α and not β.
+
+#### What the slope can resolve, which is the part that makes it worth doing
+
+The x-axis is frozen, so `S_xx = 7.133e-04` and `SE(β) = s_resid / 0.02671 = 37.4 · s_resid` is
+known up to one number nobody has measured. The table is therefore written as a function of it:
+
+| downstream residual scatter | SE(β) | 95% half-width | power vs β=0 | power vs β=0.5 |
+| --- | --- | --- | --- | --- |
+| 0.0010 | 0.037 | 0.08 | 1.00 | 1.00 |
+| 0.0020 | 0.075 | 0.15 | 1.00 | 1.00 |
+| 0.0040 | 0.150 | 0.31 | 1.00 | 0.89 |
+| 0.0060 | 0.225 | 0.46 | 0.99 | 0.57 |
+| 0.0080 | 0.300 | 0.62 | 0.89 | 0.36 |
+| 0.0120 | 0.449 | 0.93 | 0.57 | 0.19 |
+| 0.0160 | 0.599 | 1.24 | 0.36 | 0.13 |
+
+At 80% power, two-sided α = 0.05, exact noncentral t: separating β = 1 from **β = 0** needs a
+downstream residual scatter of **0.0091 BPB or less**; from **β = 0.5**, **0.0046**; from
+β = 0.75, 0.0023. The residual scatter and an arm's downstream σ are near enough the same
+quantity to compare — within an arm the in-loop endpoint barely varies, so σ(y|x) ≈ σ(y) — and on
+that comparison **the regression's coarse question survives a noisier downstream instrument than
+any arm contrast does**: 0.0091 against the best-powered contrast's 0.0072, and fifteen times the
+in-loop baseline floor. Detecting an attenuation to a half needs 0.0046, which sits between the
+treatment-versus-baseline rows and the arm-versus-arm ones.
+
+#### The pooled slope blends two things, and the check that can withhold it
+
+Twenty-five cells are five clusters of five, not twenty-five independent draws. An arm can sit off
+the line for reasons that have nothing to do with its loss, and if it does the residuals are
+correlated within arm and the pooled interval is narrower than the data support. **94% of the
+x-spread is between arms** — 6.70e-04 against 4.33e-05 within — so the pooled slope is very nearly
+the between-arm slope wearing twenty-three degrees of freedom.
+
+Pre-registered, in this order:
+
+1. **Primary: the pooled slope over twenty-five cells, df = 23**, tested against β = 1.
+2. **Always printed beside it: the arm-mean slope over five points, df = 3.** It treats the arm as
+   the experimental unit, which is what an arm is, and cannot be wrong about clustering because
+   there is nothing inside a cluster left for it to be wrong about. It costs
+   `t(0.975,3)/t(0.975,23) = 1.54` in interval width and costs almost no leverage.
+3. **The withholding check: an F test of the four arm dummies added to the line, on (4, 19).** If
+   it does not reject, one line describes the tranche at both levels and the pooled slope stands.
+   **If it rejects, the pooled row stops being primary and the arm-mean row becomes the reported
+   reading**, with the pooled row kept and labelled as the blend it is. This can withhold a claim
+   and can never create one, which is the same shape of rule the training-dose band already has.
+4. **The within-arm slope, df = 19, printed as a diagnostic and in no family.** It asks whether a
+   *replicate* that landed lower in loop lands lower downstream, which is a statement about the
+   two instruments' shared noise rather than about what an intervention buys. Its standard error
+   is 3.9× the pooled one at the same scatter, so it will very likely be uninformative, and that
+   is arithmetic rather than pessimism.
+
+#### The thirteen tasks, and why they are not thirteen chances
+
+1. **The headline regression is the sole primary.** Nothing in the per-task layer is in the
+   confirmatory family, nothing there carries a gate, and no sentence of the write-up may lead
+   with a per-task slope.
+2. Every per-task p-value is printed **Holm-adjusted across the twelve headline tasks**, with the
+   raw value in the same row. It is not possible to read an unadjusted per-task p out of the
+   report without also reading the adjusted one.
+3. The canary is outside that family as well as outside the headline, and is labelled.
+4. **There is deliberately no omnibus test.** The twelve series come off the same twenty-five
+   checkpoints, so their slopes are correlated; a Wald test of slope homogeneity would need a
+   12 × 12 residual covariance estimated from twenty-five points on 23 df and nothing about that
+   statistic's small-sample calibration is known. Holm assumes nothing, is valid under any
+   dependence and is conservative under the positive dependence this has. What replaces the
+   omnibus is descriptive: the range of the twelve slopes against their own median standard
+   error, and the median pairwise correlation of the twelve residual series so a reader can see
+   how conservative Holm is being.
+
+### The arm contrasts, with their power declared now
+
+Priced from the frozen in-loop endpoints as **standalone two-arm comparisons at df = 2(n−1) = 8**,
+which is the conservative reading and the right one: Bartlett **rejected** on the in-loop endpoint
+once the fifth arm landed, the pre-committed consequence is Welch everywhere, and a
+Welch–Satterthwaite df for a five-against-five pair sits nearer 8 than the five-arm pooled 20. The
+pooled pricing is about 9% more generous and is printed beside it.
+
+| | contrast | in-loop Δ (BPB) | downstream σ it needs | × in-loop pooled floor | verdict |
+| --- | --- | --- | --- | --- | --- |
+| **D1** | faithful − baseline | −0.0146 | ≤ 0.0072 | 4.9× | powered |
+| **D1a** | no-output-init − baseline | −0.0126 | ≤ 0.0062 | 4.2× | powered |
+| **D2b-ii** | output-only − baseline | −0.0118 | ≤ 0.0058 | 4.0× | powered |
+| **D2b-i** | faithful − output-only | −0.0027 | ≤ 0.0014 | 0.9× | **under-powered** |
+| **D5** | mhc − faithful | +0.0027 | ≤ 0.0013 | 0.9× | **under-powered** |
+| **D1b** | faithful − no-output-init | −0.0020 | ≤ 0.0010 | 0.7× | **under-powered** |
+
+The in-loop floor is **0.00061 BPB** on the baseline at df = 4 and **0.00147** pooled at df = 20.
+The three treatment-versus-baseline rows tolerate a downstream floor four to five times the pooled
+in-loop one and roughly ten to twelve times the baseline one, and should resolve. **The three
+arm-versus-arm rows need a downstream instrument quieter than the in-loop one**, which is not
+plausible: downstream averages about thirteen thousand short out-of-distribution continuations
+where the in-loop endpoint averages millions of in-distribution tokens. The two groups are
+separated by a factor of four with nothing in the gap, and the threshold in the code sits in the
+middle of it, at twice the in-loop pooled floor.
+
+**D2b-i, D5 and D1b are therefore declared under-powered here, on 2026-08-12, before any
+downstream document existed. A null on any of them is reported as uninformative and will not be
+written up as an absence of effect.** What each would need instead, at a measured downstream
+floor:
+
+| | seeds/arm at σ=0.002 | 0.004 | 0.006 | 0.008 |
+| --- | --- | --- | --- | --- |
+| D1 | 3 | 3 | 4 | 6 |
+| D1a | 3 | 3 | 5 | 8 |
+| D2b-ii | 3 | 4 | 6 | 9 |
+| **D2b-i** | 10 | 35 | 76 | 135 |
+| **D5** | 10 | 36 | 79 | 139 |
+| **D1b** | 18 | 67 | 149 | 264 |
+
+Two honest qualifications on that table. It is powered against the **in-loop** effect, frozen
+before any downstream document existed, and never against the observed downstream estimate — a
+sample size computed from the estimate the same data produced is post-hoc power and is a monotone
+restatement of the p-value. And it is **conditional on unit transfer, which is the thing the
+primary analysis tests**: if β comes back materially below one, the true downstream effects are
+smaller by that factor and every count above is too small. The report states this rather than
+quietly rescaling, because rescaling by a fitted slope would make the figure post-hoc after all.
+
+#### H2b has two halves and only one of them is an arm ordering
+
+The pre-registration reads: "Arm 2 > arm 3 on the downstream average, **and** arm 3 but not arm 2
+reproduces the published degradation."
+
+- The first clause is **D2b-i**, is an arm ordering, and is declared under-powered above.
+- The second clause is **not an arm ordering at all**. It is two treatment-versus-baseline signs —
+  **D2b-ii** (does arm 3 come back *worse* than the baseline downstream?) and **D1** (does arm 2
+  not?) — and both are in the powered group. **So the half of H2b that carries the headline is the
+  powered half**, and reporting H2b as blocked by power would be wrong in the direction that
+  matters. `published_degradation_verdict` assembles the conjunction and reports one of
+  *reproduced*, *not reproduced*, *both degrade* or *inverted*.
+
+**D2b-ii's predicted sign is positive**, because the published result is a *worsening*. That is
+the only entry in either hypothesis table pointing that way, and it is stated so that a negative
+result is read as what it is: a refutation of **this module's own** pre-registered explanation of
+the inversion, on the instrument the inversion was measured on, which is precisely what the
+in-loop H2a could not deliver. **The analyst already knows the in-loop tranche points that way**
+— arm 3 beats the baseline in loop by 0.0118 — and that is disclosed here rather than discovered
+later; what is new is the instrument, not the direction of the guess.
+
+**Only the sign of the published effect transfers, never its size.** Tencent's number is two
+points of CLIMB accuracy — 0.4626 against baseline, at roughly ten sigma outside a seed band
+bootstrapped from three baseline seeds — and this endpoint is gold-continuation bits per byte over
+a different suite at a third of the parameters. There is no conversion between the two, none is
+attempted, and no interval here is read against 0.020 of anything.
+
+### The two free improvements, taken
+
+- **Pair on the seed, which is `init_seed` less one constant that every arm shares.** The block is
+  already there and costs nothing. The precedence is the in-loop module's: paired if ρ̂ clears the
+  pre-registered break-even of 0.09, unpaired if not, and **Welch overriding both if Bartlett
+  rejects**. Blocked error df = (k−1)(n−1) = 16, pooled unpaired df = k(n−1) = 20, both attached
+  to every estimate. If the grid has a hole the pairing is *dropped* and said to be dropped, never
+  re-formed over whichever seeds happen to be shared.
+- **Measure the downstream noise floor from the five baseline cells at df = 4 rather than assuming
+  one.** The baseline is the only arm whose scatter is the instrument and nothing else; pooling
+  over five arms mixes in whatever spread a treatment introduced, and two of these arms are the
+  ones this document predicts may be unstable. Both are printed with their df, their χ² intervals
+  and their c₄ corrections, exactly as the in-loop report prints 0.00061 beside 0.00147.
+
+### Conventions carried over unchanged
+
+Degrees of freedom attached to every estimate and printed fractionally where a Welch–Satterthwaite
+value is not a count of anything. Welch wherever Bartlett rejects. The c₄ correction applied
+**once**, inside the minimum detectable effect, and deliberately not to the t statistic or the
+interval, which are built on the distribution of *s* and already carry the bias. Every effect
+reported against its own MDE as well as against the gate and the exact p-value, so that "below the
+gate" and "smaller than this design can see" stay distinguishable. Estimators imported from
+`noise_floor.py` and `analysis.py` rather than restated, and the schema imported from
+`score_checkpoints.py` rather than restated. **`POST_HOC` is empty and the report says so in as
+many words**; the machinery is live from the first run so that anything added later has somewhere
+to go and cannot be added without a label.
+
+**There is no nats column, and the in-loop report has one.** `analysis.py` multiplies held-out BPB
+by 4.57 · ln 2 because 4.57 bytes per token is one constant across the seven held-out sources. The
+downstream suite is thirteen other texts, their bytes per token is not 4.57 and is not one
+constant across them, so carrying that conversion here would produce a column in no unit at all —
+internally consistent, and quoted.
+
+### What the analysis refuses to do
+
+`noise_floor.py --dry-run` once printed a complete, internally consistent, entirely synthetic
+report under a submission id it had been handed and never read, and it was acted on for twelve
+hours. It was labelled. Labelling is therefore not the mitigation, and these are:
+
+- **Fewer than twenty-five documents is a refusal that names the missing cells one by one**, not a
+  smaller analysis. `--allow-provisional` downgrades completeness and *only* completeness, and
+  stamps `PROVISIONAL` on everything it writes.
+- **Not downgradable by anything**: a wrong schema, a duplicate cell, a cell outside the tranche
+  table, an `arm_number` disagreeing with the arm table, a step other than 6,000, a truncated
+  score, a null headline, a missing task, a headline built over fewer groups than the suite
+  declares, or twenty-five numbers that did not come off one instrument. That last one covers
+  suite, suite version, metric, tokenizer, dtype, device and torch version: the widest contrast
+  here is 0.0146 BPB and the narrowest 0.0020, and a second GPU model is a covariate that lines up
+  with whichever cells landed on it rather than noise.
+- **The synthetic path is a separate verb**, `--demo`, unreachable from the measured one, which
+  writes under a `synthetic-` prefix and prefixes every line it prints.
+- **W&B is read through `analysis.read_arm` or not at all**, so the history is reconciled against
+  the summary, crash reports are excluded and each cell's own config is checked against the arm it
+  claims. A crash reporter once overwrote seven summaries and a cell that had run 4,910 steps read
+  back as one that never started; a second reader written here would be a second chance to
+  re-make that, by somebody who had already seen the downstream numbers.
+- **The program does not reach AWS.** An `s3://` argument is refused with the reason rather than
+  opened, per `AGENTS.md`. The documents are on each cell's stdout as well as in the bucket —
+  `score_checkpoints.write_document` prints before it uploads — so `edullm logs` is a route that
+  needs no credential.
+
+### What this can and cannot conclude
+
+It should settle whether the in-loop improvement survives onto a downstream suite, and at roughly
+what rate, for a method the published literature supplies no loss number for. It should resolve
+all three treatment-versus-baseline contrasts, and with them the powered half of H2b. **It cannot
+resolve any of the three arm-versus-arm contrasts and says so in advance**, so H2b's ordering
+clause, H5 and H1b come back downstream as intervals labelled uninformative with the seed counts
+they would need. And one caveat travels with all of it: β is estimated over a range of in-loop
+endpoints only 0.0176 BPB wide, produced by five interventions at one scale on one corpus, so it
+is a statement about *this* tranche's loss-to-downstream relationship and not a transfer
+coefficient anybody should carry to another model.
 ## Order of operations
 
 1. **Rehearse.** Done: `run_019fdfe9-e6c0`, `faithful` at the rehearsal size, 200 steps,
