@@ -17,14 +17,38 @@
 # does not score the last arm. `score_checkpoints.resolve_target` refuses an index past the
 # table, so too high fails loudly; too low fails not at all.
 #
-# THIS FILE IS NOT SUBMITTABLE AS IT STANDS AND THE MISSING PIECE IS NAMED BELOW. The
-# --arm-run URIs need the platform run ids of the training stages, and most of those stages
-# have not been submitted: hyper_connection_arms.STAGE_SPECS carries `run_id=None` for
-# everything but the baseline, and the baseline's -- `run_019fe279-4ef0` -- is recorded
-# abbreviated rather than as the full uuid7 an S3 prefix needs. Fill them in from
-# `edullm status --json`, which is free and dispatches nothing, once the tranche has landed.
-# A test asserts that the placeholders below are still placeholders, so this cannot be
-# submitted by accident with them in.
+# THE RUN IDS ARE IN AND THIS FILE IS SUBMITTABLE, WHICH IT WAS NOT UNTIL 2026-08-12. All
+# five stages have landed -- twenty-five cells, every one `finished` at step 6,000 -- so the
+# --arm-run URIs below name prefixes that exist.
+#
+# THEY CAME OUT OF W&B AND NOT OUT OF `edullm status`, WHICH IS WORTH RECORDING BECAUSE THE
+# OBVIOUS ROUTE DOES NOT WORK HERE. `edullm status --json <run id>` is free and dispatches
+# nothing, and it refuses all five with `run_id_not_found`: it resolves an id by reading the
+# manifest of each of the last thirty dispatches of submit-run.yml, and five stages
+# submitted over four days are further back than thirty dispatches of a shared workflow.
+# The only thing that reaches past that window is `--ask-aws`, which dispatches
+# cancel-run.yml to do it, so it is not a read.
+#
+# W&B answers for free and answers better, because the answer can be checked. Every cell
+# logs under `<full run id>-cell-<index>` in eduLLM/pre-training, so the full uuid7 an S3
+# prefix needs is a prefix of a run name; and each cell's own config says which arm it is,
+# so `stage_gate.arms_consistent_with` confirms the mapping instead of trusting it. All five
+# ids came back unique, five cells each, every `cell-<index>` equal to that cell's
+# `init_seed`, and every arm consistent with the row it is written against below. `faithful`
+# also reads consistent with `decay-everything`; that is not an ambiguity in the id but the
+# two arms being the same model, differing only in the optimizer's parameter groups, which a
+# model config cannot show.
+#
+# THE ABBREVIATED FORM IS NOT A PREFIX ANYTHING SERVES. `hyper_connection_arms.STAGE_SPECS`
+# records `run_019fe279-4ef0`, `edullm status` prints a `short_run_id` beside every run, and
+# this module's prose is written in the short form throughout. S3 does not match prefixes,
+# so a truncated id here is not a slow read; it is a key that does not exist.
+#
+# A test asserted these were still placeholders, so the file could not be submitted by
+# accident before the tranche landed. It has been replaced by its inverse --
+# `test_the_spec_names_a_full_run_id_for_every_funded_arm` -- because the failure that is
+# live now is the half-filled command: one arm left on a placeholder is five cells that pull
+# an image and refuse, and it is the arm somebody has just finished paying for.
 #
 # ONE --arm-run PER FUNDED ARM, AND THE LIST HAS TO TRACK `hyper_connection_arms.FUNDED`.
 # Every cell of the fan-out is handed this one command and any cell may turn out to be any
@@ -39,9 +63,15 @@
 # hyper-connections.md marks H2b **blocked**, and it is the only pre-registered hypothesis
 # in the module that nothing else funds: "the result H2 sets out to explain is Tencent's
 # -0.020 on a *downstream average* at 1.2B, and arm 3 produces in-loop bits-per-byte. Those
-# are not the same measurement... loss and downstream decouple by 6 to 16 points for changes
-# in this class." H2a -- arm 2 against arm 3 on held-out cross-entropy -- is evidence that
-# two implementations differ. It is not evidence about the published negative result.
+# are not the same measurement, and that on its own is the whole reason." H2a -- arm 2
+# against arm 3 on held-out cross-entropy -- is evidence that two implementations differ.
+# It is not evidence about the published negative result.
+#
+# The quoted sentence continued "... loss and downstream decouple by 6 to 16 points for
+# changes in this class" until the literature audit of 2026-08-12, which found that paper
+# locates the decoupling in attention-output modifications and classifies residual-side
+# changes as having loss increases consistent with their downstream drops. Wrong citation,
+# unchanged conclusion.
 #
 # H5 GETS THE SAME NUMBER FOR FREE. `mhc` is funded as stage 3 and the fan-out covers every
 # funded cell, so the arm whose null the module calls its only readable one is read
@@ -200,11 +230,11 @@ workload_profile: olmo-core-train
 suggested_compute: gpu-1xl4
 command: >-
   bash -lc 'EDULLM_CHECKPOINT_CHECK=waived python .edullm/score_checkpoints.py "$EDULLM_RUN_ID"
-  --arm-run baseline=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/RUN_ID_OF_THE_BASELINE_STAGE/
-  --arm-run faithful=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/RUN_ID_OF_THE_FAITHFUL_STAGE/
-  --arm-run output-only=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/RUN_ID_OF_THE_OUTPUT_ONLY_STAGE/
-  --arm-run mhc=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/RUN_ID_OF_THE_MHC_STAGE/
-  --arm-run no-output-init=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/RUN_ID_OF_THE_NO_OUTPUT_INIT_STAGE/
+  --arm-run baseline=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/run_019fe40f-c71e-7045-9b58-537b9e2f6cb4/
+  --arm-run faithful=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/run_019fe90b-f99e-7027-b835-5d91feda869c/
+  --arm-run output-only=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/run_019fe9f6-d060-7016-8bd9-e3b1b21d6638/
+  --arm-run mhc=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/run_019fe9f6-d4f8-7077-841f-5da0312c3603/
+  --arm-run no-output-init=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/run_019fec90-51f8-70a8-8642-275550a81137/
   --model-factory hc_370M
   --step 6000
   --suite h2b

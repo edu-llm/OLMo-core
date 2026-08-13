@@ -15,6 +15,7 @@ vacuously. It is the ``eval`` extra in ``pyproject.toml``.
 import json
 import os
 import pathlib
+import re
 import shlex
 import socket
 import sys
@@ -1014,25 +1015,56 @@ def test_a_single_device_shape_runs_one_process_and_does_not_go_through_torchrun
     assert not [token for token in command if token.startswith("--nproc-per-node")]
 
 
-def test_the_spec_still_has_its_placeholder_run_ids():
-    """
-    THE GUARD AGAINST SUBMITTING THIS BEFORE IT CAN WORK. Two of the three training stages
-    have not been submitted -- ``STAGE_SPECS`` carries ``run_id=None`` for both -- and the
-    one that has is recorded abbreviated. A spec carrying a plausible-looking URI that is
-    not a run would fan out fifteen cells that each pull an image and refuse.
+#: A platform run id in the only form an S3 prefix can be built out of: the whole uuid7.
+#:
+#: The short form is what everything human-facing uses -- ``STAGE_SPECS`` records
+#: ``run_019fe279-4ef0``, ``edullm status`` prints a ``short_run_id`` beside every run, and
+#: this module's prose is written in it throughout -- so it is the form somebody will paste.
+#: S3 does not match prefixes, so pasting it is not a slow read; it is a key that is not there.
+FULL_RUN_ID = re.compile(r"run_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
-    When the ids are real this test is what has to be deleted, deliberately, in the same
-    commit that fills them in.
+
+def test_the_spec_names_a_full_run_id_for_every_funded_arm():
+    """
+    THE INVERSE OF THE GUARD THIS REPLACES, AND IT IS THE ONE WORTH HAVING NOW.
+
+    Until the tranche landed the risk was submitting with placeholders in, so a test asserted
+    that all of them were still there and said it was to be deleted in the commit that filled
+    them in. All five stages have since finished and the ids are in, so what is live now is
+    the half-filled command: one arm left on a placeholder is five cells that pull an image
+    and refuse, and it is the arm somebody has just finished paying for. That is the shape
+    ``mhc`` and then ``no-output-init`` each arrived in.
+
+    Nothing here says the ids are the RIGHT ones -- ``check_against_saved_config`` does that,
+    on the machine, by holding the arm table's answer against the config the training run
+    wrote beside its weights. This says only that each one is an id at all.
     """
     opts = score.build_parser().parse_args(committed_argv())
     runs = score.parse_arm_runs(opts.arm_run)
-    assert runs, "the spec names no arm runs at all"
-    filled = {arm: uri for arm, uri in runs.items() if "RUN_ID_OF_THE" not in uri}
-    assert not filled, (
-        f"{sorted(filled)} carry what look like real run ids, so this spec claims to know "
-        "where those training runs wrote their checkpoints. Delete this test in the commit "
-        "that fills them in, and check the ids against `edullm status --json`."
-    )
+    for arm in sorted(arms.FUNDED):
+        uri = runs[arm]
+        assert "RUN_ID_OF_THE" not in uri, f"{arm} still carries a placeholder: {uri}"
+        assert FULL_RUN_ID.search(uri), (
+            f"{arm} does not name a full uuid7 run id: {uri}. An S3 prefix needs the whole "
+            "id, and the abbreviated form this module writes its prose in is a key that "
+            "does not exist rather than a prefix something will resolve."
+        )
+
+
+def test_no_two_funded_arms_are_pointed_at_the_same_run():
+    """
+    Two arms sharing a URI is a copy-paste that reads as a result. The cell would load the
+    other arm's weights, ``check_against_saved_config`` would refuse it on the machine, and
+    five of the twenty-five cells would come back empty -- after the fan-out has been priced,
+    approved and given twenty-five machines. It costs nothing to find here instead.
+    """
+    opts = score.build_parser().parse_args(committed_argv())
+    runs = score.parse_arm_runs(opts.arm_run)
+    by_uri: dict = {}
+    for arm in sorted(arms.FUNDED):
+        by_uri.setdefault(runs[arm], []).append(arm)
+    shared = {uri: sharers for uri, sharers in by_uri.items() if len(sharers) > 1}
+    assert not shared, f"one run id serves more than one arm: {shared}"
 
 
 def test_the_checkpoint_contract_is_waived_out_loud_rather_than_faked():
