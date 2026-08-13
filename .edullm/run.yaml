@@ -163,7 +163,8 @@ command: >-
   --out /tmp/probe 2>&1 | tee /tmp/probe.log | sed -u "s|^|[probe] |";
   PEAK=$(grep -oE "peak_mem_gb=[0-9.]+" /tmp/probe.log | tail -1 | cut -d= -f2);
   echo "PROBE PEAK MEMORY: ${PEAK:-unknown} GB (card is 39.5 GB)";
-  awk -v p="${PEAK:-99}" 'BEGIN{ if (p+0 > 34) { print "ABORT: a CODI arm peaks at " p " GB, too close to the 39.5 GB card. Not spending ten hours on a configuration that will OOM."; exit 1 } }' || exit 1;
+  python -c "import sys; sys.exit(1 if float(sys.argv[1]) > 34 else 0)" "${PEAK:-99}"
+  || { echo "ABORT: a CODI arm peaks at ${PEAK:-unknown} GB against a 39.5 GB card. Not spending ten hours on a configuration that will OOM."; exit 1; };
   LOGS=/tmp/armlogs; mkdir -p "$LOGS";
   pids=(); tails=(); for i in 0 1 2 3 4; do : > "$LOGS/A$i.log";
   WANDB_RUN_ID="${WANDB_RUN_ID:-$EDULLM_RUN_ID}-A$i"
