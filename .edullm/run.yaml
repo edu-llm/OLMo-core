@@ -1,4 +1,13 @@
-# RE-EVALUATE run_019ff806's A0 and A1 with the fixed explicit-CoT answer position.
+# RE-EVALUATE ALL FIVE ARMS of run_019ff929 with the fixed explicit-CoT answer position.
+#
+# THIS IS THE RUN THAT PRODUCES THE NUMBERS TO PRESENT. run_019ff929 trained all five arms to
+# step 2000 on the repaired data, but its image was built from 43f9d027 -- before the eval fix at
+# dbe61102 -- so its own in-job gate A was computed as (A2 - a broken A0 of ~0.50) instead of
+# (A2 - a true A0 of ~0.97). That inflates gate A by roughly 45 points and flips its sign. The
+# same checkpoints, re-scored with the corrected answer position, give the real gates.
+#
+# --match-steps is on and every arm reached step 2000, so all five are compared at an identical
+# optimization budget rather than at whatever step each happened to stop on.
 #
 # This does no training. It reads checkpoints another run already wrote, so it names
 # olmo-core-check rather than the train profile -- no checkpoint contract, one attempt, and it does
@@ -7,10 +16,11 @@
 # platform builds an image from a commit, so a later change to this file cannot disturb a job that
 # is already running.
 #
-# WHAT IT IS FOR. run_019ff806 measured A0 (explicit_cot) at 0.518 -- essentially chance -- while its
-# training CE on the teacher trace had fallen to 0.001. A model that writes the BFS trace almost
-# perfectly and then answers at chance is not a model that failed to learn; it is a measurement
-# reading the answer in the wrong place. This run is what tells those two apart.
+# THE BUG IS ALREADY CONFIRMED, so this run is not a diagnosis -- it is the measurement. On
+# run_019ff806's A0 checkpoint the broken path scored 0.518 and the corrected path scored 0.968, with
+# A1 unchanged at 0.504 as the control and the eval running in 9.5 min instead of 27.6 because
+# generation now stops instead of hitting the cap on every example. run_019ff929's own in-job eval
+# used the broken path, so its A0 term is ~0.50 rather than ~0.97 and its gate A is unusable.
 #
 # THE BUG. encode_example lays the teacher view out as
 #     question <bot> cot <eot> <distill> answer
@@ -39,21 +49,16 @@
 # Neither branch is guessable from accuracy alone, which is exactly why the counter exists. It
 # should have been added when this was first flagged.
 #
-# --arms A0,A1 and nothing else. A2-A4 never wrote a checkpoint in run_019ff806 -- they OOMed two
-# minutes in -- so asking for them would only reprint an inventory already recorded in
-# docs/latent-cot/RESULTS-2026-08-12.md. A1 is here as a control: its no_cot path is untouched by
-# this change, so if it moves off the 0.500 it scored before, the change did something it should not
-# have.
-#
-# NO --match-steps. Both arms ran to step 2000 under one wall clock and there is no CODI arm to
-# match against, so a common step would only re-derive model.pt. The five-arm eval after
-# run_019ff929 is where matching earns its keep.
+# ALL FIVE ARMS, because run_019ff929 is the first run in which all five wrote checkpoints -- 24
+# files each, step100..2000 -- after gradient accumulation cut a CODI arm's peak from 38.72 GiB to
+# 15.6 GiB. A1 doubles as the control on this change: its no_cot path is untouched by the eval fix,
+# so it should still read ~0.504, and if it moves the fix did something it should not have.
 #
 # --max-new-tokens is left unset so eval_arms_from_s3.py derives it from the test data and prints
 # what it chose. It was hardcoded to 64 once, from a count of whitespace words rather than tokens,
 # and silently truncated 226 of 960 examples.
 #
-# The checkpoint root is run_019ff806's; $EDULLM_CHECKPOINT_DIR is this run's own output, so
+# The checkpoint root is run_019ff929's; $EDULLM_CHECKPOINT_DIR is this run's own output, so
 # report.json lands under this run id rather than overwriting the earlier one.
 schema_version: 1
 workload_profile: olmo-core-check
@@ -62,10 +67,10 @@ command: >-
   bash -lc 'set -uo pipefail;
   export PYTORCH_ALLOC_CONF=expandable_segments:True;
   DATA=data/latentcot/graph-reachability-depth/conversations;
-  CKPTS=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/run_019ff806-447d-70e8-a1ae-be2331b21a97/checkpoints;
+  CKPTS=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/run_019ff929-36c1-70bb-bd3a-0753a46c0330/checkpoints;
   python src/scripts/latentcot/gen_graph_data.py;
   python src/scripts/latentcot/eval_arms_from_s3.py
-  --checkpoint-root "$CKPTS" --arms A0,A1
+  --checkpoint-root "$CKPTS" --arms A0,A1,A2,A3,A4 --match-steps
   --test-data $DATA/heldout-00000.jsonl
   --model olmo3_370M --precision bf16 --num-continuous-thoughts 10 --seed 1
   --out runs/latentcot/eval --publish-to "$EDULLM_CHECKPOINT_DIR"'
