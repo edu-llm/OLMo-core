@@ -294,6 +294,13 @@ def main() -> int:
                             # per_item_ce is dropped from the record: it is what the bootstrap
                             # above consumed, and keeping thousands of floats per cell would
                             # bloat the results JSON without adding anything a reader needs.
+                            #
+                            # per_item_exact is KEPT, and it is the one per-item array worth the
+                            # bytes. Arms see byte-identical items within a cell, so exact match is
+                            # paired across arms and McNemar's test on the discordant pairs is the
+                            # right one; from aggregate counts alone the best available was
+                            # Fisher's on two independent samples, which discards the pairing and
+                            # is needlessly conservative. 96 ints per cell.
                             rec = {k: v for k, v in got.items() if k != "per_item_ce"}
                             arm["niah"].append(
                                 {
@@ -305,6 +312,10 @@ def main() -> int:
                                     "gain": ctlr["ce"] - got["ce"],
                                     "gain_ci95": [lo, hi],
                                     "gain_boot": boot,
+                                    # the control's flags too, so "did the needle help THIS arm"
+                                    # is also a paired question rather than two proportions.
+                                    "per_item_exact_ctrl": ctlr.get("per_item_exact"),
+                                    "exact_ctrl": ctlr.get("exact"),
                                 }
                             )
                             ci = f" [{lo:+.2f},{hi:+.2f}]" if lo is not None else ""

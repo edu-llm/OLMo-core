@@ -1,4 +1,22 @@
-# THREE-WAY EVAL: PLAIN LINEAR ATTENTION vs GATED DELTANET vs GATED DELTANET-2.
+# THREE-WAY EVAL: PLAIN LINEAR ATTENTION vs GATED DELTANET vs GATED DELTANET AT A QUARTER STATE.
+#
+# THE THIRD ARM IS THE STATE-SIZE ABLATION, and it is not a clean one -- say so wherever its
+# numbers are used. It halves head_dim 64 -> 32 with expand_v 1.0, so key and value head dims BOTH
+# halve and the recurrent state goes as their product: 16 x 32 x 32 = 16,384 floats per layer
+# against the baseline's 16 x 64 x 64 = 65,536. A QUARTER, not a half, whatever the run is named.
+#
+# It also differs from the gdn baseline in 61 other config fields, because it was launched through
+# train_on_corpus.py while linear and gdn came from a source-mixture script: plain AdamW rather
+# than SkipStepAdamW, weight decay 0.01 rather than 0.1, a different corpus (pretrain/
+# olmo-150b-dolma2 against a six-source mixture) and a different init seed. So head_dim is
+# confounded, ABSOLUTE perplexity against the other two arms means nothing, and only the
+# within-model quantities carry: the x-own-4096 ratio, the position-resolved CE shape, and the
+# control-subtracted retrieval gain. linear-vs-gdn remains controlled -- those two differ in the
+# mixer and a 1.5% param-count-scaled LR and nothing else.
+#
+# gdn2 is dropped from the arm list rather than kept as a fourth. Three arms already run about
+# half an hour and nobody is reading its numbers; the file it wrote is still in its own run's
+# outputs prefix if that changes.
 #
 #   edullm check  --spec .edullm/run-eval.yaml --experiment gdn-family-eval --dataset none
 #   edullm submit --spec .edullm/run-eval.yaml --experiment gdn-family-eval --dataset none
@@ -11,8 +29,8 @@
 # WHY THE CHECKPOINTS ARE UNDER outputs/ AND NOT WHERE THEY WERE TRAINED. The linear and GDN
 # checkpoints live in s3://edullm-checkpoints, which is in none of the GPU workload role's three
 # policies -- the role reads edullm-data and sbsandbox-intern-edullm-outputs and nothing else. So
-# they were copied into staging prefixes first. GDN-2 needs no copy: it was trained on this
-# platform, so its checkpoints are already under its own run's outputs prefix.
+# they were copied into staging prefixes first. The half-KV arm needs no copy: it was trained on
+# this platform, so its checkpoints are already under its own run's outputs prefix.
 #
 # ONE PROCESS, THREE ARMS, SEQUENTIALLY. Container start, the S3 dataset open and the CUDA
 # context are paid once and shared, so they cancel out of the arm-vs-arm contrast rather than
@@ -67,7 +85,7 @@ command: >-
   bash -lc 'export TRITON_F32_DEFAULT=ieee &&
   S=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs &&
   python .edullm/eval_arms.py "$EDULLM_RUN_ID"
-  --arms "linear=$S/stage-linear/checkpoints/step12716,gdn=$S/stage-gdn/checkpoints/step12716,gdn2=$S/run_019fdfe0-01d2-7092-bdae-dfce5f5d4f19/checkpoints/step19073"
+  --arms "linear=$S/stage-linear/checkpoints/step12716,gdn=$S/stage-gdn/checkpoints/step12716,halfkv=$S/run_019ff6ac-ee05-7091-936b-5856f4e86943/checkpoints/step12716"
   --eval-data "$S/stage-evaldata/arxiv/part-00-00000.npy,$S/stage-evaldata/finemath-3plus/part-000-00000.npy,$S/stage-evaldata/wikipedia/part-00-00000.npy"
   --seq-lens 4096,8192,16384,32768,65536
   --niah-lens 1024,2048,4096,8192,16384

@@ -242,10 +242,18 @@ def score(model, tokens: np.ndarray, spans, answers, device, micro: int = 1):
     Also returns ``per_item_ce``, which is what makes a bootstrap confidence interval on the
     retrieval gain possible: gain is a PAIRED difference over the same items, so the interval has
     to be resampled over items rather than assumed from an aggregate.
+
+    And ``per_item_exact``, for the same reason one level up. Every arm is scored on byte-identical
+    items within a cell -- the item RNG is reseeded per (n_keys, length, depth) before any model
+    loads -- so an arm-vs-arm exact-match comparison is paired, and the correct test is McNemar's
+    on the discordant pairs. Only aggregate counts were stored before, which left Fisher's exact on
+    two independent samples as the only available test: valid but conservative, because it throws
+    away the pairing. The flags are a few hundred bytes per cell.
     """
     n_correct = n_total = n_exact = 0
     ce_sum = 0.0
-    per_item_ce = []
+    per_item_ce: List[float] = []
+    per_item_exact: List[int] = []
     for i in range(0, len(tokens), micro):
         batch = torch.from_numpy(tokens[i : i + micro]).to(device)
         logits = model(input_ids=batch)  # (B, T, V) -- value spans are short, so this is safe
@@ -260,7 +268,9 @@ def score(model, tokens: np.ndarray, spans, answers, device, micro: int = 1):
             ok = pred == tgt
             n_correct += int(ok.sum().item())
             n_total += int(tgt.numel())
-            n_exact += int(bool(ok.all().item()))
+            is_exact = int(bool(ok.all().item()))
+            n_exact += is_exact
+            per_item_exact.append(is_exact)
             item_ce = float(torch.nn.functional.cross_entropy(lg, tgt, reduction="sum").item())
             ce_sum += item_ce
             # PER TOKEN, NOT PER ITEM-SUM, so an item with a 6-token answer is not weighted more
@@ -275,6 +285,7 @@ def score(model, tokens: np.ndarray, spans, answers, device, micro: int = 1):
         "ce": ce_sum / max(1, n_total),
         "n_items": len(tokens),
         "per_item_ce": per_item_ce,
+        "per_item_exact": per_item_exact,
     }
 
 
