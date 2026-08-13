@@ -374,6 +374,7 @@ def train_arm(
     remote_dir: Optional[str] = None,
     on_log: Optional[Callable[[dict], None]] = None,
     max_seconds: Optional[float] = None,
+    micro_batch_size: Optional[int] = None,
 ) -> List[dict]:
     """
     Train ``model`` on one arm; return a list of logged metric snapshots.
@@ -404,6 +405,24 @@ def train_arm(
     :param save_dir: Directory for rolling/best checkpoints; ``None`` disables checkpointing.
     :param save_every: Save a rolling checkpoint every N steps (0 disables).
     :param keep_last: Number of most-recent rolling checkpoints to retain.
+    :param micro_batch_size: Split each batch into slices of this many examples and backward each
+        slice, accumulating gradients before one optimizer step. ``None`` keeps the whole batch in
+        one backward, which is the historical behaviour.
+
+        THE GRADIENT IS UNCHANGED AND THE MEMORY IS NOT. Each slice's loss is scaled by
+        ``len(slice) / len(batch)``, so the accumulated gradient equals what a single full-batch
+        backward would produce -- effective batch size, LR schedule and every confound control are
+        untouched. What changes is peak memory: ``arm_loss`` sums a per-example loss over the batch
+        and returns one tensor, so without slicing nothing is freed until the end and every
+        example's teacher forward *and* K-step student chain are alive simultaneously.
+
+        On the CODI arms that is the difference between running and not. One CODI example is about
+        2,724 token-forwards against A0's 250, so at batch 8 the activations come to roughly 45 GB
+        and a 40 GB A100 dies about two minutes in -- which is how A2/A3/A4 were lost on
+        ``run_019ff806``. Batch size is the wrong lever for it: peak depends on the *longest*
+        examples drawn, so batch 16 survived nearly three hours on shorter data before an unlucky
+        batch killed it, and batch 8 on longer data died immediately. ``micro_batch_size=1`` makes
+        peak depend on one example (~20 GB) whatever the batch is.
     :param max_seconds: Wall-clock budget for the loop. On reaching it the loop stops **cleanly**
         after the current step, saves, and returns, so the caller still writes ``model.pt`` and
         ``metrics.json`` and anything downstream in the same job still runs.
@@ -504,19 +523,44 @@ def train_arm(
             # Read back per STEP, so the logged expert-balance numbers describe this step
             # rather than the whole run to date.
             reset_router_state(model)
-        forwards = count_forwards(batch["examples"], mode=arm.arm_mode) if moe else 1
-        with normalized_aux_losses(model, forwards), autocast_ctx(precision, device):
-            loss, metrics = arm_loss(
-                model,
-                batch["examples"],
-                mode=arm.arm_mode,
-                distill_weight=distill_weight,
-                vocab_reg=arm.vocab_reg,
-                vocab_reg_weight=arm.vocab_reg_weight,
-                vocab_reg_entropy_floor=arm.vocab_reg_entropy_floor,
-            )
-        # backward runs OUTSIDE autocast; autograd replays each op in the dtype it ran in.
-        loss.backward()
+        # GRADIENT ACCUMULATION, AND ON THE CODI ARMS IT IS THE DIFFERENCE BETWEEN RUNNING AND
+        # NOT. `arm_loss` sums a per-example loss over the whole batch and returns one tensor, so
+        # nothing is freed until the single backward: every example's teacher forward AND its
+        # K-step student chain are alive at once, and peak memory scales with batch_size. Measured
+        # on the repaired data, one CODI example is ~2,724 token-forwards against A0's ~250, so at
+        # batch 8 that is ~45 GB of activations and a 40 GB A100 dies about two minutes in --
+        # which is exactly how A2/A3/A4 were lost on run_019ff806, having also died at batch 16.
+        #
+        # Splitting the batch and backward-ing each slice makes peak memory depend on the SLICE
+        # rather than the batch, while the gradient the optimizer sees is identical: each slice is
+        # scaled by len(slice)/n so the accumulated gradient equals the one full-batch backward
+        # would have produced. So this buys the memory without touching the effective batch size,
+        # the LR schedule, or anything else the gates rest on. It costs nothing but a Python loop.
+        examples = batch["examples"]
+        n = len(examples)
+        micro = micro_batch_size or n
+        metrics: Dict[str, float] = {}
+        loss_value = 0.0
+        for start in range(0, n, micro):
+            slice_ = examples[start : start + micro]
+            weight = len(slice_) / n
+            forwards = count_forwards(slice_, mode=arm.arm_mode) if moe else 1
+            with normalized_aux_losses(model, forwards), autocast_ctx(precision, device):
+                slice_loss, slice_metrics = arm_loss(
+                    model,
+                    slice_,
+                    mode=arm.arm_mode,
+                    distill_weight=distill_weight,
+                    vocab_reg=arm.vocab_reg,
+                    vocab_reg_weight=arm.vocab_reg_weight,
+                    vocab_reg_entropy_floor=arm.vocab_reg_entropy_floor,
+                )
+            # backward runs OUTSIDE autocast; autograd replays each op in the dtype it ran in.
+            (slice_loss * weight).backward()
+            loss_value += float(slice_loss.detach()) * weight
+            for key, value in slice_metrics.items():
+                metrics[key] = metrics.get(key, 0.0) + value * weight
+        loss = torch.tensor(loss_value, device=device)
         # clip_grad_norm_ returns the PRE-clip total norm — log it: a rising grad norm is
         # the earliest warning that the latent path is diverging.
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)

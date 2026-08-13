@@ -18,13 +18,9 @@
 # different node named as the sink. The positive and negative of each pair are matched exactly,
 # which is a stronger confound control than the old construction had even in intent.
 #
-# --batch-size 8, NOT 16, AND THAT IS THE OOM FIX. run_019ff280 died at 2h48m with 38.51 GiB
-# allocated on a 40 GiB A100, at rope.py:528 where q and k are upcast to fp32 inside the forward.
-# Activations scale linearly with batch, so 8 should land near 20 GB. Two things make this
-# comfortable rather than marginal: the repaired generator puts half the nodes on the decoy chain,
-# so BFS frontiers from the source are narrower and sequences are shorter (the longest teacher
-# trace fell from 103 tokens to 57), and only the three CODI arms hold a K=10 chain alive at all.
-# The OOM took exactly A2/A3/A4 and left A0/A1 finishing all 2,000 steps, which is consistent.
+# ON MEMORY: SEE ITEM 4 BELOW. An earlier version of this file claimed batch 8 was the OOM fix
+# because activations "scale linearly with batch". They do not scale in a way batch size controls
+# here, that claim cost run_019ff806's three CODI arms, and the fix is --micro-batch-size 1.
 #
 # THE LR IS NOW LESS ANCHORED, NOT MORE, AND NOBODY SHOULD READ PAST THIS. --lr 2e-5 was never
 # screened, and halving the batch halves the effective step, so it is further from anything
@@ -101,13 +97,36 @@
 #    of having to be predicted before it, which matters because the per-step cost ratio is
 #    estimated, not measured.
 #
-# 4. --batch-size 8 PLUS expandable_segments, FOR THE OOM. 38.51 GiB was allocated on a 40 GiB
-#    A100 at rope.py:528, where q and k are upcast to fp32 inside the forward. Activations scale
-#    linearly with batch because all examples' K-chains are held alive before one backward, so 8
-#    should land near 20 GB. Two things add margin: the repaired generator puts half the nodes on
-#    the decoy chain, so frontiers are narrower and sequences shorter (longest teacher trace 103
-#    -> 57 tokens), and expandable_segments addresses the fragmentation the OOM message itself
-#    pointed at. It does not fix a genuine 38.5 GiB requirement, which is what --batch-size is for.
+# 4. --micro-batch-size 1, WHICH IS THE ACTUAL OOM FIX. --batch-size 8 WAS NOT.
+#    Measured, not reasoned: run_019ff280 died at 38.51 GiB on batch 16, and run_019ff806 died at
+#    38.72 GiB on batch 8 -- halving the batch changed peak memory by 0.2%. The reason is that
+#    `arm_loss` sums a per-example loss over the whole batch and returns ONE tensor, so nothing is
+#    freed until the single backward and every example's teacher forward AND K-step student chain
+#    are alive at once. One CODI example is ~2,724 token-forwards against A0's ~250 (measured on
+#    the repaired data, max 6,158), so scaling A0's observed 11.72 GiB gives ~45 GiB of activations
+#    at batch 8. Peak therefore tracks the LONGEST examples drawn, not the batch size, which is
+#    why batch 16 survived nearly three hours on shorter data before an unlucky batch killed it
+#    while batch 8 on longer data died in two minutes.
+#
+#    train_arm now slices each batch and backwards each slice, scaling by len(slice)/len(batch), so
+#    the accumulated gradient is IDENTICAL to one full-batch backward -- asserted in
+#    test_micro_batching_gives_the_same_gradient_as_one_backward for A0, A2 and A3 -- while peak
+#    memory depends on one example (~20 GiB) whatever the batch is. Effective batch size, the LR
+#    schedule and every confound control are untouched: this is a memory knob and nothing else.
+#
+#    A SECOND BUG WENT WITH IT: torch 2.9 renamed the variable to PYTORCH_ALLOC_CONF, and printed
+#    "PYTORCH_CUDA_ALLOC_CONF is deprecated" while ignoring what the old name asked for. Both names
+#    are exported now. It was never going to rescue a genuine 38.7 GiB need, but it should at least
+#    be in effect.
+#
+#    AND THE RUN NOW MEASURES THIS BEFORE COMMITTING TEN HOURS. A two-step probe on one CODI arm
+#    prints its peak and aborts the whole job above 34 GiB, so a wrong memory assumption costs
+#    about two minutes instead of a night. Three OOM diagnoses in a row were argued from arithmetic
+#    rather than measured; this one is checked on the hardware first.
+#
+#    --batch-size stays 8 rather than returning to the PRD's 16 purely for wall clock: a CODI step
+#    is ~11x an anchor step, and 16 would not finish 2,000 steps inside the budget. Identical
+#    across arms, so it cannot confound the comparison between them.
 #
 # HONEST EXPECTATION, SO THE RESULT IS NOT A SURPRISE: calibrating from the one hard measurement
 # available -- A0/A1 completing 2,000 steps within run_019ff280's 2h48m at batch 16 -- a CODI step
@@ -126,6 +145,7 @@ workload_profile: olmo-core-train
 suggested_compute: gpu-8xa100
 command: >-
   bash -lc 'EDULLM_LAUNCH_CHECK=waived ; set -uo pipefail;
+  export PYTORCH_ALLOC_CONF=expandable_segments:True;
   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True;
   DATA=data/latentcot/graph-reachability-depth/conversations;
   BASE=s3://edullm-checkpoints/olmo-370m/olmo3-370m/run-10b-equal/step12716/;
@@ -135,12 +155,22 @@ command: >-
   --test-data $DATA/heldout-00000.jsonl || exit 1;
   python src/scripts/latentcot/verify_checkpoint.py --model olmo3_370M
   --init-checkpoint "$BASE" || exit 1;
+  echo "===== MEMORY PROBE (A2, micro-batch 1, 2 steps) =====";
+  python src/scripts/latentcot/train_codi.py --arm A2 --rung olmo3_370M
+  --init-checkpoint "$BASE" --steps 2 --batch-size 8 --micro-batch-size 1
+  --precision bf16 --lr 2e-5 --save-every 0 --log-every 1 --val-fraction 0
+  --train-data $DATA/train-00000.jsonl --test-data $DATA/heldout-00000.jsonl
+  --out /tmp/probe 2>&1 | tee /tmp/probe.log | sed -u "s|^|[probe] |";
+  PEAK=$(grep -oE "peak_mem_gb=[0-9.]+" /tmp/probe.log | tail -1 | cut -d= -f2);
+  echo "PROBE PEAK MEMORY: ${PEAK:-unknown} GB (card is 39.5 GB)";
+  awk -v p="${PEAK:-99}" 'BEGIN{ if (p+0 > 34) { print "ABORT: a CODI arm peaks at " p " GB, too close to the 39.5 GB card. Not spending ten hours on a configuration that will OOM."; exit 1 } }' || exit 1;
   LOGS=/tmp/armlogs; mkdir -p "$LOGS";
   pids=(); tails=(); for i in 0 1 2 3 4; do : > "$LOGS/A$i.log";
   WANDB_RUN_ID="${WANDB_RUN_ID:-$EDULLM_RUN_ID}-A$i"
   CUDA_VISIBLE_DEVICES=$i python src/scripts/latentcot/train_codi.py
   --arm ${ARMS[$i]} --rung olmo3_370M --init-checkpoint "$BASE"
   --steps 2000 --batch-size 8 --precision bf16 --lr 2e-5
+  --micro-batch-size 1
   --max-seconds 27000 --save-every 100 --keep-last 2 --best-eval-size 100
   --init-seed 0 --seed 1 --log-every 50
   --wandb-project latent-cot-superposition

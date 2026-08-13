@@ -161,6 +161,18 @@ def main() -> None:
         help="cap on validation examples scored per checkpoint (bounds A0's generation cost)",
     )
     parser.add_argument(
+        "--micro-batch-size",
+        type=int,
+        default=None,
+        help="split each batch into slices of this many examples and backward each slice, "
+        "accumulating gradients before one optimizer step. The gradient the optimizer sees is "
+        "IDENTICAL (each slice is scaled by its share of the batch), so effective batch size and "
+        "every confound control are untouched -- only peak memory changes. Set this to 1 on the "
+        "CODI arms: arm_loss keeps every example's teacher forward and K-step chain alive until "
+        "one backward, which is ~45 GB at batch 8 and killed A2/A3/A4 on run_019ff806. Batch size "
+        "is the wrong lever because peak depends on the longest examples drawn.",
+    )
+    parser.add_argument(
         "--max-seconds",
         type=float,
         default=None,
@@ -355,6 +367,7 @@ def main() -> None:
             remote_dir=remote_dir,
             on_log=tracker.log,
             max_seconds=args.max_seconds,
+            micro_batch_size=args.micro_batch_size,
         )
         best = None
         best_path = run_dir / "best.json"

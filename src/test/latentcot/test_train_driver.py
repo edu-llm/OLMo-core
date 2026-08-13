@@ -259,3 +259,36 @@ def test_train_arm_runs_for_all_modes(dataset):
         model = _tiny_model()
         history = train_arm(model, ARMS[key], dataset, steps=8, batch_size=2, seed=0, log_every=4)
         assert history and all("loss" in h for h in history)
+
+
+@pytest.mark.parametrize("arm_key", ["A2", "A3", "A0"])
+def test_micro_batching_gives_the_same_gradient_as_one_backward(dataset, arm_key):
+    """
+    Gradient accumulation must be numerically equivalent to a single full-batch backward.
+
+    This is the claim the CODI memory fix rests on: each slice's loss is scaled by its share of
+    the batch, so the accumulated gradient is what one backward would have produced, and the
+    effective batch size the gates depend on is untouched. If this drifts, micro_batch_size stops
+    being a pure memory knob and silently becomes a change to the experiment.
+
+    Compared via one step from identical initial weights, so the only difference is how the
+    backward was chunked.
+    """
+    import torch
+
+    torch.manual_seed(0)
+    whole = _tiny_model()
+    sliced = _tiny_model()
+    sliced.load_state_dict(whole.state_dict())  # identical starting point
+
+    common = dict(steps=1, batch_size=4, lr=1e-3, warmup_steps=1, seed=0, log_every=1)
+    train_arm(whole, ARMS[arm_key], dataset, **common)
+    train_arm(sliced, ARMS[arm_key], dataset, micro_batch_size=1, **common)
+
+    # Identical start + identical lr + one step: equal weights after implies equal gradients.
+    # (lr cannot be 0 here -- the WSD scheduler asserts a positive peak.)
+    compared = 0
+    for a, b in zip(whole.parameters(), sliced.parameters()):
+        torch.testing.assert_close(a, b, rtol=1e-4, atol=1e-6)
+        compared += 1
+    assert compared > 0, "no parameters were compared"
