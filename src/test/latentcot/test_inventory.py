@@ -141,7 +141,7 @@ def test_single_pass_matches_the_two_pass_figures(monkeypatch):
     monkeypatch.setattr(E, "predict_reachable", lambda model, ex, mode, **kw: True)
     model = _AlwaysYes()
 
-    overall, by_depth = E.solve_rates_and_overall(model, examples, "no_cot")
+    overall, by_depth, _stats = E.solve_rates_and_overall(model, examples, "no_cot")
     assert overall == pytest.approx(E.overall_accuracy(model, examples, "no_cot"))
     assert by_depth == E.solve_rate_by_depth(model, examples, "no_cot")
     # Spelled out so a refactor that silently reweights the buckets is caught here.

@@ -16,17 +16,18 @@ its CoT up to ``<distill>`` and then decodes.
 
 from collections import defaultdict
 from functools import lru_cache
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Collection, Dict, List, Optional, Tuple, Union
 
 import torch
 
 from .cot import embed_tokens, run_continuous_thoughts
-from .tokens import DISTILL, encode
+from .tokens import DISTILL, EOT, encode
 
 __all__ = [
     "answer_token_ids",
     "node_token_id",
     "greedy_generate",
+    "cot_stop_token_ids",
     "answer_logits",
     "predict_reachable",
     "answer_margin",
@@ -66,17 +67,44 @@ def node_token_id(node: int) -> int:
 
 
 @torch.no_grad()
-def greedy_generate(model, input_ids: List[int], max_new_tokens: int, stop_token: int) -> List[int]:
-    """Greedy-decode from ``input_ids`` until ``stop_token`` is emitted or the cap is hit."""
+def greedy_generate(
+    model, input_ids: List[int], max_new_tokens: int, stop_token: Union[int, Collection[int]]
+) -> Tuple[List[int], bool]:
+    """
+    Greedy-decode from ``input_ids`` until a stop token is emitted or the cap is hit.
+
+    :param model: The model.
+    :param input_ids: The prompt.
+    :param max_new_tokens: Cap on generated tokens.
+    :param stop_token: One token id, or a collection of them.
+
+    :returns: ``(ids, hit_cap)``. ``hit_cap`` is ``True`` when generation ran out of budget without
+        emitting a stop token, which the caller should count -- see :func:`answer_logits`.
+    """
     device = model.device
+    stops = {stop_token} if isinstance(stop_token, int) else set(stop_token)
     ids = list(input_ids)
     for _ in range(max_new_tokens):
         logits = model(torch.tensor([ids], dtype=torch.long, device=device))
         nxt = int(logits[0, -1].argmax())
         ids.append(nxt)
-        if nxt == stop_token:
-            break
-    return ids
+        if nxt in stops:
+            return ids, False
+    return ids, True
+
+
+@lru_cache(maxsize=1)
+def cot_stop_token_ids() -> Tuple[int, ...]:
+    """
+    Token ids that legitimately end a teacher CoT.
+
+    ``render_cot`` finishes with ``found`` or ``none``, and both sit *inside* the supervised CoT
+    span, so the model is trained to emit them. ``EOT`` and ``DISTILL`` are included only so that a
+    model which does emit them is not made to keep generating -- they are **not** something to rely
+    on, because ``encode_example`` masks both positions to ``False`` and nothing ever teaches the
+    model to produce them.
+    """
+    return tuple({encode(" found")[-1], encode(" none")[-1], EOT, DISTILL})
 
 
 def _codi_prefix_suffix_embeds(model, ex):
@@ -90,7 +118,9 @@ def _codi_prefix_suffix_embeds(model, ex):
 
 
 @torch.no_grad()
-def answer_logits(model, ex, arm_mode: str, *, max_new_tokens: int = 128) -> torch.Tensor:
+def answer_logits(
+    model, ex, arm_mode: str, *, max_new_tokens: int = 128, stats: Optional[dict] = None
+) -> torch.Tensor:
     """Return the vocab logits at the answer-predicting (``<distill>``) position for one example."""
     device = model.device
     if arm_mode == "codi":
@@ -103,9 +133,32 @@ def answer_logits(model, ex, arm_mode: str, *, max_new_tokens: int = 128) -> tor
         ids = ex["direct_input_ids"][: ex["direct_distill_pos"] + 1]
         return model(torch.tensor([ids], dtype=torch.long, device=device))[0, -1]
     if arm_mode == "explicit_cot":
+        # THE ANSWER IS READ AT AN <eot><distill> THIS APPENDS, NOT AT ONE THE MODEL EMITS.
+        # encode_example masks the EOT and DISTILL positions to False, so nothing ever trains this
+        # arm to produce them; generating "until <distill>" therefore ran to the cap on essentially
+        # every example and read the answer wherever generation happened to stop. Meanwhile the
+        # answer was supervised as P(answer | question <bot> cot <eot> <distill>), so reading it
+        # without <distill> in place is off-distribution as well. Both faults push accuracy to
+        # chance however well the CoT was learned -- which is what run_019ff806 measured, an A0
+        # scoring 0.518 while its teacher CE had fallen to 0.001.
+        #
+        # So: generate the CoT, stop on a token the model IS supervised to emit, then rebuild the
+        # exact layout training used and read the answer at the DISTILL position.
         prompt = ex["teacher_input_ids"][: ex["teacher_bot_pos"] + 1]  # question <bot>
-        gen = greedy_generate(model, prompt, max_new_tokens=max_new_tokens, stop_token=DISTILL)
-        return model(torch.tensor([gen], dtype=torch.long, device=device))[0, -1]
+        gen, hit_cap = greedy_generate(
+            model, prompt, max_new_tokens=max_new_tokens, stop_token=cot_stop_token_ids()
+        )
+        if stats is not None:
+            stats["explicit_cot_examples"] = stats.get("explicit_cot_examples", 0) + 1
+            stats["explicit_cot_cap_hits"] = stats.get("explicit_cot_cap_hits", 0) + int(hit_cap)
+            stats["explicit_cot_generated"] = stats.get("explicit_cot_generated", 0) + (
+                len(gen) - len(prompt)
+            )
+        # Drop any EOT/DISTILL the model did emit so they are not duplicated by the append.
+        while gen and gen[-1] in (EOT, DISTILL):
+            gen.pop()
+        ids = gen + [EOT, DISTILL]
+        return model(torch.tensor([ids], dtype=torch.long, device=device))[0, -1]
     raise ValueError(f"unknown arm mode: {arm_mode!r}")
 
 
@@ -160,7 +213,7 @@ def overall_accuracy(model, examples, arm_mode: str) -> float:
 @torch.no_grad()
 def solve_rates_and_overall(
     model, examples, arm_mode: str, **kwargs
-) -> Tuple[float, Dict[int, float]]:
+) -> Tuple[float, Dict[int, float], Dict[str, int]]:
     """
     Both accuracy figures from **one** pass over ``examples``.
 
@@ -182,13 +235,14 @@ def solve_rates_and_overall(
     """
     correct: Dict[int, int] = defaultdict(int)
     total: Dict[int, int] = defaultdict(int)
+    stats: Dict[str, int] = {}
     for ex in examples:
         total[ex["depth"]] += 1
         correct[ex["depth"]] += int(
-            predict_reachable(model, ex, arm_mode, **kwargs) == ex["reachable"]
+            predict_reachable(model, ex, arm_mode, stats=stats, **kwargs) == ex["reachable"]
         )
     overall = sum(correct.values()) / sum(total.values())
-    return overall, {d: correct[d] / total[d] for d in sorted(total)}
+    return overall, {d: correct[d] / total[d] for d in sorted(total)}, stats
 
 
 def gate_a_curve(continuous: Dict[int, float], discrete: Dict[int, float]) -> Dict[int, float]:
@@ -257,8 +311,13 @@ def eval_one_arm(model, examples, arm: str, **kwargs) -> dict:
     """
     mode = ARM_MODES[arm]
     model.eval()
-    overall, by_depth = solve_rates_and_overall(model, examples, mode, **kwargs)
+    overall, by_depth, stats = solve_rates_and_overall(model, examples, mode, **kwargs)
     entry = {"mode": mode, "overall_acc": overall, "solve_rate_by_depth": by_depth}
+    if stats:
+        # Surfaced because it is the difference between "the arm cannot answer" and "the eval read
+        # the answer in the wrong place": a high cap-hit rate means generation never reached a
+        # token the model was supervised to stop on.
+        entry["generation"] = dict(stats)
     if mode == "codi":
         entry["decodability"] = mean_decodability(model, examples)
     return entry

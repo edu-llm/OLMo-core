@@ -1,195 +1,71 @@
-# Retrain all five arms on the REPAIRED dataset, then evaluate them, in one job.
+# RE-EVALUATE run_019ff806's A0 and A1 with the fixed explicit-CoT answer position.
 #
-# WHY THIS SUPERSEDES EVERYTHING BEFORE IT. The eval of run_019ff280 (see
-# docs/latent-cot/eval-2026-08-12-run_019ff72e.md) found the dataset was solvable without any
-# search: unreachable targets were given no in-edges, so "does `> T` appear in the edge list" was
-# exactly the label and scored 1.000 at every depth, out-of-distribution depths included. That is
-# why the no-CoT lower anchor came back at a perfect 1.000 while the explicit-CoT upper anchor sat
-# at chance -- inverted anchors are what a shortcut looks like from outside. Every number from
-# every previous run is therefore vacuous, and re-running the CODI arms on that data would have
-# measured nothing. graph_gen.generate() now builds two equal-length layered chains per instance,
-# one rooted at the source and one at an in-degree-zero decoy root, and the classes differ ONLY in
-# which chain the target sits on. On the regenerated held-out split every surface rule tested is
-# at chance (0.500-0.517, was 1.000), and test_no_surface_heuristic_separates_the_classes is the
-# regression test.
+# This does no training. It reads checkpoints another run already wrote, so it names
+# olmo-core-check rather than the train profile -- no checkpoint contract, one attempt, and it does
+# not need eight A100s for a forward pass. The five-arm training spec is in this branch's history at
+# commit 43f9d027, and the run built from it, run_019ff929, is unaffected by anything here: the
+# platform builds an image from a commit, so a later change to this file cannot disturb a job that
+# is already running.
 #
-# A PROPERTY WORTH KNOWING WHEN READING THE RESULTS: nothing in the construction except the choice
-# of target consults `reachable`, so for a fixed seed both classes are the SAME GRAPH with a
-# different node named as the sink. The positive and negative of each pair are matched exactly,
-# which is a stronger confound control than the old construction had even in intent.
+# WHAT IT IS FOR. run_019ff806 measured A0 (explicit_cot) at 0.518 -- essentially chance -- while its
+# training CE on the teacher trace had fallen to 0.001. A model that writes the BFS trace almost
+# perfectly and then answers at chance is not a model that failed to learn; it is a measurement
+# reading the answer in the wrong place. This run is what tells those two apart.
 #
-# ON MEMORY: SEE ITEM 4 BELOW. An earlier version of this file claimed batch 8 was the OOM fix
-# because activations "scale linearly with batch". They do not scale in a way batch size controls
-# here, that claim cost run_019ff806's three CODI arms, and the fix is --micro-batch-size 1.
+# THE BUG. encode_example lays the teacher view out as
+#     question <bot> cot <eot> <distill> answer
+# with the label mask True on the cot span and True on the answer span, but FALSE on both <eot> and
+# <distill>. Nothing ever trains this arm to emit <distill>. The eval nevertheless generated "until
+# <distill>" and read the answer logits wherever generation stopped -- for a token the model was
+# never supervised to produce, that means the cap on essentially every example. And the answer was
+# supervised as P(answer | ... cot <eot> <distill>), so reading it without <distill> in place is
+# off-distribution too. Either fault alone drives accuracy to chance however well the CoT was
+# learned.
 #
-# THE LR IS NOW LESS ANCHORED, NOT MORE, AND NOBODY SHOULD READ PAST THIS. --lr 2e-5 was never
-# screened, and halving the batch halves the effective step, so it is further from anything
-# justified than it was. Any separation this run shows between arms carries that caveat. It is
-# held identical across arms, so it cannot become a confound BETWEEN them -- it only limits what
-# an absolute number means.
+# THE FIX, in answer_logits: generate the CoT, stop on a token the model IS supervised to emit
+# (render_cot ends with `found` or `none`, both inside the supervised span), then rebuild
+# `... <eot> <distill>` and read the answer at that DISTILL position. The eval now constructs the
+# position instead of hoping the model produces it.
 #
-# THE BASE CHECKPOINT PATH IS philote-dev's, FROM d77fa255, AND IS NOT TO BE "TIDIED".
-# s3://edullm-olmo-370m-ckpts/... appears in this repo's own PRD and docs and does not exist; the
-# weights are under edullm-checkpoints/olmo-370m/. Three of my runs died on the invented path.
-# verify_checkpoint.py strict-loads it before any arm starts, so a wrong path or a missing grant
-# costs a minute and the queue slot rather than the run.
+# READ THE `generation` BLOCK IN THE REPORT, NOT JUST THE ACCURACY. Each arm's entry now carries
+# explicit_cot_cap_hits / explicit_cot_examples / explicit_cot_generated, and that ratio is the
+# whole diagnosis -- it is why this is worth a card:
+#   - cap_hits near zero, accuracy still ~0.5  ->  the fix worked and A0 genuinely cannot solve the
+#     task at this budget. The ceiling is at chance, gate A has no headroom, and that is a real if
+#     unwelcome result about a 370M model rather than a bug.
+#   - cap_hits high  ->  the arm still is not stopping where it should, the number is still not a
+#     measurement of reasoning, and the next fix is the label mask, so <eot>/<distill> are
+#     supervised at training time.
+# Neither branch is guessable from accuracy alone, which is exactly why the counter exists. It
+# should have been added when this was first flagged.
 #
-# THREE PARTS ARE PINNED BY THE PLATFORM AND MUST NOT BE REQUOTED OR REORDERED:
-#   EDULLM_LAUNCH_CHECK=waived   5 processes on 8 cards. THE SPACE BEFORE THE SEMICOLON IS
-#                                LOAD-BEARING: carries_the_token matches an exact word after
-#                                shlex splitting, so `waived;` is a different word and never
-#                                matches. It is not silent -- the approver is told the run bills
-#                                for 8 and starts 5.
-#   "$EDULLM_CHECKPOINT_DIR/A$i" require_a_save_folder_a_retry_can_find reads the command TEXT
-#                                for this variable. It expands to an s3:// URI, which
-#                                train_codi.py handles by staging locally and mirroring each
-#                                artifact as it is written.
-#   --rung olmo3_370M            explicit, because train_codi.py still defaults to olmo2_370M,
-#                                and a forgotten flag trains one architecture and evaluates as
-#                                another.
+# --arms A0,A1 and nothing else. A2-A4 never wrote a checkpoint in run_019ff806 -- they OOMed two
+# minutes in -- so asking for them would only reprint an inventory already recorded in
+# docs/latent-cot/RESULTS-2026-08-12.md. A1 is here as a control: its no_cot path is untouched by
+# this change, so if it moves off the 0.500 it scored before, the change did something it should not
+# have.
 #
-# THE ARM LOGS GO TO /tmp AND ARE TAILED TO STDOUT -- philote-dev's cadda1c6. Redirecting to
-# "$EDULLM_CHECKPOINT_DIR/A$i/train.log" writes to a LOCAL relative path ("s3:/bucket/...") that
-# dies with the container, which is how two runs failed with no visible cause. /tmp plus a tail
-# per arm puts every arm's progress in the run log, and the last 40 lines of each are dumped at
-# the end so a failure is legible without a second dispatch.
+# NO --match-steps. Both arms ran to step 2000 under one wall clock and there is no CODI arm to
+# match against, so a common step would only re-derive model.pt. The five-arm eval after
+# run_019ff929 is where matching earns its keep.
 #
-# THE EVAL RUNS IN THE SAME JOB, deliberately. It needs one GPU for ~25 min against ~5 h of
-# training, so a second submission and a second approval would cost more waiting than compute.
-# It reads $EDULLM_CHECKPOINT_DIR -- the arms' own mirrored checkpoints -- and republishes
-# report.json after every arm, so a run killed at the wall still has every arm it finished.
-# `|| true` on the eval: if it fails, the checkpoints are already in S3 and can be evaluated by a
-# cheap follow-up, so an eval bug must not mark five trained arms as a failed run.
+# --max-new-tokens is left unset so eval_arms_from_s3.py derives it from the test data and prints
+# what it chose. It was hardcoded to 64 once, from a count of whitespace words rather than tokens,
+# and silently truncated 226 of 960 examples.
 #
-# --max-new-tokens IS NOT PASSED, ON PURPOSE. eval_arms_from_s3.py derives it from the test data
-# (longest teacher trace + 8) and prints it. The first version of this hardcoded 64, taken from a
-# count of whitespace words rather than tokens, and silently truncated 226 of 960 examples.
-#
-# --attempts 1 at submit time: there is no --resume, so a second attempt restarts from the base
-# checkpoint and bills a second full run for one result.
-#
-# ============================ THE FOUR THINGS THAT MAKE THIS SURVIVABLE ======================
-#
-# 1. --max-seconds 27000 (7.5 h) AGAINST A 10 h BOUND. This is the fix for the failure mode that
-#    would otherwise have cost this run. train_arm had NO time budget: at the runtime wall the
-#    process is killed mid-loop, and because metrics.json is written *after* training returns, a
-#    killed run reports nothing at all AND the evaluation sharing this job never starts. With a
-#    budget the loop stops cleanly after the current step, saves, and returns -- so model.pt and
-#    metrics.json are written, the eval runs, and the log says which step each arm reached. The
-#    2.5 h of headroom covers data generation, preflight, the checkpoint verify, the eval, and the
-#    S3 uploads.
-#
-# 2. --save-every 100, NOT 500, WHICH IS WHY A2-A4 HAD NOTHING LAST TIME. The arms differ by an
-#    order of magnitude in cost per step: A0/A1 run ONE forward per example, A2-A4 run K+2 = 12,
-#    and --batch-size does not batch the GPU (the CODI student is processed one example at a time),
-#    so a CODI step is roughly 11x an anchor step. A0/A1 finished all 2,000 steps in run_019ff280;
-#    the CODI arms OOMed well before step 500 and so never hit a single save interval. At 100 the
-#    first safety net lands inside the first hour for every arm. Local disk stays bounded by
-#    --keep-last 2; the REMOTE copies are deliberately not pruned, so S3 accumulates the whole
-#    ladder and a later run can be pointed at any step.
-#
-# 3. --match-steps ON THE EVAL, because a wall-clock budget makes arms end at DIFFERENT steps and
-#    comparing them as they stand would put a difference in optimization budget straight into
-#    gate A -- a confound on the exact comparison the gate is defined on. The eval picks the
-#    largest stepN.pt that ALL arms wrote and evaluates every arm there, ignoring the anchors'
-#    later checkpoints on purpose. This is what makes the dense ladder in (2) do scientific work
-#    rather than just insure against loss: the matched budget is recovered AFTER the run instead
-#    of having to be predicted before it, which matters because the per-step cost ratio is
-#    estimated, not measured.
-#
-# 4. --micro-batch-size 1, WHICH IS THE ACTUAL OOM FIX. --batch-size 8 WAS NOT.
-#    Measured, not reasoned: run_019ff280 died at 38.51 GiB on batch 16, and run_019ff806 died at
-#    38.72 GiB on batch 8 -- halving the batch changed peak memory by 0.2%. The reason is that
-#    `arm_loss` sums a per-example loss over the whole batch and returns ONE tensor, so nothing is
-#    freed until the single backward and every example's teacher forward AND K-step student chain
-#    are alive at once. One CODI example is ~2,724 token-forwards against A0's ~250 (measured on
-#    the repaired data, max 6,158), so scaling A0's observed 11.72 GiB gives ~45 GiB of activations
-#    at batch 8. Peak therefore tracks the LONGEST examples drawn, not the batch size, which is
-#    why batch 16 survived nearly three hours on shorter data before an unlucky batch killed it
-#    while batch 8 on longer data died in two minutes.
-#
-#    train_arm now slices each batch and backwards each slice, scaling by len(slice)/len(batch), so
-#    the accumulated gradient is IDENTICAL to one full-batch backward -- asserted in
-#    test_micro_batching_gives_the_same_gradient_as_one_backward for A0, A2 and A3 -- while peak
-#    memory depends on one example (~20 GiB) whatever the batch is. Effective batch size, the LR
-#    schedule and every confound control are untouched: this is a memory knob and nothing else.
-#
-#    A SECOND BUG WENT WITH IT: torch 2.9 renamed the variable to PYTORCH_ALLOC_CONF, and printed
-#    "PYTORCH_CUDA_ALLOC_CONF is deprecated" while ignoring what the old name asked for. Both names
-#    are exported now. It was never going to rescue a genuine 38.7 GiB need, but it should at least
-#    be in effect.
-#
-#    AND THE RUN NOW MEASURES THIS BEFORE COMMITTING TEN HOURS. A two-step probe on one CODI arm
-#    prints its peak and aborts the whole job above 34 GiB, so a wrong memory assumption costs
-#    about two minutes instead of a night. Three OOM diagnoses in a row were argued from arithmetic
-#    rather than measured; this one is checked on the hardware first.
-#
-#    --batch-size stays 8 rather than returning to the PRD's 16 purely for wall clock: a CODI step
-#    is ~11x an anchor step, and 16 would not finish 2,000 steps inside the budget. Identical
-#    across arms, so it cannot confound the comparison between them.
-#
-# HONEST EXPECTATION, SO THE RESULT IS NOT A SURPRISE: calibrating from the one hard measurement
-# available -- A0/A1 completing 2,000 steps within run_019ff280's 2h48m at batch 16 -- a CODI step
-# at batch 8 is around 25-30 s, so the CODI arms should reach roughly 1,000 of the 2,000 steps
-# inside the budget while A0/A1 finish early. That is why --steps stays at 2,000 rather than being
-# cut to a guess: if the arms are faster than estimated they finish and --match-steps evaluates at
-# 2,000; if slower, they stop cleanly and --match-steps evaluates at whatever they all reached.
-# The run degrades gracefully in both directions instead of betting on one number.
-#
-# --best-eval-size 100, halved, because validation runs at EVERY save point and A0's validation
-# is generation-based. At --save-every 100 that is ~20 validation passes per arm, and 200 examples
-# of A0 generation each time would add over an hour to the cheapest arm for no scientific gain --
-# best.pt is not what --match-steps evaluates. Identical across arms, so not a confound.
+# The checkpoint root is run_019ff806's; $EDULLM_CHECKPOINT_DIR is this run's own output, so
+# report.json lands under this run id rather than overwriting the earlier one.
 schema_version: 1
-workload_profile: olmo-core-train
-suggested_compute: gpu-8xa100
+workload_profile: olmo-core-check
+suggested_compute: gpu-1xl40s
 command: >-
-  bash -lc 'EDULLM_LAUNCH_CHECK=waived ; set -uo pipefail;
+  bash -lc 'set -uo pipefail;
   export PYTORCH_ALLOC_CONF=expandable_segments:True;
-  export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True;
   DATA=data/latentcot/graph-reachability-depth/conversations;
-  BASE=s3://edullm-checkpoints/olmo-370m/olmo3-370m/run-10b-equal/step12716/;
-  ARMS=(A0 A1 A2 A3 A4);
+  CKPTS=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/run_019ff806-447d-70e8-a1ae-be2331b21a97/checkpoints;
   python src/scripts/latentcot/gen_graph_data.py;
-  python src/scripts/latentcot/preflight.py --train-data $DATA/train-00000.jsonl
-  --test-data $DATA/heldout-00000.jsonl || exit 1;
-  python src/scripts/latentcot/verify_checkpoint.py --model olmo3_370M
-  --init-checkpoint "$BASE" || exit 1;
-  echo "===== MEMORY PROBE (A2, micro-batch 1, 2 steps) =====";
-  python src/scripts/latentcot/train_codi.py --arm A2 --rung olmo3_370M
-  --init-checkpoint "$BASE" --steps 2 --batch-size 8 --micro-batch-size 1
-  --precision bf16 --lr 2e-5 --save-every 0 --log-every 1 --val-fraction 0
-  --train-data $DATA/train-00000.jsonl --test-data $DATA/heldout-00000.jsonl
-  --out /tmp/probe 2>&1 | tee /tmp/probe.log | sed -u "s|^|[probe] |";
-  PEAK=$(grep -oE "peak_mem_gb=[0-9.]+" /tmp/probe.log | tail -1 | cut -d= -f2);
-  echo "PROBE PEAK MEMORY: ${PEAK:-unknown} GB (card is 39.5 GB)";
-  python -c "import sys; sys.exit(1 if float(sys.argv[1]) > 34 else 0)" "${PEAK:-99}"
-  || { echo "ABORT: a CODI arm peaks at ${PEAK:-unknown} GB against a 39.5 GB card. Not spending ten hours on a configuration that will OOM."; exit 1; };
-  LOGS=/tmp/armlogs; mkdir -p "$LOGS";
-  pids=(); tails=(); for i in 0 1 2 3 4; do : > "$LOGS/A$i.log";
-  WANDB_RUN_ID="${WANDB_RUN_ID:-$EDULLM_RUN_ID}-A$i"
-  CUDA_VISIBLE_DEVICES=$i python src/scripts/latentcot/train_codi.py
-  --arm ${ARMS[$i]} --rung olmo3_370M --init-checkpoint "$BASE"
-  --steps 2000 --batch-size 8 --precision bf16 --lr 2e-5
-  --micro-batch-size 1
-  --max-seconds 27000 --save-every 100 --keep-last 2 --best-eval-size 100
-  --init-seed 0 --seed 1 --log-every 50
-  --wandb-project latent-cot-superposition
-  --train-data $DATA/train-00000.jsonl --test-data $DATA/heldout-00000.jsonl
-  --out "$EDULLM_CHECKPOINT_DIR/A$i"
-  > "$LOGS/A$i.log" 2>&1 & pids+=($!);
-  ( tail -n +1 -f "$LOGS/A$i.log" | sed -u "s|^|[A$i] |" ) & tails+=($!); done;
-  ( while sleep 420; do line="[heartbeat]";
-  for j in 0 1 2 3 4; do if kill -0 "${pids[$j]}" 2>/dev/null; then st=alive; else st=GONE; fi;
-  last=$(grep -oE "step=[0-9]+" "$LOGS/A$j.log" 2>/dev/null | tail -1);
-  line="$line A$j=$st/${last:-nostep}"; done; echo "$line"; done ) & hb=$!;
-  rc=0; for p in "${pids[@]}"; do wait "$p" || rc=1; done;
-  sleep 5; kill "$hb" "${tails[@]}" 2>/dev/null || true;
-  for i in 0 1 2 3 4; do echo "===== A$i last 40 ====="; tail -n 40 "$LOGS/A$i.log"; done;
-  echo "===== EVAL =====";
   python src/scripts/latentcot/eval_arms_from_s3.py
-  --checkpoint-root "$EDULLM_CHECKPOINT_DIR" --match-steps
+  --checkpoint-root "$CKPTS" --arms A0,A1
   --test-data $DATA/heldout-00000.jsonl
   --model olmo3_370M --precision bf16 --num-continuous-thoughts 10 --seed 1
-  --out runs/latentcot/eval --publish-to "$EDULLM_CHECKPOINT_DIR" || true;
-  exit $rc'
+  --out runs/latentcot/eval --publish-to "$EDULLM_CHECKPOINT_DIR"'
