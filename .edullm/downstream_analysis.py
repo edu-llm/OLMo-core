@@ -407,16 +407,25 @@ def read_documents(where: str) -> List[Tuple[str, Dict[str, object]]]:
     if os.path.isfile(where):
         paths = [where]
     else:
+        # RECURSIVELY, BECAUSE THE TWENTY-FIVE DO NOT LAND IN ONE DIRECTORY. The platform's
+        # fan-out prologue appends `cell-<index>/` to `$EDULLM_OUTPUT_PREFIX` before the command
+        # runs, so `--output-dir "$EDULLM_OUTPUT_PREFIX"` puts each document under a directory of
+        # its own and a downloaded prefix is twenty-five folders holding one file each. A flat
+        # listing of that finds nothing, which would read exactly like a job that has not
+        # started -- and a flat listing of a *partially* downloaded one would find some.
         paths = sorted(
-            os.path.join(where, name)
-            for name in os.listdir(where)
+            os.path.join(root, name)
+            for root, _, names in os.walk(where)
+            for name in names
             if name.startswith("downstream-") and name.endswith(".json")
         )
     if not paths:
         raise Refusal(
-            f"no 'downstream-*.json' in {where}. That is what an empty output prefix looks like "
-            "and it is also what a directory of documents under some other name looks like, and "
-            "the two are worth telling apart before anything is concluded from either."
+            f"no 'downstream-*.json' anywhere under {where}. That is what an empty output prefix "
+            "looks like and it is also what a directory of documents under some other name looks "
+            "like, and the two are worth telling apart before anything is concluded from either. "
+            "The scoring fan-out writes one document per cell under its own 'cell-<index>/', so "
+            "point --documents at the prefix rather than at one cell."
         )
 
     documents = []

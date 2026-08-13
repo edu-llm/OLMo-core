@@ -258,6 +258,25 @@ def test_a_directory_with_nothing_in_it_says_so(tmp_path):
         da.read_documents(str(tmp_path))
 
 
+def test_the_documents_are_found_under_the_cell_directories_the_fan_out_writes_them_to(tmp_path):
+    """
+    THE LAYOUT THE JOB ACTUALLY PRODUCES, WHICH IS NOT FLAT. The platform's fan-out prologue
+    appends ``cell-<index>/`` to ``$EDULLM_OUTPUT_PREFIX`` before the command runs, so a
+    downloaded prefix is twenty-five folders holding one document each. A flat listing of that
+    finds nothing and reads exactly like a job that never started.
+    """
+    documents, endpoints = da.synthetic_documents(in_loop=FROZEN_CELLS)
+    for index, document in enumerate(documents):
+        cell_directory = tmp_path / f"cell-{index}"
+        cell_directory.mkdir()
+        write_documents(cell_directory, [document])
+    read = da.read_documents(str(tmp_path))
+    assert len(read) == 25
+    cells = [da.cell_from_document(d, p) for p, d in read]
+    da.attach_in_loop(cells, endpoints)
+    assert not da.completeness_refusals(cells)
+
+
 def test_documents_round_trip_through_disk_under_the_names_the_job_writes(tmp_path):
     documents, endpoints = da.synthetic_documents(in_loop=FROZEN_CELLS)
     where = write_documents(tmp_path, documents)

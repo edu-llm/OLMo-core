@@ -3248,7 +3248,9 @@ hours. It was labelled. Labelling is therefore not the mitigation, and these are
 - **The program does not reach AWS.** An `s3://` argument is refused with the reason rather than
   opened, per `AGENTS.md`. The documents are on each cell's stdout as well as in the bucket —
   `score_checkpoints.write_document` prints before it uploads — so `edullm logs` is a route that
-  needs no credential.
+  needs no credential. Point `--documents` at the whole downloaded prefix and not at one cell:
+  the fan-out prologue appends `cell-<index>/` to `$EDULLM_OUTPUT_PREFIX` before the command
+  runs, so the twenty-five land in twenty-five folders and the reader walks them.
 
 ### What this can and cannot conclude
 
