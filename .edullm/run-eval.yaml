@@ -1,22 +1,34 @@
-# THREE-WAY EVAL: PLAIN LINEAR ATTENTION vs GATED DELTANET vs GATED DELTANET AT A QUARTER STATE.
+# A 2x2: {PLAIN LINEAR ATTENTION, GATED DELTANET} x {FULL STATE, QUARTER STATE}.
 #
-# THE THIRD ARM IS THE STATE-SIZE ABLATION, and it is not a clean one -- say so wherever its
-# numbers are used. It halves head_dim 64 -> 32 with expand_v 1.0, so key and value head dims BOTH
-# halve and the recurrent state goes as their product: 16 x 32 x 32 = 16,384 floats per layer
-# against the baseline's 16 x 64 x 64 = 65,536. A QUARTER, not a half, whatever the run is named.
+#                    head_dim 64            head_dim 32
+#   linear           lin-hd64               lin-hd32
+#   gated deltanet   gdn-hd64               gdn-hd32
 #
-# It also differs from the gdn baseline in 61 other config fields, because it was launched through
-# train_on_corpus.py while linear and gdn came from a source-mixture script: plain AdamW rather
-# than SkipStepAdamW, weight decay 0.01 rather than 0.1, a different corpus (pretrain/
-# olmo-150b-dolma2 against a six-source mixture) and a different init seed. So head_dim is
-# confounded, ABSOLUTE perplexity against the other two arms means nothing, and only the
-# within-model quantities carry: the x-own-4096 ratio, the position-resolved CE shape, and the
-# control-subtracted retrieval gain. linear-vs-gdn remains controlled -- those two differ in the
-# mixer and a 1.5% param-count-scaled LR and nothing else.
+# WHAT head_dim 32 ACTUALLY COSTS. expand_v is 1.0, so halving head_dim halves the key AND the
+# value head dim, and the recurrent state goes as their product: 16 x 32 x 32 = 16,384 floats per
+# layer against 16 x 64 x 64 = 65,536. A QUARTER of the working memory, not a half, whatever the
+# runs are named. 262,144 floats against 1,048,576 over all sixteen layers.
 #
-# gdn2 is dropped from the arm list rather than kept as a fourth. Three arms already run about
-# half an hour and nobody is reading its numbers; the file it wrote is still in its own run's
-# outputs prefix if that changes.
+# ONE COLUMN OF THIS TABLE IS CLEAN AND THE OTHER IS NOT, which decides what may be claimed from
+# each and is the reason both are here.
+#
+#   * lin-hd32 vs lin-hd64 differs in TWO fields: head_dim, and a 3.2% param-count-scaled LR.
+#     Same SkipStepAdamW, same weight decay, same six-source mixture, same seed, same batch. This
+#     is the state-size ablation, and it is the pair to quote for what a quarter state costs.
+#
+#   * gdn-hd32 vs gdn-hd64 differs in 62 fields. The original gdn-halfkv run died at step 3179 of
+#     12,716, so it was retrained -- through train_on_corpus.py rather than the source-mixture
+#     script, which silently brought plain AdamW instead of SkipStepAdamW, weight decay 0.01
+#     instead of 0.1, the pretrain/olmo-150b-dolma2 corpus instead of the mixture, and another
+#     seed. head_dim is confounded there. Its tell is L=1024, where a 16,384-float state cannot
+#     possibly bind and it still under-retrieves badly: that gap is recipe, not capacity.
+#
+# So gdn-hd32's ABSOLUTE numbers are not comparable to gdn-hd64's, and only its within-model
+# quantities carry -- x-own-4096, the position-resolved CE shape, control-subtracted gain.
+# lin-hd64 vs gdn-hd64 is separately controlled (mixer plus a 1.5% LR and nothing else).
+#
+# gdn2 is not an arm. Four arms already run about thirty-five minutes and nobody is reading its
+# numbers; the file it wrote is still under its own run's outputs prefix if that changes.
 #
 #   edullm check  --spec .edullm/run-eval.yaml --experiment gdn-family-eval --dataset none
 #   edullm submit --spec .edullm/run-eval.yaml --experiment gdn-family-eval --dataset none
@@ -29,10 +41,11 @@
 # WHY THE CHECKPOINTS ARE UNDER outputs/ AND NOT WHERE THEY WERE TRAINED. The linear and GDN
 # checkpoints live in s3://edullm-checkpoints, which is in none of the GPU workload role's three
 # policies -- the role reads edullm-data and sbsandbox-intern-edullm-outputs and nothing else. So
-# they were copied into staging prefixes first. The half-KV arm needs no copy: it was trained on
-# this platform, so its checkpoints are already under its own run's outputs prefix.
+# they were copied into staging prefixes first -- lin-hd64, lin-hd32 and gdn-hd64 all came that
+# way. gdn-hd32 needs no copy: it was retrained on this platform, so its checkpoints are already
+# under its own run's outputs prefix.
 #
-# ONE PROCESS, THREE ARMS, SEQUENTIALLY. Container start, the S3 dataset open and the CUDA
+# ONE PROCESS, FOUR ARMS, SEQUENTIALLY. Container start, the S3 dataset open and the CUDA
 # context are paid once and shared, so they cancel out of the arm-vs-arm contrast rather than
 # adding unpaired jitter per arm -- A100-MFU-PLAYBOOK.md B8 measured that jitter as LARGER than
 # the effect in a comparable setup. It is also one queue wait instead of three.
@@ -77,7 +90,13 @@
 # fla.ops.gated_delta_rule, fla.ops.gdn2) and Triton lowers tl.dot to TF32 on Ampere+ by its own
 # default, which torch's allow_tf32=False does not reach. Playbook B9 measures 166x of relative
 # error from that one variable. On an eval it would silently bias every number reported here, and
-# it would bias the three arms unequally because their kernels differ.
+# it would bias the arms unequally because their kernels differ.
+#
+# ONE KERNEL HERE IS NOT BITWISE REPRODUCIBLE, measured rather than assumed: across two runs on
+# identical items and checkpoints, both linear arms returned bit-identical CE while the gated
+# deltanet arms moved in the 4th-5th decimal -- enough to flip up to 2 items in 96 on exact
+# match, since that metric thresholds an argmax. Read gdn exact-match counts with +/-2 of slack
+# and do not treat a 1-2 item difference as real.
 schema_version: 1
 workload_profile: olmo-core-check
 suggested_compute: gpu-1xl40s
@@ -85,7 +104,7 @@ command: >-
   bash -lc 'export TRITON_F32_DEFAULT=ieee &&
   S=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs &&
   python .edullm/eval_arms.py "$EDULLM_RUN_ID"
-  --arms "linear=$S/stage-linear/checkpoints/step12716,gdn=$S/stage-gdn/checkpoints/step12716,halfkv=$S/run_019ff6ac-ee05-7091-936b-5856f4e86943/checkpoints/step12716"
+  --arms "lin-hd64=$S/stage-linear/checkpoints/step12716,lin-hd32=$S/stage-linear-halfkv/checkpoints/step12716,gdn-hd64=$S/stage-gdn/checkpoints/step12716,gdn-hd32=$S/run_019ff6ac-ee05-7091-936b-5856f4e86943/checkpoints/step12716"
   --eval-data "$S/stage-evaldata/arxiv/part-00-00000.npy,$S/stage-evaldata/finemath-3plus/part-000-00000.npy,$S/stage-evaldata/wikipedia/part-00-00000.npy"
   --seq-lens 4096,8192,16384,32768,65536
   --niah-lens 1024,2048,4096,8192,16384
