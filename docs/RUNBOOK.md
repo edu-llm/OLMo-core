@@ -66,7 +66,48 @@ but 24 h would not be. Keep `--hours` tight.
 
 # The jobs
 
-## Prerequisite P — two onboarding paths, and P2 is much cheaper
+## Prerequisite P — RESOLVED: an independent branch of OLMo-core
+
+**This is the operative path.** A repository of its own cannot be registered without
+widening the ECR publisher role, whose IAM stack is applied from a laptop and whose
+file is owned by the two platform admins. OLMo-core is already registered, so its ECR
+repository, publisher-role trust, and `AWS_ECR_PUBLISHER_ROLE_ARN` all already exist.
+
+It is also the established convention rather than a workaround: OLMo-core carries ~148
+branches, dozens under `edullm/**`, and this project line is already among them --
+`edullm/fact-crowding`, `edullm/memory-split-135m`, `edullm/p3-math-split`.
+
+```bash
+scripts/sync_to_olmo_core.sh            # dry run: runs the tests, prints the push
+scripts/sync_to_olmo_core.sh --confirm  # pushes to edullm/memsplit-hop on OLMo-core
+```
+
+The branch carries **this** repository's history and nothing of OLMo-core's, so it can
+never be fast-forwarded into their main by accident, and GitHub runs workflows from the
+pushed branch's own tree -- so only our build-caller runs on it and OLMo-core's CI does
+not. The branch name must match `edullm/**` or the build never fires.
+
+Nothing needs registering, and **there is no platform pull request at all**, because
+both workload profiles already exist:
+
+| profile | hours | attempts | checkpoint | used for |
+|---|---:|---:|---|---|
+| `olmo-core-check` | 1 | 1 | none | Job 1 smoke |
+| `olmo-core-train` | 24 | 2 | `resume_required: true` | Jobs 2-4 |
+
+`olmo-core-train` declares `resume_required: true`, and we satisfy it for real --
+`checkpoint_io` writes to `s3://` and `ResumeGuard` raises rather than silently
+restarting. That is the contract a sibling repo declared and did not honour, gating its
+load on `os.path.exists()` against an `s3://` URI so every retry repeated the run at
+full price. With 2 attempts permitted, this matters.
+
+**Submit against `OLMo-core`**, not `memsplit-hop` — that is what is registered and
+what both profiles name.
+
+<details>
+<summary>The two paths that did not work, kept for the record</summary>
+
+## Rejected: two onboarding paths, and P2 is much cheaper
 
 The platform frames this choice itself. Both `edullm add --reason` and the
 registration workflow's `reason` input ask for *"why this needs a repository of its
@@ -174,6 +215,8 @@ Two halves, and the second is the long pole. In order:
    `config/**` is owned by nine people, so any admin or lead can review it. Precedent:
    `nested-learning-train` is 12 h while its generated comment still says one hour.
 
+</details>
+
 ## Job 0 — corpus build (local, CPU, no platform)
 
 **Tests:** that the corpus satisfies all 11 integrity gates before a GPU is touched.
@@ -219,9 +262,8 @@ because every command in the platform's recorded evidence is `python -c` or
 `python -m olmo_core.train`; we are the first custom entrypoint to run.
 
 ```bash
-git checkout -b edullm/memsplit-smoke
-git add -A && git commit -m "smoke" && git push -u origin edullm/memsplit-smoke
-# wait 8-11 min for the image
+scripts/sync_to_olmo_core.sh --confirm   # pushes to OLMo-core's edullm/memsplit-hop
+# wait 8-11 min for the image, published to OLMo-core's ECR repository
 
 edullm check --json --team memory-split --experiment smoke --dataset none
 
@@ -229,6 +271,7 @@ MEMSPLIT_CONFIG=configs/smoke_d40m.yaml MEMSPLIT_CONDITION=dense MEMSPLIT_SEED=0
 edullm submit --spec .edullm/run.single.yaml \
               --team memory-split --experiment smoke --dataset none \
               --compute gpu-1xl40s --hours 1
+# repository resolves to OLMo-core, from the workload profile the spec names
 
 edullm status && edullm logs <run-id>
 ```
