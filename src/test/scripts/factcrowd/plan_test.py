@@ -241,3 +241,95 @@ def test_the_fanout_is_nested_and_the_flat_spelling_is_refused():
         spec_module.RunSpec.model_validate(
             {**base, "fanout": {"size": 1, "index_parameter": "cell"}}
         )
+
+
+# --- the refusals that cost a submission each ------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["smoke", "calibration", "ladder", "entropy", "count"])
+def test_a_training_command_starts_one_process_per_device(name):
+    """
+    **The refusal that cost a submission.** ``edullm submit`` refuses ``process_per_device`` when the number
+    of processes the command starts differs from the number of cards the profile bills for -- in *both*
+    directions, since two ranks on a four-GPU shape idle two cards at $2.84/hour and four ranks on a
+    one-GPU shape is an ``invalid device ordinal``.
+
+    Nothing wraps the command, so the launcher has to be in it. Asserted against the device count read from
+    the platform's own ``config/accelerators.yaml`` rather than a number written here.
+    """
+    job = plan.JOBS_BY_NAME[name]
+    devices = plan.devices_for(job.compute)
+    command = plan.train_command(job.config_dir or "", compute_profile=job.compute)
+    if devices > 1:
+        assert f"--nproc-per-node={devices}" in command
+        assert "-m torch.distributed.run" in command
+        assert "--standalone" in command
+    else:
+        # A single card needs no rendezvous, and a launcher declaring one rank would still have to agree.
+        assert "--nproc-per-node" not in command
+
+
+@pytest.mark.parametrize("name", ["smoke", "calibration", "ladder", "entropy", "count"])
+def test_a_training_command_saves_to_the_checkpoint_directory_the_platform_reads(name):
+    """
+    ``checkpoint_path_not_in_command``: the platform reads the *text* of the command to check that a run
+    promising a checkpoint will write one, because it cannot see inside the program.
+
+    ``$EDULLM_OUTPUT_PREFIX`` is a different prefix and does not satisfy it. OLMo-core's own default is
+    ``/tmp`` on a machine that stops existing, so a run that takes it exits zero having saved nothing.
+    """
+    job = plan.JOBS_BY_NAME[name]
+    command = plan.train_command(job.config_dir or "", compute_profile=job.compute)
+    assert '--save-folder "$EDULLM_CHECKPOINT_DIR"' in command
+    assert "EDULLM_OUTPUT_PREFIX" not in command
+    # And under a shell, or the variable arrives as literal characters rather than a path.
+    assert command.startswith("bash -lc ")
+
+
+def test_the_workload_profile_matches_what_the_job_promises():
+    """
+    The two presets differ in what they promise, not in what they charge. A run that trains needs the one
+    with a checkpoint contract; a scoring pass needs the one without, since more than one attempt on a
+    workload that checkpoints nothing earns ``retry_without_a_checkpoint_contract``.
+    """
+    for job in plan.JOBS:
+        if job.scoring:
+            assert job.workload == plan.CHECK_WORKLOAD, job.name
+            assert plan.devices_for(job.compute) == 1, job.name
+        elif job.name == "smoke":
+            assert job.workload == plan.CHECK_WORKLOAD  # seconds of work, nothing to resume
+        else:
+            assert job.workload == plan.TRAIN_WORKLOAD, job.name
+
+
+def test_a_scoring_command_neither_launches_nor_claims_a_checkpoint():
+    """It writes a table and a gate report on one device, so both would be wrong."""
+    command = plan.scoring_command(["s3://bucket/runs/run_a/"], endpoint="ctxmano")
+    assert "--nproc-per-node" not in command
+    assert "EDULLM_CHECKPOINT_DIR" not in command
+    assert command.startswith("bash -lc ")
+
+
+def test_the_device_count_comes_from_configuration_not_from_a_guess():
+    """
+    An unknown profile raises rather than defaulting, because a default here idles cards silently.
+    """
+    assert plan.devices_for("gpu-4xa10g") == 4
+    assert plan.devices_for("gpu-1xa10g") == 1
+    assert plan.devices_for("gpu-8xa100") == 8
+    assert plan.devices_for("cpu-32vcpu") == 0
+    with pytest.raises(OLMoConfigurationError, match="unknown compute profile"):
+        plan.devices_for("gpu-3xa10g")
+
+
+def test_the_dtype_is_named_even_though_the_program_sets_it():
+    """
+    ``bfloat16_not_in_the_hardware`` reads the words of the command. Both multi-card shapes that place
+    instantly are T4, which has no bfloat16 at all, so a command that does not name a dtype is accepted onto
+    one and dies on the first kernel that needs the format -- after the machine is billed.
+    """
+    for job in plan.JOBS:
+        if job.scoring:
+            continue
+        command = plan.train_command(job.config_dir or "", compute_profile=job.compute)
+        assert "param_dtype=bfloat16" in command

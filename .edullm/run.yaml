@@ -10,11 +10,11 @@
 # last commit, so nothing uncommitted is part of the run. Then `edullm check --json`, then submit.
 schema_version: 1
 workload_profile: olmo-core-check
-suggested_compute: gpu-4xa10g
+suggested_compute: gpu-1xa10g
 fanout:
   size: 5
   index_parameter: cell
 command: >-
   bash -lc 'python src/scripts/train/factcrowd/train_cell.py "$EDULLM_RUN_ID" --config-dir
   src/scripts/train/factcrowd/configs/cells/smoke --cell-index "$AWS_BATCH_JOB_ARRAY_INDEX" --save-folder
-  "${EDULLM_OUTPUT_PREFIX}ckpt" train_module.dp_config.param_dtype=bfloat16'
+  "$EDULLM_CHECKPOINT_DIR" train_module.dp_config.param_dtype=bfloat16'

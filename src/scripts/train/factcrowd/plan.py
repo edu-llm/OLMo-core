@@ -49,10 +49,75 @@ DEFAULT_COMPUTE = "gpu-4xa10g"
 #: A scoring pass loads checkpoints and runs forward passes; one device is enough and the queue is shorter.
 SCORING_COMPUTE = "gpu-1xa10g"
 
+#: 1h and one attempt, and it promises no checkpoint. Right for a smoke run and for scoring.
+CHECK_WORKLOAD = "olmo-core-check"
+
+#: 24h, two attempts, and it promises a checkpoint a retry resumes from. Right for anything that trains.
+TRAIN_WORKLOAD = "olmo-core-train"
+
+#: Device counts, read from the platform's own ``config/accelerators.yaml`` when its checkout is beside this
+#: repository and falling back to this table when it is not.
+#:
+#: **The fallback is the part worth reading.** ``edullm submit`` refuses ``process_per_device`` when the
+#: number of processes the command starts differs from the number of cards the profile bills for -- in either
+#: direction, since two ranks on a four-GPU shape idle two cards and four ranks on a one-GPU shape is an
+#: invalid device ordinal. The count therefore has to be right, and the authority is
+#: ``edullm_platform.launchers.CONTAINER_SHAPES``, which cannot be imported under Python 3.11 because the
+#: package uses PEP 695 generics. So the config file is read directly, and this table exists only for a
+#: machine with neither.
+_FALLBACK_DEVICES: Dict[str, int] = {
+    "cpu-32vcpu": 0,
+    "gpu-1xt4": 1,
+    "gpu-1xl4": 1,
+    "gpu-1xa10g": 1,
+    "gpu-1xl40s": 1,
+    "gpu-4xt4": 4,
+    "gpu-4xl4": 4,
+    "gpu-4xa10g": 4,
+    "gpu-4xl40s": 4,
+    "gpu-8xt4": 8,
+    "gpu-8xl4": 8,
+    "gpu-8xa10g": 8,
+    "gpu-8xa100": 8,
+    "gpu-8xl40s": 8,
+}
+
+#: What the platform splices in when it corrects a command itself, so the shape matches its own suggestion.
+_LAUNCHER = "-m torch.distributed.run --nproc-per-node={devices} --standalone"
+
 #: Written into the *text* of every training command. The precision guard reads the words of the command and
 #: cannot see a dtype the program sets in code, so a command that omits it is accepted onto a card with no
 #: bfloat16 in hardware and dies on the first kernel that needs the format -- after being billed.
 DTYPE_OVERRIDE = "train_module.dp_config.param_dtype=bfloat16"
+
+
+def devices_for(compute_profile: str) -> int:
+    """
+    How many cards a compute profile bills for.
+
+    :param compute_profile: e.g. ``"gpu-4xa10g"``.
+
+    :returns: The device count; ``0`` for a CPU profile, which is not checked.
+
+    :raises OLMoConfigurationError: If the profile is unknown to both the platform's config and the
+        fallback, since guessing a device count is how a run comes to idle three cards.
+    """
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent.parent / "platform" / "config" / "accelerators.yaml"
+        if candidate.is_file():
+            import yaml
+
+            for entry in yaml.safe_load(candidate.read_text())["profiles"]:
+                if entry["profile"] == compute_profile:
+                    return int(entry["devices"])
+            break
+    if compute_profile not in _FALLBACK_DEVICES:
+        raise OLMoConfigurationError(
+            f"unknown compute profile {compute_profile!r}, so the number of processes the command must "
+            f"start is unknown. `edullm submit` refuses a mismatch as 'process_per_device'. Known here: "
+            f"{sorted(_FALLBACK_DEVICES)}"
+        )
+    return _FALLBACK_DEVICES[compute_profile]
 
 
 @dataclass(frozen=True)
@@ -63,7 +128,12 @@ class Job:
     :param name: What to pass to ``stage``.
     :param answers: The question this job exists to settle, in one line.
     :param config_dir: Directory under ``configs/cells`` whose files are the fan-out.
-    :param compute: ``suggested_compute``.
+    :param compute: ``suggested_compute``, which also decides how many processes the launcher starts.
+    :param workload: The policy preset, and it is not a cost knob -- the two differ in what they promise,
+        not in what they charge. ``olmo-core-check`` is 1h, one attempt and no checkpoint contract;
+        ``olmo-core-train`` is 24h, two attempts and promises a checkpoint a retry resumes from. Anything
+        that trains for real needs the second; a scoring pass needs the first, since more than one attempt
+        on a workload that checkpoints nothing earns ``retry_without_a_checkpoint_contract``.
     :param needs_lengths: Whether the configs have to be generated from calibration's result first.
     :param blocked_by: Jobs that must finish first, and why.
     :param scoring: A scoring job rather than a training one.
@@ -73,6 +143,7 @@ class Job:
     answers: str
     config_dir: Optional[str] = None
     compute: str = DEFAULT_COMPUTE
+    workload: str = TRAIN_WORKLOAD
     needs_lengths: bool = False
     blocked_by: Tuple[str, ...] = ()
     scoring: bool = False
@@ -84,6 +155,10 @@ JOBS: Tuple[Job, ...] = (
         name="smoke",
         answers="Does the pipeline run at all, including the in-context endpoint that has never left a CPU?",
         config_dir="smoke",
+        # One card and the check preset: seconds of work, nothing worth resuming, and `gpu-1xa10g` places
+        # reliably where `gpu-4xa10g` waits in a queue. One device also means no launcher to get wrong.
+        compute="gpu-1xa10g",
+        workload=CHECK_WORKLOAD,
         notes=(
             "Seconds per cell. Worth it before the 11B-token sweep: <ctxmano> items are 256 tokens with a "
             "fresh operator table each and padding that tiles the instance, none of which had run on a GPU.",
@@ -103,6 +178,7 @@ JOBS: Tuple[Job, ...] = (
         name="score-calibration",
         answers="Which depth clears its admission band, and does the table probe separate the confound?",
         compute=SCORING_COMPUTE,
+        workload=CHECK_WORKLOAD,
         scoring=True,
         blocked_by=("calibration",),
         notes=(
@@ -154,6 +230,7 @@ JOBS: Tuple[Job, ...] = (
         name="score-m0",
         answers="Re-score phase 1 and write the gate report that never reached S3. Optional; phase 2 supersedes it.",
         compute=SCORING_COMPUTE,
+        workload=CHECK_WORKLOAD,
         scoring=True,
         notes=(
             "The command that was in .edullm/run.yaml before this program overwrote it, preserved so the "
@@ -182,19 +259,37 @@ M0_PREFIXES: Tuple[str, ...] = (
 JOBS_BY_NAME: Dict[str, Job] = {job.name: job for job in JOBS}
 
 
-def train_command(config_dir: str) -> str:
+def train_command(config_dir: str, *, compute_profile: str) -> str:
     """
     The training command for a fan-out over one config directory.
 
+    Three things here are refusals when they are wrong, and each cost a submission to learn:
+
+    - **One process per device.** Nothing wraps what you type, so the launcher goes in the command. A
+      four-card profile that starts one process idles three cards and is refused as ``process_per_device``
+      -- in both directions, since four ranks on one card is an ``invalid device ordinal``. Omitted at one
+      device or fewer: a CPU profile is not checked and a single card needs no rendezvous.
+    - **``$EDULLM_CHECKPOINT_DIR``, on the command line.** Checkpoints must go there, and the platform reads
+      the *text* of the command to check that a run promising one will write one -- it cannot see inside the
+      program. ``${EDULLM_OUTPUT_PREFIX}ckpt`` is a different prefix and earns
+      ``checkpoint_path_not_in_command``. OLMo-core's own default is ``/tmp``, on a machine that stops
+      existing, so a run that takes it exits zero having saved nothing.
+    - **``bash -lc``.** The container runs the command directly with no shell, so without it
+      ``$EDULLM_RUN_ID`` arrives as eighteen literal characters rather than a run id.
+
     :param config_dir: Directory name under ``configs/cells``.
+    :param compute_profile: Decides how many processes the launcher starts.
 
     :returns: A single-line shell command.
     """
+    devices = devices_for(compute_profile)
+    launcher = f"{_LAUNCHER.format(devices=devices)} " if devices > 1 else ""
     return (
-        f'bash -lc \'python src/scripts/train/factcrowd/train_cell.py "$EDULLM_RUN_ID" '
+        f"bash -lc 'python {launcher}"
+        f'src/scripts/train/factcrowd/train_cell.py "$EDULLM_RUN_ID" '
         f"--config-dir src/scripts/train/factcrowd/configs/cells/{config_dir} "
         f'--cell-index "$AWS_BATCH_JOB_ARRAY_INDEX" '
-        f'--save-folder "${{EDULLM_OUTPUT_PREFIX}}ckpt" '
+        f'--save-folder "$EDULLM_CHECKPOINT_DIR" '
         f"{DTYPE_OVERRIDE}'"
     )
 
@@ -275,7 +370,7 @@ def render(job: Job, *, prefixes: Sequence[str] = (), endpoint: str = "ctxmano")
         "# Commit this to a branch named edullm/<something> and push. The platform builds the image from the",
         "# last commit, so nothing uncommitted is part of the run. Then `edullm check --json`, then submit.",
         "schema_version: 1",
-        "workload_profile: olmo-core-check",
+        f"workload_profile: {job.workload}",
         f"suggested_compute: {job.compute}",
     ]
     if job.scoring:
@@ -300,7 +395,10 @@ def render(job: Job, *, prefixes: Sequence[str] = (), endpoint: str = "ctxmano")
             "  index_parameter: cell",
             "command: >-",
         ]
-        lines += [f"  {part}" for part in _fold(train_command(job.config_dir))]
+        lines += [
+            f"  {part}"
+            for part in _fold(train_command(job.config_dir, compute_profile=job.compute))
+        ]
     return "\n".join(lines) + "\n"
 
 

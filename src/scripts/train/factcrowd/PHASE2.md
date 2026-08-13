@@ -360,6 +360,23 @@ A fan-out below two cells is refused, which is why the scoring jobs declare none
 **only a single cell runs**: `$AWS_BATCH_JOB_ARRAY_INDEX` is unset outside a fan-out, so `train_cell.py` has
 no index to select with.
 
+**The submission contract, in one place.** Every line of this is a refusal when it is wrong, and the
+authority for all of it is `../platform` — `guides/olmo-core.md`, `skills/edullm-platform/SKILL.md` and
+`src/edullm_platform/`, not this file and not the OLMo-core README.
+
+| Requirement | Why, and what refuses |
+|---|---|
+| `bash -lc '…'` | The container execs the command with no shell, so `$EDULLM_RUN_ID` would arrive as literal characters |
+| One process per device | Nothing wraps the command. `python -m torch.distributed.run --nproc-per-node=N --standalone`, N = the profile's card count. `process_per_device`, and it refuses **both** directions — 2 ranks on 4 cards idles two at $2.84/h, 4 ranks on 1 card is an `invalid device ordinal` |
+| `--save-folder "$EDULLM_CHECKPOINT_DIR"` | Read from the command **text**; the platform cannot see inside the program. `checkpoint_path_not_in_command`. `$EDULLM_OUTPUT_PREFIX` is a different prefix, and OLMo-core's own default is `/tmp` on a machine that stops existing |
+| The dtype in the command | `bfloat16_not_in_the_hardware` reads the words. Both multi-card shapes that place *instantly* are T4, which has no bfloat16 at all |
+| `fanout:` nested, `size` ≥ 2 | Flat `fanout_size:` is `SubmissionInputs`, not `RunSpec`, and is `extra_forbidden` here |
+| `olmo-core-train` to train | 24h/2 attempts/checkpoint contract. `olmo-core-check` is 1h/1 attempt and promises none; more than one attempt on a workload that checkpoints nothing is `retry_without_a_checkpoint_contract` |
+| Branch named `edullm/…`, pushed, image built | Only `edullm/**` and `main` publish an image, and **nothing warns you otherwise**. Then wait ~8–11 min for build + scan, or the run is routed to an admin |
+
+`train_cell.py` already satisfies the three trainer-level rules the guide names — `max_checkpoints=null`, both
+evaluators off, `max_duration` explicit — which is why they do not appear above.
+
 `plan.py` writes `.edullm/run.yaml`, so none of this has to be assembled by hand:
 
 ```bash
