@@ -90,6 +90,72 @@ def _config(length_steps: int = arm.TOTAL_STEPS):
     )
 
 
+def test_inputs_are_staged_once_and_workers_require_local_files(tmp_path) -> None:
+    objects = {
+        ("sealed-data", "regmix/train.bin"): bytes(range(64)),
+        ("sealed-data", "orders/mtld.bin"): bytes(range(32)),
+    }
+
+    class FakeS3:
+        def __init__(self) -> None:
+            self.downloads: list[tuple[str, str]] = []
+
+        def head_object(self, *, Bucket, Key):
+            return {"ContentLength": len(objects[(Bucket, Key)])}
+
+        def download_file(self, bucket, key, filename, *, Config):
+            del Config
+            self.downloads.append((bucket, key))
+            Path(filename).write_bytes(objects[(bucket, key)])
+
+    original = _corpus()
+    remote = CurriculumCorpus(
+        train_paths=("s3://sealed-data/regmix/train.bin",),
+        val_paths=(),
+        order_paths=("s3://sealed-data/orders/mtld.bin",),
+        dtype=original.dtype,
+        order_dtype=original.order_dtype,
+        parent_identity=original.parent_identity,
+        order_identity=original.order_identity,
+    )
+    client = FakeS3()
+    staged = arm.stage_curriculum(
+        remote,
+        cache_dir=tmp_path / "cache",
+        s3_client=client,
+        transfer_config=object(),
+    )
+
+    assert set(client.downloads) == {
+        ("sealed-data", "regmix/train.bin"),
+        ("sealed-data", "orders/mtld.bin"),
+    }
+    assert all("://" not in path for path in (*staged.train_paths, *staged.order_paths))
+    assert Path(staged.train_paths[0]).read_bytes() == objects[("sealed-data", "regmix/train.bin")]
+    assert Path(staged.order_paths[0]).read_bytes() == objects[("sealed-data", "orders/mtld.bin")]
+
+    # A retry reuses complete immutable objects instead of downloading them again.
+    restaged = arm.stage_curriculum(
+        remote,
+        cache_dir=tmp_path / "cache",
+        s3_client=client,
+        transfer_config=object(),
+    )
+    assert restaged == staged
+    assert len(client.downloads) == 2
+
+    manifest = arm.write_corpus_manifest(staged, tmp_path / "cache" / "corpus.json")
+    assert arm.load_corpus_manifest(manifest) == staged
+
+
+def test_worker_manifest_refuses_remote_or_missing_inputs(tmp_path) -> None:
+    corpus = _corpus()
+    manifest = arm.write_corpus_manifest(corpus, tmp_path / "corpus.json")
+
+    with pytest.raises(arm.FinalValidationConfigError, match="not fully staged"):
+        arm.load_corpus_manifest(manifest)
+
+
 def test_arm_matches_ladder_control_model_batch_and_eight_a100s() -> None:
     config = _config()
 

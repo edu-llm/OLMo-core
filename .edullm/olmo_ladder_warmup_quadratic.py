@@ -6,8 +6,10 @@ from __future__ import annotations
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
+from urllib.parse import urlparse
 
 from olmo_core.config import DType
 from olmo_core.data import NumpyDatasetDType, TokenizerConfig
@@ -76,6 +78,8 @@ VALIDATION_POINTS = 21
 DEFAULT_WANDB_PROJECT = "hpo-ladder"
 DEFAULT_WANDB_GROUP = "hpo-ladder-curriculum"
 DATA_BUCKET = "edullm-data"
+DEFAULT_INPUT_CACHE = "/tmp/olmo-core/olmo-ladder-warmup-quadratic-inputs"
+CORPUS_MANIFEST_ENV = "OLMO_LADDER_CURRICULUM_CORPUS"
 
 
 def _source_ids(paths: tuple[str, ...]) -> tuple[str, ...]:
@@ -226,6 +230,147 @@ def resolve_curriculum() -> CurriculumCorpus:
             profile="token-order/v1",
         ),
     )
+
+
+def _stage_object(
+    uri: str,
+    *,
+    cache_dir: Path,
+    s3_client: Any,
+    transfer_config: Any,
+) -> str:
+    """Stage one immutable S3 object to node-local storage."""
+
+    if "://" not in uri:
+        path = Path(uri)
+        if not path.is_file():
+            raise FinalValidationConfigError(f"missing local curriculum input: {path}")
+        return str(path)
+
+    parsed = urlparse(uri)
+    if parsed.scheme != "s3" or not parsed.netloc or not parsed.path.lstrip("/"):
+        raise FinalValidationConfigError(f"unsupported curriculum input URI: {uri}")
+    key = parsed.path.lstrip("/")
+    destination = cache_dir / parsed.netloc / key
+    expected_size = int(s3_client.head_object(Bucket=parsed.netloc, Key=key)["ContentLength"])
+    if destination.is_file() and destination.stat().st_size == expected_size:
+        return str(destination)
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".partial")
+    temporary.unlink(missing_ok=True)
+    s3_client.download_file(
+        parsed.netloc,
+        key,
+        str(temporary),
+        Config=transfer_config,
+    )
+    if temporary.stat().st_size != expected_size:
+        temporary.unlink(missing_ok=True)
+        raise FinalValidationConfigError(f"short staged curriculum object: {uri}")
+    temporary.replace(destination)
+    return str(destination)
+
+
+def stage_curriculum(
+    corpus: CurriculumCorpus,
+    *,
+    cache_dir: str | Path,
+    s3_client: Any | None = None,
+    transfer_config: Any | None = None,
+) -> CurriculumCorpus:
+    """Stage train shards and the MTLD order once before launching worker ranks."""
+
+    if s3_client is None or transfer_config is None:
+        import boto3
+        from boto3.s3.transfer import TransferConfig
+
+        s3_client = s3_client or boto3.client(
+            "s3", region_name=os.environ.get("AWS_REGION", "us-east-1")
+        )
+        transfer_config = transfer_config or TransferConfig(max_concurrency=4)
+
+    root = Path(cache_dir)
+    inputs = (*corpus.train_paths, *corpus.order_paths)
+
+    def stage(uri: str) -> str:
+        return _stage_object(
+            uri,
+            cache_dir=root,
+            s3_client=s3_client,
+            transfer_config=transfer_config,
+        )
+
+    try:
+        with ThreadPoolExecutor(max_workers=min(8, max(1, len(inputs)))) as executor:
+            staged = tuple(executor.map(stage, inputs))
+    except FinalValidationConfigError:
+        raise
+    except Exception as exc:
+        raise FinalValidationConfigError(
+            f"failed to stage curriculum inputs: {type(exc).__name__}: {exc}"
+        ) from exc
+
+    split = len(corpus.train_paths)
+    return CurriculumCorpus(
+        train_paths=staged[:split],
+        val_paths=corpus.val_paths,
+        order_paths=staged[split:],
+        dtype=corpus.dtype,
+        order_dtype=corpus.order_dtype,
+        parent_identity=corpus.parent_identity,
+        order_identity=corpus.order_identity,
+    )
+
+
+def write_corpus_manifest(corpus: CurriculumCorpus, path: str | Path) -> Path:
+    """Persist the locally staged corpus identity for all torchrun workers."""
+
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "train_paths": list(corpus.train_paths),
+        "val_paths": list(corpus.val_paths),
+        "order_paths": list(corpus.order_paths),
+        "dtype": corpus.dtype.value,
+        "order_dtype": corpus.order_dtype.value,
+        "parent_identity": corpus.parent_identity.as_dict(),
+        "order_identity": corpus.order_identity.as_dict(),
+    }
+    temporary = output.with_suffix(output.suffix + ".partial")
+    temporary.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    temporary.replace(output)
+    return output
+
+
+def load_corpus_manifest(path: str | Path) -> CurriculumCorpus:
+    """Load and validate the node-local corpus manifest."""
+
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+
+    def identity(name: str) -> CurriculumInputIdentity:
+        value = dict(payload[name])
+        value["source_ids"] = tuple(value.get("source_ids") or ())
+        return CurriculumInputIdentity(**value)
+
+    corpus = CurriculumCorpus(
+        train_paths=tuple(str(path) for path in payload["train_paths"]),
+        val_paths=tuple(str(path) for path in payload.get("val_paths") or ()),
+        order_paths=tuple(str(path) for path in payload["order_paths"]),
+        dtype=NumpyDatasetDType(payload["dtype"]),
+        order_dtype=NumpyDatasetDType(payload["order_dtype"]),
+        parent_identity=identity("parent_identity"),
+        order_identity=identity("order_identity"),
+    )
+    remote = [path for path in (*corpus.train_paths, *corpus.order_paths) if "://" in path]
+    missing = [
+        path for path in (*corpus.train_paths, *corpus.order_paths) if not Path(path).is_file()
+    ]
+    if remote or missing:
+        raise FinalValidationConfigError(
+            f"curriculum manifest is not fully staged: remote={remote}, missing={missing}"
+        )
+    return corpus
 
 
 def build_experiment_config(
@@ -448,12 +593,21 @@ def main(
     try:
         checkpoint_dir, run_id = platform_values(os.environ)
         if not args.train_worker:
+            cache_dir = Path(os.environ.get("EDULLM_INPUT_CACHE", DEFAULT_INPUT_CACHE))
+            staged = stage_curriculum(resolver(), cache_dir=cache_dir)
+            manifest = write_corpus_manifest(staged, cache_dir / "corpus.json")
+            os.environ[CORPUS_MANIFEST_ENV] = str(manifest)
             os.execv(sys.executable, torchrun_command(args.length_steps))
         if int(os.environ.get("WORLD_SIZE", "0")) != WORLD_SIZE:
             raise FinalValidationConfigError(f"worker requires WORLD_SIZE={WORLD_SIZE}")
+        manifest = os.environ.get(CORPUS_MANIFEST_ENV)
+        if not manifest:
+            raise FinalValidationConfigError(
+                f"worker requires locally staged corpus in {CORPUS_MANIFEST_ENV}"
+            )
         os.environ["WANDB_NAME"] = f"{run_id}-{ARM_NAME}"
         config = build_experiment_config(
-            resolver(),
+            load_corpus_manifest(manifest),
             save_folder=checkpoint_dir,
             length_steps=args.length_steps or TOTAL_STEPS,
             environ=os.environ,
