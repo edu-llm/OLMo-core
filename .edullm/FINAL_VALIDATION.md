@@ -61,3 +61,30 @@ bash /workspace/OLMo-core/.edullm/runpod/launch_final_validation.sh
 
 The image must include `.edullm/requirements-task-loss-eval.txt`; the repository Dockerfile
 installs and verifies that evaluator stack.
+
+## OLMo-ladder control arm
+
+`run-olmo-ladder-control.yaml` defines a separate no-curriculum control on the same
+`pretrain/regmix-10b/v1` corpus and stock OLMo2-370M architecture. It is not one of the two
+historical probe-winner vectors above. Its fixed optimizer contract is AdamW at
+`7.78548e-4`, betas `(0.9, 0.95)`, epsilon `1e-8`, weight decay `0.1`, and gradient clipping
+at `1.0`. The schedule linearly warms up for 0.5% of training and then cosine-decays to
+`7.78548e-5`.
+
+The 256 Ki global batch is split evenly across eight A100s as a 32 Ki rank microbatch. The
+largest whole-batch run below 10B tokens is 38,146 steps (`9,999,745,024` tokens), with 191
+warmup steps. It retains the 21-point checkpoint and OLMES task-loss evaluation ladder so its
+W&B curve is directly comparable to the existing 370M validations.
+
+Validate the platform submission with:
+
+```bash
+edullm check --json \
+  --experiment olmo-ladder-control-370m \
+  --dataset regmix-10b-v1 \
+  --team pre-training \
+  --spec .edullm/run-olmo-ladder-control.yaml \
+  --compute gpu-8xa100 \
+  --hours 10 \
+  --attempts 2
+```

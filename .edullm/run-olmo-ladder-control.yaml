@@ -1,0 +1,12 @@
+# No-curriculum OLMo2-370M / ~10B RegMix control with OLMo-ladder optimization settings.
+# Uses one 256 Ki optimizer batch across eight A100s (32 Ki tokens per rank).
+# Pass --hours 10 and --attempts 2 at edullm check/submit.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export PYTHONDONTWRITEBYTECODE=1 EDULLM_LAUNCH_CHECK=waived
+  EDULLM_WANDB_PROJECT=hpo-validation WANDB_PROJECT=hpo-validation
+  WANDB_RUN_GROUP=hpo-validation-olmo2-370m-ladder-control PARAM_DTYPE=bfloat16
+  EDULLM_CHECKPOINT_DIR="$EDULLM_CHECKPOINT_DIR" &&
+  python .edullm/olmo_ladder_control.py'
