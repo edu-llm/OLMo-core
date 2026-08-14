@@ -1,0 +1,12 @@
+# Same OLMo-ladder 370M / ~10B RegMix control as olmo-ladder-control, but 768 Ki tokens/step.
+# W&B logs native optimizer steps × 3 so the x-axis stays aligned at 256 Ki tokens/step.
+# Pass --hours 8 and --attempts 1 at edullm check/submit.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export PYTHONDONTWRITEBYTECODE=1 EDULLM_LAUNCH_CHECK=waived
+  EDULLM_WANDB_PROJECT=hpo-ladder WANDB_PROJECT=hpo-ladder
+  WANDB_RUN_GROUP=hpo-ladder-batch-ablation PARAM_DTYPE=bfloat16
+  EDULLM_CHECKPOINT_DIR="$EDULLM_CHECKPOINT_DIR" &&
+  python .edullm/hpo_ladder_batch_controls.py --arm ladder-768ki'

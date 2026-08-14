@@ -11,13 +11,14 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Dict, Mapping, Sequence
 
 import torch.distributed as dist
 
 from olmo_core import io
-from olmo_core.train.callbacks import Callback
+from olmo_core.train.callbacks import Callback, WandBCallback
 
 TASK_LABELS = (
     "arc_challenge_val_rc_5shot_bpb",
@@ -64,6 +65,23 @@ _DIST_ENV_KEYS = (
 
 class FinalValidationContractError(RuntimeError):
     """A required checkpoint evaluation or W&B upload did not complete."""
+
+
+@dataclass
+class ScaledWandBCallback(WandBCallback):
+    """Log trainer metrics on a token-aligned W&B step axis."""
+
+    step_multiplier: int = 1
+    """Multiply native optimizer steps so each W&B step represents a fixed token count."""
+
+    def log_metrics(self, step: int, metrics: Dict[str, float]):
+        multiplier = int(self.step_multiplier)
+        if multiplier < 1:
+            raise ValueError(f"step_multiplier must be >= 1, got {multiplier}")
+        scaled = dict(metrics)
+        if multiplier != 1 and "checkpoint/step" in scaled:
+            scaled["checkpoint/step"] = float(scaled["checkpoint/step"]) * multiplier
+        super().log_metrics(step * multiplier, scaled)
 
 
 def validate_eval(path: Path) -> dict[str, Any]:
@@ -214,10 +232,16 @@ class FinalValidationEvalCallback(Callback):
         eval_script: str | Path,
         nproc: int = 8,
         checkpoint_wait_seconds: int = 3_600,
+        wandb_step_multiplier: int = 1,
     ) -> None:
         super().__init__()
         self.vector_name = str(vector_name)
         self.total_steps = int(total_steps)
+        self.wandb_step_multiplier = int(wandb_step_multiplier)
+        if self.wandb_step_multiplier < 1:
+            raise ValueError(
+                f"wandb_step_multiplier must be >= 1, got {self.wandb_step_multiplier}"
+            )
         self.checkpoint_steps = tuple(int(step) for step in checkpoint_steps)
         if (
             not self.checkpoint_steps
@@ -301,11 +325,12 @@ class FinalValidationEvalCallback(Callback):
             checkpoint = Path(temporary) / f"step{step}"
             self._stage_checkpoint(source, checkpoint)
             payload = self._evaluate(checkpoint, output, step)
+            wandb_step = step * self.wandb_step_multiplier
             upload_eval(
                 run,
                 payload,
                 output,
-                step,
+                wandb_step,
                 run_name=self.run_name,
                 vector_name=self.vector_name,
             )
@@ -313,7 +338,7 @@ class FinalValidationEvalCallback(Callback):
                 upload_final_checkpoint(
                     run,
                     checkpoint,
-                    step=step,
+                    step=wandb_step,
                     run_name=self.run_name,
                     vector_name=self.vector_name,
                 )
