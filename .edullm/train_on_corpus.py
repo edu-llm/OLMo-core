@@ -95,7 +95,7 @@ from olmo_core.distributed.utils import barrier, get_rank
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.io import clear_directory, list_directory, normalize_path
 from olmo_core.nn.transformer import TransformerConfig
-from olmo_core.optim import AdamWConfig, CosWithWarmup, OptimGroupOverride
+from olmo_core.optim import WSD, AdamWConfig, CosWithWarmup, OptimGroupOverride
 from olmo_core.train import (
     Duration,
     TrainerConfig,
@@ -561,6 +561,40 @@ def remove_torn_checkpoints(save_folder: str) -> List[str]:
     return removed
 
 
+def build_scheduler(opts):
+    """The learning-rate schedule this run follows, from ``--scheduler``.
+
+    WHY THERE IS A CHOICE HERE AT ALL, BECAUSE ONE SCHEDULE WAS ENOUGH UNTIL IT WAS NOT.
+    A cosine is right for a run whose length is known when it starts and never revisited,
+    which is every run this file had until now. It is wrong for a run that has to be
+    compared against a sibling at a step neither of them ends on: a cosine is at its floor
+    only at ``--steps``, so a checkpoint taken earlier was trained under a higher rate than
+    the one it is being compared with, and that difference is attributed to whatever the
+    experiment thought it was varying.
+
+    ``wsd`` holds the rate flat and decays only over the last ``--decay-steps``. The stable
+    phase is what makes a mid-run checkpoint a legitimate branch point: resume from it,
+    decay over a short window, and the two arms reach their floors at different steps
+    without either being penalised for it.
+
+    THE DEFAULT IS UNCHANGED AND MUST STAY THAT WAY. Every run in this platform's history
+    was cosine, so a new default would silently make the next comparison against any of
+    them a comparison of two schedules.
+    """
+    if opts.scheduler == "cos":
+        # `warmup`, not the `warmup_steps` the example still passes -- that spelling is
+        # deprecated upstream and warns on every construction.
+        return CosWithWarmup(warmup=opts.warmup_steps)
+
+    # decay_fraction defaults to 0.1 rather than to None, and WSD refuses a config that
+    # carries both it and an explicit decay -- so naming one means clearing the other. Left
+    # alone, the fraction is what answers, which is the sensible thing for a run that has
+    # no branch planned.
+    if opts.decay_steps is None:
+        return WSD(warmup=opts.warmup_steps)
+    return WSD(warmup=opts.warmup_steps, decay=opts.decay_steps, decay_fraction=None)
+
+
 def build_config(opts, overrides: List[str]):
     corpus = resolve_corpus(
         dataset_id=opts.dataset_id,
@@ -630,9 +664,7 @@ def build_config(opts, overrides: List[str]):
             reduce_dtype=DType.float32,
         ),
         max_grad_norm=1.0,
-        # `warmup`, not the `warmup_steps` the example still passes -- that spelling is
-        # deprecated upstream and warns on every construction.
-        scheduler=CosWithWarmup(warmup=opts.warmup_steps),
+        scheduler=build_scheduler(opts),
     )
 
     trainer_config = (
@@ -890,6 +922,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--global-batch-size", type=int, default=256 * 1024)
     parser.add_argument("--rank-microbatch-size", type=int, default=16 * 1024)
     parser.add_argument("--data-seed", type=int, default=0)
+    parser.add_argument(
+        "--scheduler",
+        default="cos",
+        choices=["cos", "wsd"],
+        help="The learning-rate schedule. THE DEFAULT IS THE SCHEDULE THIS FILE ALWAYS USED "
+        "and every run in this platform's history followed it, so changing it makes a "
+        "comparison against any of them a comparison of two schedules rather than of what "
+        "was meant to vary. Choose wsd when a checkpoint part-way through the run has to be "
+        "compared against another arm: a cosine is at its floor only at --steps, so an "
+        "earlier checkpoint carries a higher rate and is penalised for a reason that has "
+        "nothing to do with the experiment. wsd holds the rate flat instead and decays only "
+        "at the end, which leaves the stable phase as a legitimate branch point.",
+    )
+    parser.add_argument(
+        "--decay-steps",
+        type=int,
+        default=None,
+        help="How many steps wsd spends decaying, counted back from --steps. Ignored by cos. "
+        "Left unset, WSD's own decay_fraction of 0.1 answers, which is the right thing for a "
+        "run with no branch planned. Set it when branching a short decay off a stable-phase "
+        "checkpoint, where the decay window is the whole of the branch rather than a tenth "
+        "of the parent.",
+    )
     parser.add_argument(
         "--param-dtype",
         default=DType.bfloat16.value,
