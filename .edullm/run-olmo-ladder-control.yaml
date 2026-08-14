@@ -1,5 +1,5 @@
 # No-curriculum OLMo2-370M / ~10B RegMix control with OLMo-ladder optimization settings.
-# Uses one 256 Ki optimizer batch across eight A100s (32 Ki tokens per rank).
+# Uses one 256 Ki optimizer batch across eight A100s (16 Ki tokens per rank, two accumulations).
 # Pass --hours 10 and --attempts 2 at edullm check/submit.
 schema_version: 1
 workload_profile: olmo-core-train

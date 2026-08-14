@@ -71,9 +71,10 @@ historical probe-winner vectors above. Its fixed optimizer contract is AdamW at
 at `1.0`. The schedule linearly warms up for 0.5% of training and then cosine-decays to
 `7.78548e-5`.
 
-The 256 Ki global batch is split evenly across eight A100s as a 32 Ki rank microbatch. The
-largest whole-batch run below 10B tokens is 38,146 steps (`9,999,745,024` tokens), with 191
-warmup steps. It retains the 21-point checkpoint and OLMES task-loss evaluation ladder so its
+The 256 Ki global batch uses a 16 Ki rank microbatch across eight A100s with two gradient
+accumulations per optimizer step. The largest whole-batch run below 10B tokens is 38,146 steps
+(`9,999,745,024` tokens), with 191 warmup steps. It retains the 21-point checkpoint and
+OLMES task-loss evaluation ladder so its
 W&B curve is directly comparable to the existing 370M validations.
 
 Validate the platform submission with:

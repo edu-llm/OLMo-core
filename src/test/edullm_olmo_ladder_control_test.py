@@ -73,7 +73,7 @@ def test_control_uses_requested_model_data_and_eight_a100_batch() -> None:
     assert config.dataset.paths == ["/workspace/regmix/train.bin"]
     assert config.dataset.sequence_length == 2_048
     assert config.data_loader.global_batch_size == 262_144
-    assert config.train_module.rank_microbatch_size == 32_768
+    assert config.train_module.rank_microbatch_size == 16_384
     assert config.train_module.max_sequence_length == 2_048
     assert str(config.train_module.dp_config.name) == "hsdp"
     assert str(config.train_module.dp_config.param_dtype) == "bfloat16"
