@@ -47,9 +47,9 @@ def main():
     os.makedirs(a.out, exist_ok=True)
 
     mm = MM().parse(a.db)
-    logical = {l for l, (k, d) in mm.labels.items()
+    logical = {label for label, (k, d) in mm.labels.items()
                if k in ("$a", "$p") and d and d[0] and d[0][0] == "|-"}
-    prov = sorted(l for l, (k, _) in mm.labels.items() if k == "$p")
+    prov = sorted(label for label, (k, _) in mm.labels.items() if k == "$p")
 
     kept = verified = failed = 0
     rows = []
@@ -60,7 +60,7 @@ def main():
             expr, mand, refs, trace = expand(mm, lbl)
         except Exception:
             continue
-        steps = [(l, " ".join(e)) for (l, e, _) in trace if e and e[0] == "|-"]
+        steps = [(label, " ".join(e)) for (label, e, _) in trace if e and e[0] == "|-"]
         if not (3 <= len(steps) <= 10):
             continue
 
@@ -80,8 +80,8 @@ def main():
         facts = {r: render_fact(r, *mm.labels[r]) for r in order}
 
         goal = " ".join(expr)
-        target = "\n".join(f"{i+1:>3}  {l:<12} {e}"
-                           for i, (l, e) in enumerate(steps))
+        target = "\n".join(f"{i+1:>3}  {label:<12} {e}"
+                           for i, (label, e) in enumerate(steps))
         block = HDR + "\n" + "\n".join(f"{n} : {s}" for n, s in facts.items())
         text = f"{block}\n{SEP}\nGOAL {goal}\n{target}"
 

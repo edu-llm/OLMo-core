@@ -14,7 +14,7 @@ sys.path.insert(0, "scripts")
 
 build_thproofs_shard = importlib.import_module("build_thproofs_shard")
 
-from mizar_current_index import (
+from mizar_current_index import (  # noqa: E402
     FLAT_TREE_HASH_SCHEMA,
     SOURCE_MANIFEST_SCHEMA,
     DuplicateIdentityError,

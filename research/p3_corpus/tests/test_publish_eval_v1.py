@@ -5,10 +5,8 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
-import os
 import sys
 from pathlib import Path
-from unittest import mock
 
 import pytest
 
@@ -27,9 +25,7 @@ from edullm_data.manifest import Format, ManifestEntry, build_manifest, canonica
 from edullm_data.profiles.registry import available  # noqa: E402
 from edullm_data.s3 import FakeS3  # noqa: E402
 from publish_eval_v1_support import (  # noqa: E402
-    LocalStreamingS3,
     compute_publisher_code_sha256,
-    enumerate_stage_payload,
     provenance_report,
     resolve_execute_provenance,
     run_streaming_preflight,

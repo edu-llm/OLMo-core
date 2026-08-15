@@ -19,14 +19,14 @@ ROOT = Path(__file__).resolve().parents[4]
 SCRIPTS = ROOT / "src" / "scripts" / "train" / "p3_math_split"
 sys.path.insert(0, str(SCRIPTS))
 
-from . import load_project_module
+from . import load_project_module  # noqa: E402
 
 compare = load_project_module("compare_arms")
 export = load_project_module("export_checkpoint")
 run_eval = load_project_module("run_eval")
-import provenance
+import provenance  # noqa: E402
 
-from olmo_core.nn.transformer.qwen import (
+from olmo_core.nn.transformer.qwen import (  # noqa: E402
     QWEN2_0_5B_HF_ID,
     QWEN2_0_5B_HF_REVISION,
     QWEN2_0_5B_HF_WEIGHTS_SHA256,

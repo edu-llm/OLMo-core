@@ -71,7 +71,8 @@ def main():
 
     # m1 — a fact with a name but no statement
     m = clone()
-    m[10] = dict(m[10]); m[10]["facts"] = dict(m[10]["facts"])
+    m[10] = dict(m[10])
+    m[10]["facts"] = dict(m[10]["facts"])
     m[10]["facts"][list(m[10]["facts"])[0]] = ""
     write(f"{a.out}/m1_empty_stmt.jsonl", m)
     written += 1
@@ -81,7 +82,8 @@ def main():
         m = clone()
         m[20] = dict(m[20])
         m[20]["cited"] = list(m[20]["cited"]) + [held[0]]
-        m[20]["facts"] = dict(m[20]["facts"]); m[20]["facts"][held[0]] = "leaked stmt"
+        m[20]["facts"] = dict(m[20]["facts"])
+        m[20]["facts"][held[0]] = "leaked stmt"
         write(f"{a.out}/m2_heldout_cited.jsonl", m)
         written += 1
     else:
@@ -92,7 +94,8 @@ def main():
     hits = 0
     for i, r in enumerate(m):
         if common in r["facts"] and hits < 3:
-            m[i] = dict(r); m[i]["facts"] = dict(r["facts"])
+            m[i] = dict(r)
+            m[i]["facts"] = dict(r["facts"])
             m[i]["facts"][common] = f"variant {i}"
             hits += 1
     write(f"{a.out}/m3_name_clash.jsonl", m)
@@ -100,13 +103,15 @@ def main():
 
     # m4 — target identical to the goal
     m = clone()
-    m[40] = dict(m[40]); m[40]["target"] = m[40]["goal"]
+    m[40] = dict(m[40])
+    m[40]["target"] = m[40]["goal"]
     write(f"{a.out}/m4_degenerate_target.jsonl", m)
     written += 1
 
     # m5 — mask truncated mid-block
     m = clone()
-    m[50] = dict(m[50]); m[50]["mask_end"] = 30
+    m[50] = dict(m[50])
+    m[50]["mask_end"] = 30
     write(f"{a.out}/m5_bad_mask.jsonl", m)
     written += 1
 

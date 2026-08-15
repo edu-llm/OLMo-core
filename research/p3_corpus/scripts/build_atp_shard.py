@@ -1790,10 +1790,12 @@ def _build_enigma_low_tier(args, output_paths: tuple[str, str, str]) -> int:
     base_eval = os.path.join(base_root, "eval", "enigma.jsonl")
     import split_mml_semantic_holdout as semantic_holdout
 
-    canonicalize = lambda formula: semantic_holdout.canonical_statement(
-        formula,
-        representation="atp",
-    )
+    def canonicalize(formula):
+        return semantic_holdout.canonical_statement(
+            formula,
+            representation="atp",
+        )
+
     inventory = _accepted_enigma_inventory(
         base_shard,
         canonicalize=canonicalize,
