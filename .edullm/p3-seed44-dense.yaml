@@ -1,0 +1,17 @@
+# P3 math split — replication seed 44, DENSE arm.
+#
+#   edullm submit --team memory-split --experiment p3-math-split-seed44 \
+#     --dataset none --compute gpu-8xa100 --spec .edullm/p3-seed44-dense.yaml
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
+  src/scripts/train/p3_math_split/train_platform.py "$EDULLM_RUN_ID"
+  --arm dense
+  --config src/scripts/train/p3_math_split/configs/dense.yaml
+  --dataset-id pretrain/formal-proof-premises-500m
+  --dataset-version v3
+  --dataset-tokenizer tokenizer/qwen25-vendored/v1
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --seed 44'

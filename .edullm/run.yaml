@@ -1,0 +1,30 @@
+# P3 math split — replication seed 43, DENSE arm.
+#
+# This doubles as the repository default so a bare `edullm submit` runs a real
+# P3 job rather than the placeholder `edullm check` writes, which points at the
+# generic .edullm/train_on_corpus.py and would train the wrong thing.
+#
+# The other three runs of the replication are siblings, selected with --spec:
+#   .edullm/p3-seed43-split.yaml
+#   .edullm/p3-seed44-dense.yaml
+#   .edullm/p3-seed44-split.yaml
+#
+# The command is a property of the code and must be committed to count. Machine,
+# corpus, team and experiment are supplied at submit time, e.g.
+#   edullm submit --team memory-split --experiment p3-math-split-seed43 \
+#     --dataset none --compute gpu-8xa100
+#
+# gpu-8xh100 is not submittable; the platform removed H100 from its registry.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
+  src/scripts/train/p3_math_split/train_platform.py "$EDULLM_RUN_ID"
+  --arm dense
+  --config src/scripts/train/p3_math_split/configs/dense.yaml
+  --dataset-id pretrain/formal-proof-premises-500m
+  --dataset-version v3
+  --dataset-tokenizer tokenizer/qwen25-vendored/v1
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --seed 43'

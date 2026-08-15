@@ -1,0 +1,19 @@
+# P3 math split — replication seed 43, SPLIT arm.
+# Pairs with .edullm/run.yaml (seed 43 dense). Both arms of a replicate must use
+# the same seed; compare_arms.py refuses a pair whose seeds differ.
+#
+#   edullm submit --team memory-split --experiment p3-math-split-seed43 \
+#     --dataset none --compute gpu-8xa100 --spec .edullm/p3-seed43-split.yaml
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
+  src/scripts/train/p3_math_split/train_platform.py "$EDULLM_RUN_ID"
+  --arm split
+  --config src/scripts/train/p3_math_split/configs/split.yaml
+  --dataset-id pretrain/formal-proof-premises-500m
+  --dataset-version v3
+  --dataset-tokenizer tokenizer/qwen25-vendored/v1
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --seed 43'
