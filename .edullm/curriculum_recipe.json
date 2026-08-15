@@ -6,12 +6,12 @@
     "pacing_path": "experiments/curriculum/curriculum_pacing.py"
   },
   "parent": {
-    "dataset_id": "pretrain/opt-with-synthetic-10b",
+    "dataset_id": "pretrain/regmix-10b",
     "version": "v1",
-    "manifest_sha256": "e4eb0ce47b27c5d923b97e593a0fdc51edf4a78710caedc4557ae3488777f797"
+    "manifest_sha256": "a24992f53dc4a900bacf8fa571d77e343fd28ffa9054c14b93d54204b0a38cb4"
   },
   "orders": {
-    "dataset_id": "curriculum/opt-with-synthetic-10b",
+    "dataset_id": "curriculum/regmix-370m",
     "version": "v1"
   },
   "training": {
@@ -22,8 +22,11 @@
     "seed": 42,
     "peak_lr": 0.0004,
     "warmup_steps": 24,
-    "alpha_f": 0.1,
-    "checkpoint_interval": 125
+    "alpha_f": 1.0,
+    "checkpoint_interval": 125,
+    "ema_steps": [2000, 2125, 2250, 2384],
+    "ema_alpha": 0.8,
+    "ema_wandb_step": 2385
   },
   "arms": [
     {"index": 0, "name": "linear10-flesch", "pacing": "linear_n10", "metric": "flesch", "order_group": "flesch"},

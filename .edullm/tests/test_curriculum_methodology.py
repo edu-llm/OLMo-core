@@ -131,8 +131,8 @@ def test_recipe_is_exact_approved_ten_arm_matrix() -> None:
         "interleave_i10_linear",
         "control",
     }
-    assert all(arm.wandb_project == "curriculum-moe" for arm in arms)
-    assert entrypoint.WANDB_PROJECT_NAMES == {"curriculum-moe"}
+    assert all(arm.wandb_project == "curriculum" for arm in arms)
+    assert entrypoint.WANDB_PROJECT_NAMES == {"curriculum"}
     assert CURRICULUM_DATASET_ID == "curriculum/regmix-370m"
     assert CURRICULUM_ORDER_GROUP_FOR_METRIC == {
         "compression_ratio": "compression",
@@ -146,7 +146,7 @@ def test_recipe_is_exact_approved_ten_arm_matrix() -> None:
 def test_fixed_olmo2_recipe_and_checkpoint_ladder() -> None:
     assert entrypoint.TOTAL_STEPS == 2384
     assert entrypoint.SEED == 42
-    assert entrypoint.LR_ALPHA_F == 0.1
+    assert entrypoint.LR_ALPHA_F == 1.0
     assert entrypoint.GLOBAL_BATCH_TOKENS == 4_194_304
     assert entrypoint.RANK_MICROBATCH_TOKENS == 32_768
     assert entrypoint.production_steps(None) == 2384
@@ -155,20 +155,17 @@ def test_fixed_olmo2_recipe_and_checkpoint_ladder() -> None:
     assert 2250 in steps and 2375 not in steps
     assert set(EMA_STEPS).issubset(steps)
     config = entrypoint.train_module_config()
-    assert config.scheduler.alpha_f == 0.1
+    assert config.scheduler.alpha_f == 1.0
     assert config.scheduler.warmup == 24
     assert config.z_loss_multiplier == 1e-5
     assert config.max_grad_norm == 1.0
     model = entrypoint.build_model_config()
-    moe = model.block.feed_forward_moe
-    assert moe is not None
-    assert moe.num_experts == 64
-    assert moe.router.top_k == 8
-    assert moe.hidden_size == 1024
-    assert model.d_model == 2048
+    assert model.d_model == 1024
     assert model.n_layers == 16
-    assert "olmoe_1B_7B" in entrypoint.MODEL_IDENTITY
-    assert "num_experts=64" in entrypoint.MODEL_IDENTITY
+    assert model.block.feed_forward_moe is None
+    assert entrypoint.MODEL_IDENTITY == "TransformerConfig.olmo2_370M"
+    assert entrypoint.PARENT_DATASET_ID == "pretrain/regmix-10b"
+    assert entrypoint.ORDER_DATASET_ID == "curriculum/regmix-370m"
 
 @pytest.mark.parametrize(
     ("step", "expected"),
@@ -493,7 +490,7 @@ def test_platform_fixture_and_docker_are_branch_specific() -> None:
     handoff = (EDULLM / "CURRICULUM.md").read_text(encoding="utf-8")
     assert "1.25 * T" in handoff
     assert "run-approval-admin" in handoff
-    assert "Do not submit the seven-arm matrix as fan-out" in handoff
+    assert "Do not submit the ten-arm matrix as fan-out" in handoff
 
 
 def test_production_recipe_statically_assembles_public_olmo_apis() -> None:
@@ -511,10 +508,10 @@ def test_production_recipe_statically_assembles_public_olmo_apis() -> None:
         "trainer_config.build",
         "trainer.fit",
     } <= calls
-    assert "TransformerConfig.olmoe_1B_7B" in (
+    assert "TransformerConfig.olmo2_370M" in (
         EDULLM / "curriculum_model.py"
     ).read_text(encoding="utf-8")
-    assert "num_experts=64" in (EDULLM / "curriculum_model.py").read_text(encoding="utf-8")
+    assert "olmoe_1B_7B" not in (EDULLM / "curriculum_model.py").read_text(encoding="utf-8")
     assert "DataParallelType.hsdp" in source
     assert "max_duration=Duration.steps(total_steps)" in source
     assert "load_trainer_state=True, load_optim_state=True" in source
@@ -624,7 +621,7 @@ def test_run_worker_builds_concrete_eight_gpu_trainer_and_fits(
                 callback.trainer = trainer
             return trainer
 
-    monkeypatch.setenv("EDULLM_WANDB_PROJECT", "curriculum-moe")
+    monkeypatch.setenv("EDULLM_WANDB_PROJECT", "curriculum")
     monkeypatch.setenv("WANDB_API_KEY", "test-only")
     monkeypatch.setattr(
         entrypoint,
@@ -688,7 +685,7 @@ def test_run_worker_builds_concrete_eight_gpu_trainer_and_fits(
     contract = built_callbacks["curriculum_contract"]
     assert contract.task_loss_nproc == 8
     assert contract.eval_script == entrypoint.PACKAGED_TASK_LOSS_SCRIPT
-    assert built_callbacks["wandb"].project == "curriculum-moe"
+    assert built_callbacks["wandb"].project == "curriculum"
     assert entrypoint.TOTAL_STEPS in built_callbacks["checkpointer"].fixed_steps
 
 
@@ -728,3 +725,46 @@ def test_checkpoint_callback_requests_clean_restart_after_durable_eval(
     )
     assert request["durable_step"] == 125
     assert trainer.hard_stop == entrypoint.Duration.steps(125)
+
+
+def test_checkpoint_callback_runs_ema_after_final_regular_evals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+    callback = entrypoint.CurriculumCheckpointCallback(
+        arm=entrypoint.ARMS[9],
+        total_steps=entrypoint.TOTAL_STEPS,
+        save_folder=tmp_path / "checkpoints",
+        progress_dir=tmp_path / "progress",
+        task_loss_dir=tmp_path / "task-loss",
+        eval_script=tmp_path / "eval.py",
+        task_loss_nproc=8,
+        production=True,
+        wandb_mode="online",
+        run_name="unit",
+        fingerprint_path=tmp_path / "fingerprint.json",
+    )
+    callback.trainer = types.SimpleNamespace(hard_stop=None, train_module=None)
+    callback._completed = set(EMA_STEPS)
+    monkeypatch.setattr(entrypoint, "get_rank", lambda: 0)
+    monkeypatch.setattr(entrypoint, "barrier", lambda: None)
+    monkeypatch.setattr(callback, "_release", lambda: events.append("release"))
+    monkeypatch.setattr(
+        entrypoint,
+        "build_ema_checkpoint",
+        lambda *args, **kwargs: events.append("merge") or (tmp_path / "ema", {}),
+    )
+
+    def fake_finalize_ema(**kwargs):
+        events.append("eval-ema")
+        assert kwargs["arm"] == "warmup-quadratic10-mtld"
+        assert kwargs["ema_dir"] == tmp_path / "checkpoints" / "step2384-ema"
+        return {"labels": {}}
+
+    monkeypatch.setattr(entrypoint, "finalize_ema_production", fake_finalize_ema)
+
+    callback._finalize(entrypoint.TOTAL_STEPS)
+
+    assert events == ["merge", "release", "eval-ema"]
+    assert callback._ema_completed is True
+    assert (tmp_path / "progress" / entrypoint.CHECKPOINT_RESTART_REQUEST).exists() is False

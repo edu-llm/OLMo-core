@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Resume-safe local prune: keep only the latest durable permanent checkpoint.
+"""Resume-safe local prune: keep the latest durable checkpoint and EMA sources.
 
 Safe to run while training continues. It never deletes:
 
 * the checkpoint at ``last_durable_step``
 * any newer ``step*`` directory that may still be mid-finalize
+* EMA source steps 2000/2125/2250/2384 needed for the step-2385 merge
 
-It only removes checkpoints with step strictly less than the durable marker.
-Regenerable ``model_eval.pt`` files are discarded after a checkpoint has a
-completed task-loss result.
+It only removes checkpoints with step strictly less than the durable marker
+that are not EMA sources. Regenerable ``model_eval.pt`` files are discarded
+after a checkpoint has a completed task-loss result.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ _EDULLM = Path(__file__).resolve().parents[1]
 if str(_EDULLM) not in sys.path:
     sys.path.insert(0, str(_EDULLM))
 
+from curriculum_ema import EMA_STEPS  # noqa: E402
 from production_contract import checkpoint  # noqa: E402
 
 
@@ -55,7 +57,7 @@ def prune_run(run_root: Path) -> dict[str, object]:
         removed = [
             str(path)
             for path in checkpoint.prune_older_permanent_checkpoints(
-                save_folder, keep_step=keep_step
+                save_folder, keep_step=keep_step, preserve_steps=EMA_STEPS
             )
         ]
 

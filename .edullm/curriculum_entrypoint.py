@@ -46,6 +46,13 @@ from curriculum_data import (
     resolve_published_inputs,
     stage_input,
 )
+from curriculum_ema import (
+    EMA_ALPHA,
+    EMA_STEPS,
+    EMA_WANDB_STEP,
+    build_ema_checkpoint,
+    finalize_ema_production,
+)
 from curriculum_loader import CurriculumDataLoader, ParentChunkDataset
 from curriculum_model import MODEL_IDENTITY, build_model_config
 from curriculum_pacing import DIFFICULTY_METRICS, ORDER_GROUPS, PACING_NAMES
@@ -56,10 +63,10 @@ from production_contract import wandb_artifacts
 RECIPE_PATH = Path(__file__).with_name("curriculum_recipe.json")
 PACKAGED_TASK_LOSS_SCRIPT = Path(__file__).with_name("task_loss") / "eval_task_loss_olmo_core.py"
 PACKAGED_LADDER_CONFIG = Path(__file__).with_name("task_loss") / "ladder_base_config.yaml"
-PARENT_DATASET_ID = "pretrain/opt-with-synthetic-10b"
+PARENT_DATASET_ID = "pretrain/regmix-10b"
 PARENT_VERSION = "v1"
-PARENT_MANIFEST_SHA256 = "e4eb0ce47b27c5d923b97e593a0fdc51edf4a78710caedc4557ae3488777f797"
-ORDER_DATASET_ID = "curriculum/opt-with-synthetic-10b"
+PARENT_MANIFEST_SHA256 = "a24992f53dc4a900bacf8fa571d77e343fd28ffa9054c14b93d54204b0a38cb4"
+ORDER_DATASET_ID = "curriculum/regmix-370m"
 SEQUENCE_LENGTH = 2048
 GLOBAL_BATCH_TOKENS = 4_194_304
 RANK_MICROBATCH_TOKENS = 32_768
@@ -67,9 +74,9 @@ TOTAL_STEPS = 2384
 SEED = 42
 PEAK_LR = 4e-4
 WARMUP_STEPS = 24
-LR_ALPHA_F = 0.1
+LR_ALPHA_F = 1.0
 CHECKPOINT_INTERVAL = 125
-WANDB_PROJECT_NAME = "curriculum-moe"
+WANDB_PROJECT_NAME = "curriculum"
 WANDB_PROJECT_NAMES = frozenset((WANDB_PROJECT_NAME,))
 CHECKPOINT_RESTART_REQUEST = "restart_after_checkpoint.json"
 
@@ -129,6 +136,9 @@ def load_recipe(path: Path = RECIPE_PATH) -> tuple[Arm, ...]:
         "warmup_steps": WARMUP_STEPS,
         "alpha_f": LR_ALPHA_F,
         "checkpoint_interval": CHECKPOINT_INTERVAL,
+        "ema_steps": list(EMA_STEPS),
+        "ema_alpha": EMA_ALPHA,
+        "ema_wandb_step": EMA_WANDB_STEP,
     }
     if training != fixed:
         raise CurriculumConfigError("recipe training fields differ from the approved recipe")
@@ -306,12 +316,17 @@ class CurriculumCheckpointCallback(Callback):
         self.fingerprint_path = fingerprint_path
         self.module_builder = module_builder
         self._completed: set[int] = set()
+        self._ema_completed = False
 
     def state_dict(self) -> dict[str, Any]:
-        return {"completed_steps": sorted(self._completed)}
+        return {
+            "completed_steps": sorted(self._completed),
+            "ema_completed": self._ema_completed,
+        }
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         self._completed = {int(step) for step in state_dict.get("completed_steps", [])}
+        self._ema_completed = bool(state_dict.get("ema_completed", False))
 
     def _release(self) -> None:
         old_module = self.trainer.train_module
@@ -353,80 +368,145 @@ class CurriculumCheckpointCallback(Callback):
             else f"curriculum:{self.arm.pacing}"
         )
 
-    def _finalize(self, step: int) -> None:
-        if not self.production and self.eval_script is None:
+    def _finalize_ema(self) -> None:
+        """Build the post-hoc EMA, eval it, and publish it as the final model.
+
+        Intermediate permanent steps never upload a model artifact. After the
+        true final training step and its regular evals, this merges EMA_STEPS,
+        runs the full 20-label task-loss suite on the merged weights, and
+        uploads that EMA checkpoint plus its eval to the same W&B run at step
+        EMA_WANDB_STEP (2385).
+        """
+        if self._ema_completed:
             return
-        step = int(step)
-        if step in self._completed or step not in checkpoint_steps(self.total_steps):
+        if self.eval_script is None:
+            if self.production:
+                raise checkpoint_contract.CheckpointContractError(
+                    "production runs require automatic EMA finalization with task loss"
+                )
             return
-        checkpoint = self.save_folder / f"step{step}"
-        output = self.task_loss_dir / f"step{step}_task_loss.json"
-        payload: dict[str, Any] | None = None
-        if self.eval_script is not None:
-            _, payload = task_loss.pause_eval_reload_distributed(
-                checkpoint,
-                output,
-                f"{self.run_name}-step{step}",
-                evaluate=self._evaluate,
-                release_train_state=self._release,
-                reload_train_state=lambda: self._reload(checkpoint),
-                strict=True,
+        if not all(step in self._completed for step in EMA_STEPS):
+            return
+
+        ema_dir = self.save_folder / "step2384-ema"
+        if get_rank() == 0:
+            build_ema_checkpoint(
+                self.save_folder,
+                arm=self.arm.name,
+                output_dir=ema_dir,
+                overwrite=True,
             )
-        elif self.production:
-            raise checkpoint_contract.CheckpointContractError(
-                "production checkpoints require the synchronous 20-label evaluator"
-            )
+        barrier()
+
+        self._release()
+        barrier()
 
         failure: str | None = None
         if get_rank() == 0:
             try:
-                checkpoint_contract.finalize_permanent_checkpoint(
+                finalize_ema_production(
+                    checkpoints_root=self.save_folder,
                     arm=self.arm.name,
-                    checkpoint_dir=checkpoint,
-                    step=step,
                     run_name=self.run_name,
                     task_loss_dir=self.task_loss_dir,
-                    task_loss_enabled=payload is not None,
                     eval_script=self.eval_script,
                     task_loss_nproc=self.task_loss_nproc,
                     progress_dir=self.progress_dir,
                     fingerprint_path=self.fingerprint_path,
-                    method=self._method_name(),
                     wandb_run=wandb_artifacts.wandb_run_from_trainer(self.trainer),
                     wandb_mode=self.wandb_mode,
                     production=self.production,
-                    upload_checkpoint=step == self.total_steps,
-                    run_evaluator=self._already_evaluated,
+                    method=self._method_name(),
+                    ema_dir=ema_dir,
+                    evaluate=self._evaluate,
                 )
             except BaseException as exc:  # noqa: BLE001
-                failure = f"permanent checkpoint step {step} failed: {type(exc).__name__}: {exc}"
+                failure = f"EMA finalization failed: {type(exc).__name__}: {exc}"
         _broadcast_failure(failure)
-        self._completed.add(step)
+        self._ema_completed = True
         barrier()
-        if 0 < step < self.total_steps:
-            if get_rank() == 0:
-                request = self.progress_dir / CHECKPOINT_RESTART_REQUEST
-                request.parent.mkdir(parents=True, exist_ok=True)
-                temporary = request.with_suffix(".tmp")
-                temporary.write_text(
-                    json.dumps(
-                        {
-                            "schema_version": 1,
-                            "durable_step": step,
-                            "reason": "clear_cuda_state_after_task_loss_eval",
-                        },
-                        indent=2,
-                        sort_keys=True,
-                    )
-                    + "\n",
-                    encoding="utf-8",
+
+    def _finalize(self, step: int) -> None:
+        if not self.production and self.eval_script is None:
+            return
+        step = int(step)
+        if step not in checkpoint_steps(self.total_steps):
+            return
+        if step not in self._completed:
+            checkpoint = self.save_folder / f"step{step}"
+            output = self.task_loss_dir / f"step{step}_task_loss.json"
+            payload: dict[str, Any] | None = None
+            if self.eval_script is not None:
+                _, payload = task_loss.pause_eval_reload_distributed(
+                    checkpoint,
+                    output,
+                    f"{self.run_name}-step{step}",
+                    evaluate=self._evaluate,
+                    release_train_state=self._release,
+                    reload_train_state=lambda: self._reload(checkpoint),
+                    strict=True,
                 )
-                os.replace(temporary, request)
+            elif self.production:
+                raise checkpoint_contract.CheckpointContractError(
+                    "production checkpoints require the synchronous 20-label evaluator"
+                )
+
+            failure: str | None = None
+            if get_rank() == 0:
+                try:
+                    checkpoint_contract.finalize_permanent_checkpoint(
+                        arm=self.arm.name,
+                        checkpoint_dir=checkpoint,
+                        step=step,
+                        run_name=self.run_name,
+                        task_loss_dir=self.task_loss_dir,
+                        task_loss_enabled=payload is not None,
+                        eval_script=self.eval_script,
+                        task_loss_nproc=self.task_loss_nproc,
+                        progress_dir=self.progress_dir,
+                        fingerprint_path=self.fingerprint_path,
+                        method=self._method_name(),
+                        wandb_run=wandb_artifacts.wandb_run_from_trainer(self.trainer),
+                        wandb_mode=self.wandb_mode,
+                        production=self.production,
+                        upload_checkpoint=False,
+                        run_evaluator=self._already_evaluated,
+                        preserve_steps=EMA_STEPS,
+                    )
+                except BaseException as exc:  # noqa: BLE001
+                    failure = (
+                        f"permanent checkpoint step {step} failed: {type(exc).__name__}: {exc}"
+                    )
+            _broadcast_failure(failure)
+            self._completed.add(step)
             barrier()
-            # Reloading after the synchronous evaluator leaves compiled CUDA state
-            # resident. End this process cleanly at the durable boundary; the RunPod
-            # supervisor resumes from the kept checkpoint in a fresh CUDA process.
-            self.trainer.hard_stop = Duration.steps(step)
+            if 0 < step < self.total_steps:
+                if get_rank() == 0:
+                    request = self.progress_dir / CHECKPOINT_RESTART_REQUEST
+                    request.parent.mkdir(parents=True, exist_ok=True)
+                    temporary = request.with_suffix(".tmp")
+                    temporary.write_text(
+                        json.dumps(
+                            {
+                                "schema_version": 1,
+                                "durable_step": step,
+                                "reason": "clear_cuda_state_after_task_loss_eval",
+                            },
+                            indent=2,
+                            sort_keys=True,
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    os.replace(temporary, request)
+                barrier()
+                # Reloading after the synchronous evaluator leaves compiled CUDA state
+                # resident. End this process cleanly at the durable boundary; the RunPod
+                # supervisor resumes from the kept checkpoint in a fresh CUDA process.
+                self.trainer.hard_stop = Duration.steps(step)
+                return
+        if step == self.total_steps:
+            self._finalize_ema()
 
     def pre_train(self) -> None:
         self._finalize(0)
@@ -521,6 +601,9 @@ def scientific_identity(
         "warmup_steps": WARMUP_STEPS,
         "alpha_f": LR_ALPHA_F,
         "checkpoint_steps": checkpoint_steps(total_steps),
+        "ema_steps": list(EMA_STEPS),
+        "ema_alpha": EMA_ALPHA,
+        "ema_wandb_step": EMA_WANDB_STEP,
     }
 
 

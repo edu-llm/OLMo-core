@@ -5,22 +5,23 @@ under `src/olmo_core`. The methodology source is
 `edu-llm/edullm/experiments/curriculum`: current README and pacing tests take
 precedence over older control scripts.
 
-Fixed contract:
+Fixed contract, matching the already-run `curriculum` W&B arms:
 
-- Stock OLMoE-1B-7B (`TransformerConfig.olmoe_1B_7B`: `d_model=2048`,
-  16 layers, 16 heads, dropless MoE with 64 experts / top-8 and expert
-  hidden 1024, reordered RMSNorm, QK-RMSNorm, RoPE theta 500,000),
+- Stock OLMo2-370M (`TransformerConfig.olmo2_370M`: `d_model=1024`,
+  16 layers, 16 heads, reordered RMSNorm, QK-RMSNorm, RoPE theta 500,000),
   Dolma2 tokenizer/vocabulary 100,352, sequence length 2,048, global
   batch 4,194,304 tokens, rank microbatch 32,768 tokens
 - SkipStepAdamW at `4e-4`, betas `(0.9, 0.95)`, weight decay `0.1`
-  except embeddings at `0`, 24-step warmup, cosine decay to `alpha_f=0.1`
+  except embeddings at `0`, 24-step warmup, then **constant** learning
+  rate (`alpha_f=1.0`)
 - HSDP bf16 parameters/fp32 reductions, z-loss `1e-5`, max grad norm `1`,
   compiled model, random initialization
 - seed 42 and 2,384 production steps
 - step 0, 125-grid (omitting 2,375), and true-final permanent checkpoints
 - synchronous exact 20-label task loss at every permanent checkpoint
 - awaited, fail-closed W&B artifacts in `curriculum`
-- post-hoc EMA over 2,000 / 2,125 / 2,250 / 2,384 with alpha 0.8
+- post-hoc EMA over 2,000 / 2,125 / 2,250 / 2,384 with alpha 0.8, run
+  automatically after the step-2384 evals and logged at step 2385
 
 Only the loader's pacing/ordering policy differs between arms:
 
@@ -125,10 +126,11 @@ and resume are explicit: use `--fresh`, or `--load-path` with a local step
 directory. A W&B artifact can restore only a completed run's final checkpoint;
 never infer resume from scratch.
 The loader restores its exact zero-based batch position and bound order.
-Post-hoc EMA accepts only steps 2000/2125/2250/2384 from one fingerprint. The
-trainer merges them automatically at the end of the run, uploads the merged
-checkpoint as the sole final W&B model artifact, and logs the EMA task-loss
-eval on the same W&B run at step 2385.
+Post-hoc EMA accepts only steps 2000/2125/2250/2384 from one fingerprint. After
+the regular step-2384 evals finish, the trainer merges those checkpoints
+automatically, uploads the merged checkpoint as the sole final W&B model
+artifact, and logs the EMA task-loss eval on the same W&B run at step 2385.
+EMA source checkpoints are preserved locally until that merge completes.
 
 ## Exact commands and fixtures
 
@@ -207,9 +209,9 @@ not an estimate; a timeout is not a valid measurement.
 
 The 8×A100 environment may admit only one job. Submit production arms in index
 order, waiting for each to finish before submitting the next whenever capacity
-is constrained. Do not submit the seven-arm matrix as fan-out on that profile.
-After all arms finish, perform each arm's EMA workflow sequentially if it also
-needs the same worker capacity.
+is constrained. Do not submit the ten-arm matrix as fan-out on that profile.
+Each arm automatically runs EMA evals after step 2384 and logs them at step
+2385 on the same W&B run.
 
 Branch code and fixtures are handoff-ready; production dispatch remains gated
 on a published commit/image, the completed benchmark and 25%-padded runtime,

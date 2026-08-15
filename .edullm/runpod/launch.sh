@@ -9,7 +9,7 @@ WANDB_ENV_FILE="${WANDB_ENV_FILE:-/workspace/wandb-session.env}"
 ARM_INDEX="${ARM_INDEX:-0}"
 RECOVERY_MODE="${RECOVERY_MODE:-fresh}"
 CURRICULUM_VERSION="${CURRICULUM_VERSION:-v1}"
-DEVICE_BATCH_SIZE="${DEVICE_BATCH_SIZE:-8}"
+DEVICE_BATCH_SIZE="${DEVICE_BATCH_SIZE:-16}"
 
 [[ -f "${INPUT_MANIFEST}" ]] || { echo "stage inputs first: ${INPUT_MANIFEST}" >&2; exit 2; }
 if [[ -e "${AWS_ENV_FILE:-/workspace/aws-session.env}" ]]; then
@@ -81,11 +81,11 @@ esac
 source "${identity_file}"
 
 export EDULLM_RUNPOD_INPUT_MANIFEST="${INPUT_MANIFEST}"
-export EDULLM_DATASET_ID="pretrain/opt-with-synthetic-10b"
+export EDULLM_DATASET_ID="pretrain/regmix-10b"
 export EDULLM_DATASET_VERSION="v1"
-export EDULLM_WANDB_PROJECT="${EDULLM_WANDB_PROJECT:-curriculum-moe}"
+export EDULLM_WANDB_PROJECT="${EDULLM_WANDB_PROJECT:-curriculum}"
 export WANDB_PROJECT="${EDULLM_WANDB_PROJECT}"
-export WANDB_RUN_GROUP="${WANDB_RUN_GROUP:-lgbm-synthetic-mtld}"
+export WANDB_RUN_GROUP="${WANDB_RUN_GROUP:-curriculum-370m}"
 export EDULLM_BENCH_REDUCE_BF16=1
 
 args=(

@@ -1,6 +1,6 @@
 # Curriculum on RunPod (8 × A100)
 
-This additive adapter preserves the seven-arm curriculum implementation.
+This additive adapter preserves the ten-arm curriculum implementation.
 It resolves and downloads one arm's immutable parent/order inputs before
 training, then substitutes those local files through a wrapper.
 

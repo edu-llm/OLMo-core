@@ -343,6 +343,27 @@ def test_prune_leaves_newer_incomplete_checkpoints_alone(tmp_path: Path) -> None
     ]
 
 
+def test_prune_preserves_ema_source_checkpoints(tmp_path: Path) -> None:
+    save_folder = tmp_path / "checkpoints"
+    for step in (1875, 2000, 2125, 2250, 2384):
+        checkpoint_dir = save_folder / f"step{step}"
+        checkpoint_dir.mkdir(parents=True)
+        (checkpoint_dir / "state.pt").write_bytes(b"state")
+
+    removed = checkpoint.prune_older_permanent_checkpoints(
+        save_folder,
+        keep_step=2384,
+        preserve_steps=(2000, 2125, 2250, 2384),
+    )
+    assert [path.name for path in removed] == ["step1875"]
+    assert [path.name for _, path in checkpoint.list_step_checkpoint_dirs(save_folder)] == [
+        "step2000",
+        "step2125",
+        "step2250",
+        "step2384",
+    ]
+
+
 def test_prune_refuses_to_delete_missing_keep_step(tmp_path: Path) -> None:
     save_folder = tmp_path / "checkpoints"
     checkpoint_dir = save_folder / "step125"
