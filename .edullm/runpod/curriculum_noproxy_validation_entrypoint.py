@@ -13,7 +13,7 @@ EDULLM_DIR = RUNPOD_DIR.parent
 if str(EDULLM_DIR) not in sys.path:
     sys.path.insert(0, str(EDULLM_DIR))
 
-from entrypoint import _refuse_aws_credentials, install_local_dataset_reader, load_manifest
+from entrypoint import _refuse_aws_credentials, install_local_dataset_reader, load_manifest  # noqa: E402
 
 
 def _patch_worker_entrypoint(module) -> None:
