@@ -12,7 +12,7 @@ command: >-
   EDULLM_DATASET_ID=pretrain/regmix-10b EDULLM_DATASET_VERSION=v1
   exec python -m torch.distributed.run --standalone --nproc-per-node=8 --
   /opt/olmo-core/.edullm/curriculum_entrypoint.py --train-worker
-  --arm-index 9 --nproc 8 --fresh
+  --arm-index 9 --nproc 8 --device-batch-size 8 --fresh
   --run-dir /tmp/curriculum-warmup-quadratic10-mtld --wandb-mode online
   --task-loss-eval-script /opt/olmo-core/.edullm/task_loss/eval_task_loss_olmo_core.py
   --ladder-base-config /opt/olmo-core/.edullm/task_loss/ladder_base_config.yaml
