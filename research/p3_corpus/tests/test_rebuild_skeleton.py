@@ -233,6 +233,65 @@ def test_accepted_base_rejects_incomplete_enigma_sources(tmp_path: Path) -> None
         bases.enigma_source_dirs(sources)
 
 
+def test_evaluator_assembly_is_wired_into_the_orchestrator() -> None:
+    import sys
+
+    sys.path.insert(0, str(ARCHIVE_ROOT / "scripts"))
+    from orchestrate_rebuild import STAGES
+
+    # The evaluator root is projected from verified corpus bytes, so it cannot
+    # run before corpus_verify.
+    assert STAGES.index("corpus_verify") < STAGES.index("assemble_evaluator_root")
+    assert STAGES.index("assemble_evaluator_root") < STAGES.index("tokenize")
+
+
+def test_evaluator_seal_pin_accepts_committed_provenance() -> None:
+    import sys
+
+    sys.path.insert(0, str(ARCHIVE_ROOT / "scripts"))
+    import assemble_evaluator_corpus as aec
+
+    aec.check_seal_matches_pin(ARCHIVE_ROOT / "provenance/sealed-corpus-manifest.json")
+
+
+def test_evaluator_seal_pin_rejects_drift(tmp_path: Path) -> None:
+    import sys
+
+    import pytest
+
+    sys.path.insert(0, str(ARCHIVE_ROOT / "scripts"))
+    import assemble_evaluator_corpus as aec
+
+    manifest = json.loads(
+        (ARCHIVE_ROOT / "provenance/sealed-corpus-manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    manifest["families"]["enigma"]["train"]["sha256"] = "f" * 64
+    drifted = tmp_path / "drifted.json"
+    drifted.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(SystemExit):
+        aec.check_seal_matches_pin(drifted)
+
+
+def test_seal_builders_root_is_not_pinned_to_the_original_run(tmp_path: Path) -> None:
+    import sys
+
+    sys.path.insert(0, str(ARCHIVE_ROOT / "scripts"))
+    from seal_v3_corpus import ORIGINAL_BUILDERS_RELPATH, _default_sources
+
+    # A fresh rebuild uses its own generation id, so the original run directory
+    # must be overridable rather than the only place metamath/isabelle are read.
+    default = _default_sources(tmp_path)
+    assert ORIGINAL_BUILDERS_RELPATH in str(default["metamath"]["train"])
+
+    override = _default_sources(tmp_path, tmp_path / "builders")
+    assert override["metamath"]["train"] == (
+        tmp_path / "builders/metamath/normalized-resume/train.jsonl"
+    )
+    assert override["mizar"]["train"] == default["mizar"]["train"]
+
+
 def test_tokenizer_seal_matches_expected_release() -> None:
     expected = json.loads(
         (ARCHIVE_ROOT / "expected-release-v3.json").read_text(encoding="utf-8")

@@ -468,6 +468,69 @@ def test_fixed_submission_controls_refuse_drift(built, field, value, message):
         platform.validate_submission_controls(args)
 
 
+def test_replication_seed_registry_keeps_42_as_the_default_member():
+    assert platform.P3_SEED == 42
+    assert platform.P3_SEED in platform.P3_SEEDS
+    assert tuple(sorted(platform.P3_SEEDS)) == (42, 43, 44)
+
+
+@pytest.mark.parametrize("seed", [42, 43, 44])
+def test_registered_replication_seeds_are_accepted(built, seed):
+    _, args = built
+    args.data_seed = seed
+    platform.validate_submission_controls(args)
+
+
+@pytest.mark.parametrize("seed", [7, 41, 45, 4242])
+def test_unregistered_seeds_are_still_refused(built, seed):
+    _, args = built
+    args.data_seed = seed
+    with pytest.raises(platform.Refusal, match="seed"):
+        platform.validate_submission_controls(args)
+
+
+def test_replication_seed_reaches_init_seed_not_just_the_data_order(built):
+    """A replicate must differ in weight init and data order together.
+
+    init_seed is what lands in the checkpoint config and what compare_arms reads to
+    identify the replicate, so a seed that moved only the data order would produce a
+    seed-43 run that every downstream contract still calls seed 42.
+    """
+    _, args = built
+    args.data_seed = 43
+    cfg = platform.build_config(args, [], validate_controls=False)
+    assert cfg.init_seed == 43
+
+
+def test_default_seed_still_resolves_to_forty_two(built):
+    _, args = built
+    cfg = platform.build_config(args, [], validate_controls=False)
+    assert cfg.init_seed == platform.P3_SEED == 42
+
+
+def test_yaml_declaring_an_unregistered_seed_is_refused(built, tmp_path):
+    _, args = built
+    declared = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    declared["shared"]["seed"] = 999
+    config_path = tmp_path / f"{args.arm}.yaml"
+    config_path.write_text(yaml.safe_dump(declared), encoding="utf-8")
+    args.config = str(config_path)
+    with pytest.raises(platform.Refusal, match="seed"):
+        platform.apply_arm_config(args)
+
+
+def test_seed_flag_selects_a_registered_replication_seed():
+    base = [
+        "test",
+        "--arm",
+        "split",
+        "--config",
+        str(SCRIPTS / "configs" / "split.yaml"),
+    ]
+    assert platform.parse_cli_args(base).data_seed == platform.P3_SEED
+    assert platform.parse_cli_args(base + ["--seed", "43"]).data_seed == 43
+
+
 def test_arm_must_use_its_canonical_config(built, tmp_path):
     _, args = built
     copied = tmp_path / "split.yaml"

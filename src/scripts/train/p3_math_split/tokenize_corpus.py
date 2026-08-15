@@ -579,7 +579,7 @@ def _cache_marker(
         schema = ENCODING_CACHE_PROGRESS_SCHEMA_VERSION
         token_name = "tokens.u32le.bin.partial"
         offset_name = "offsets.u64le.bin.partial"
-        else:
+    else:
         raise ValueError(f"unknown cache status {status!r}")
     payload = {
         "schema_version": schema,
@@ -2623,7 +2623,7 @@ def tokenizer_composite_seal(
 
 def process_corpus(task: dict) -> dict:
     """Encode, cache, pack, and shard one corpus. Safe to run in another process."""
-        from transformers import AutoTokenizer
+    from transformers import AutoTokenizer
 
     source = Path(task["source"])
     name = str(task.get("name", source.stem))
@@ -3434,7 +3434,7 @@ def _file_backed_fake_s3(fake_s3_type):
                 body = super().get_range(bucket, key, start, length)
             elif length <= 0:
                 body = b""
-                    else:
+            else:
                 with path.open("rb") as handle:
                     handle.seek(start)
                     body = handle.read(length)
@@ -3478,7 +3478,7 @@ def _file_backed_fake_s3(fake_s3_type):
             if path is None:
                 self._local_files.pop((dst_bucket, dst_key), None)
                 super().copy(src_bucket, src_key, dst_bucket, dst_key)
-        else:
+            else:
                 self._store.pop((dst_bucket, dst_key), None)
                 self._local_files[(dst_bucket, dst_key)] = path
 

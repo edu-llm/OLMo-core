@@ -29,6 +29,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from p3_seeds import P3_SEEDS
 from run_eval import expected_diagnostic_cohort_size
 
 RESULT_SCHEMA_VERSION = "p3-eval-v9"
@@ -359,9 +361,10 @@ def validate_training_configs(dense, split):
             raise ValueError(f"{label} config source_commit must be nonempty")
     dense_seed = dense.get("init_seed", _MISSING)
     split_seed = split.get("init_seed", _MISSING)
-    if dense_seed != 42 or split_seed != 42:
+    if dense_seed not in P3_SEEDS or dense_seed != split_seed:
         raise ValueError(
-            "both checkpoint configs must declare init_seed seed 42; "
+            "both checkpoint configs must declare the same registered replication seed "
+            f"from {list(P3_SEEDS)}; "
             f"dense={_display(dense_seed)}, split={_display(split_seed)}"
         )
     d = _flatten(dense)

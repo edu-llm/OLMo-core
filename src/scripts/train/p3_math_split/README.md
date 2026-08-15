@@ -292,10 +292,12 @@ that observed declaration but does not pretend it is final training hardware.
 ## 8xA100/H100 runtime smoke
 
 Use workload profile `olmo-core-train-4gpu` for its checkpoint/retry contract and
-compute profile `gpu-8xa100` or `gpu-8xh100` for the actual machine (H100 is the
-faster recommended profile). The workload profile does not select hardware. Both
-profiles use the same Liger fused-linear cross-entropy control; FlashAttention2 is
-unchanged. The closed `--runtime-smoke` mode reads its 100-step,
+compute profile `gpu-8xa100` for the actual machine. The workload profile does not
+select hardware. `gpu-8xh100` is **not submittable**: the platform removed H100 from
+its workflow and execution registry after 7,654 failed placement attempts against
+zero available H100 instances, so the form rejects it. The Liger fused-linear
+cross-entropy control and FlashAttention2 are unchanged. The closed `--runtime-smoke`
+mode reads its 100-step,
 10-step-warmup, and 50-step-checkpoint values from the paired YAML rather than
 accepting dotlist overrides:
 
@@ -311,11 +313,16 @@ training setup unless torchrun declares a compatible single-node `WORLD_SIZE=8` 
 
 ## Final runs
 
-Submit two independent forms with the same built commit, workload profile
-`olmo-core-train-4gpu`, compute profile `gpu-8xa100` or `gpu-8xh100`, team,
-experiment, W&B project, and Data: None until the v3 registry entry exists. H100
-is recommended for throughput; the model/loss controls are identical. Only
-arm/config differ.
+Submit two independent forms per replicate with the same built commit, workload
+profile `olmo-core-train-4gpu`, compute profile `gpu-8xa100`, team, experiment,
+W&B project, and Data: None until the v3 registry entry exists. The model/loss
+controls are identical; only arm/config and, for a replicate, `--seed` differ.
+
+Measured on `gpu-8xa100`: ~134,520 global tokens/sec, so the 13-epoch v3 horizon
+(23,166 steps) takes **~12.5 hours per arm**, about $275 at $21.96/node-hour. The
+form quotes the 24-hour × 2-attempt maximum (~$1,054) rather than the expected
+spend, and the A100 profile exceeds $20/hour, so every submission routes to team-lead
+approval.
 
 Dense:
 
@@ -328,6 +335,28 @@ Split:
 ```bash
 bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone src/scripts/train/p3_math_split/train_platform.py "$EDULLM_RUN_ID" --arm split --config src/scripts/train/p3_math_split/configs/split.yaml --dataset-id pretrain/formal-proof-premises-500m --dataset-version v3 --dataset-tokenizer tokenizer/qwen25-vendored/v1 --save-folder "$EDULLM_CHECKPOINT_DIR"'
 ```
+
+### Replication seeds
+
+The seed defaults to 42 and is otherwise selected by `--seed`, which accepts only a
+seed registered in `p3_seeds.py` (`P3_SEEDS`). There is no seed field on the
+submission form and no `EDULLM_SEED`, so the seed travels in the command field; an
+unregistered value is refused at submission, at export, and at comparison.
+
+Both arms of a replicate must use the same seed. `--seed` sets the data order and
+`init_seed` together, so the value lands in the checkpoint config that
+`export_checkpoint.py` and `compare_arms.py` read back to identify the replicate;
+`compare_arms.py` refuses a dense/split pair whose seeds differ.
+
+To add a replicate, append the flag to both commands above and set `experiment` to
+match, e.g. `p3-math-split-seed43`:
+
+```bash
+... --save-folder "$EDULLM_CHECKPOINT_DIR" --seed 43
+```
+
+Declaring a new seed means adding it to `P3_SEEDS`; that edit is the deliberate act
+of registering a replicate, and it is why the seed is not a free parameter.
 
 The platform's hashed run manifest already pins the resolved image digest, workload
 and compute profiles, and exact command. Do not duplicate that record with unreliable

@@ -333,6 +333,21 @@ def test_unknown_checkpoint_provenance_or_architecture_is_refused(path, value):
         export.validate_saved_config(config)
 
 
+@pytest.mark.parametrize("seed", [42, 43, 44])
+def test_registered_replication_seeds_are_exportable(seed):
+    config = _saved_config()
+    config["init_seed"] = seed
+    export.validate_saved_config(config)
+
+
+@pytest.mark.parametrize("seed", [7, 99, 4242])
+def test_unregistered_seeds_are_not_exportable(seed):
+    config = _saved_config()
+    config["init_seed"] = seed
+    with pytest.raises(RuntimeError, match="seed"):
+        export.validate_saved_config(config)
+
+
 def _tiny_sealed_tokenizer(tmp_path, monkeypatch):
     root = tmp_path / "tokenizer"
     root.mkdir()

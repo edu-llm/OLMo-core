@@ -327,6 +327,36 @@ without downloading them.
 The stage is idempotent: a base already matching the pin is left alone unless
 `--force` is passed.
 
+## Evaluator corpus regeneration
+
+The evaluator JSONL payload is not published to S3 and is not carried in git, so
+after a rebuild it exists only if the `assemble_evaluator_root` stage runs. It
+wraps two existing scripts and checks the result against the pinned identity:
+
+```bash
+python scripts/assemble_evaluator_corpus.py \
+  --work-root /tmp/p3-rebuild-work \
+  --generation-id p3-full13-rebuild
+```
+
+1. `seal_v3_corpus.py` freezes the final splits into a sealed manifest.
+2. The sealed root, row totals, and every family `train_sha256` are compared
+   against `expected-release-v3.json`; any drift refuses rather than emitting a
+   look-alike evaluator root.
+3. `assemble_v3_evaluator_root.py` projects the sealed splits into `corpus-v3/`
+   and is then re-run with `--check-only`.
+
+The pinned identity is sealed root
+`60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148`,
+181,652 train rows and 4,191 eval rows.
+
+**`seal_v3_corpus.py` reads metamath and isabelle from
+`<builders>/<family>/normalized-resume/`.** That path used to be hardcoded to
+the original build's generation id (`p3-p3-full13-repaired.y13zg7ik`), which no
+fresh rebuild produces. It is now `--builders-root`, defaulted to the original
+value so existing invocations are unchanged; the orchestrator passes the
+rebuild's own generation id.
+
 ## What not to infer or implement without user approval
 
 - random-mask control arm
@@ -368,6 +398,12 @@ The stage is idempotent: a base already matching the pin is left alone unless
    Do not silence it with `pytest.importorskip`. That turns 98 failures into a
    green run. The pretrain path is unaffected and stays green at
    887 passed / 34 skipped with both evaluator modules ignored.
+5. `corpus-v3/` — the evaluator JSONL payload — exists in exactly one place, an
+   author's local workspace. It is not on S3, not in git, and the clean-room
+   rebuild that would recreate it is blocker 1 above. Publishing it through
+   `edullm_data.publish()` to `eval/formal-proof-premises-500m` is the standing
+   fix; it needs AWS credentials for `edullm-landing`, which the `sb-aws` broker
+   does not currently hold.
 
 ## Package and platform contracts
 

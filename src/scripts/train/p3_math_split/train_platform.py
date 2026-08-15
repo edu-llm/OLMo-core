@@ -93,6 +93,7 @@ from olmo_core.utils import seed_all
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from p3_seeds import P3_SEED, P3_SEEDS
 from provenance import TOKENIZER_ARTIFACT, fetch_tokenizer_artifact
 from train_module import DerivedMaskTrainModuleConfig
 
@@ -100,7 +101,6 @@ log = logging.getLogger(__name__)
 
 P3_MODEL_FACTORY = "qwen2_0_5b"
 P3_DATASET_ID = "pretrain/formal-proof-premises-500m"
-P3_SEED = 42
 P3_LOSS_IMPLEMENTATION = LMLossImplementation.fused_linear
 P3_CONFIG_DIR = Path(__file__).resolve().parent / "configs"
 EXPECTED_SEPARATOR_IDS = [10952, 15513, 969]
@@ -628,10 +628,11 @@ def validate_submission_controls(opts, *, require_seed: bool = True) -> None:
             Stage.THE_CONFIG_WOULD_NOT_BUILD,
             f"P3 tokenizer is fixed to {TOKENIZER_ARTIFACT!r}; " f"got {opts.dataset_tokenizer!r}",
         )
-    if require_seed and opts.data_seed != P3_SEED:
+    if require_seed and opts.data_seed not in P3_SEEDS:
         raise Refusal(
             Stage.THE_CONFIG_WOULD_NOT_BUILD,
-            f"P3 seed is fixed to {P3_SEED}; got {opts.data_seed}",
+            f"P3 seed must be a registered replication seed {list(P3_SEEDS)}; "
+            f"got {opts.data_seed}",
         )
 
 
@@ -721,11 +722,24 @@ def apply_arm_config(opts) -> dict:
             f"--arm {opts.arm} but {opts.config} declares arm={cfg.get('arm')!r}",
         )
     shared = cfg["shared"]
-    if shared.get("seed") != P3_SEED:
+    declared_seed = shared.get("seed")
+    if declared_seed not in P3_SEEDS:
         raise Refusal(
             Stage.THE_CONFIG_WOULD_NOT_BUILD,
-            f"P3 seed is fixed to {P3_SEED}; {opts.config} declares " f"{shared.get('seed')!r}",
+            f"P3 seed must be a registered replication seed {list(P3_SEEDS)}; "
+            f"{opts.config} declares {declared_seed!r}",
         )
+    if opts.data_seed not in P3_SEEDS:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"P3 seed must be a registered replication seed {list(P3_SEEDS)}; "
+            f"got {opts.data_seed}",
+        )
+    # Every downstream reader takes the seed from `shared`, including the model's
+    # init_seed and the value stamped into the checkpoint config that compare_arms
+    # reads back. Resolving the CLI selection into it here is what keeps weight init,
+    # data order, and the recorded replicate identity from disagreeing.
+    shared["seed"] = opts.data_seed
     if shared.get("runtime_smoke") != P3_RUNTIME_SMOKE:
         raise Refusal(
             Stage.THE_CONFIG_WOULD_NOT_BUILD,
@@ -1317,10 +1331,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use the closed 100-step verification profile declared in the canonical YAML.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Resolve and print, do not train.")
-    # Scientific controls are deliberately not command-line options. apply_arm_config()
-    # fills these from the canonical arm YAML after parse_cli_args() has rejected every
-    # unknown flag and dotlist.
-    parser.set_defaults(model_factory=P3_MODEL_FACTORY, data_seed=P3_SEED)
+    parser.add_argument(
+        "--seed",
+        dest="data_seed",
+        type=int,
+        default=P3_SEED,
+        help="Registered replication seed. Selects which of the declared seeds "
+        f"{list(P3_SEEDS)} this run reproduces; anything else is refused.",
+    )
+    # Scientific controls other than the replication seed are deliberately not
+    # command-line options. apply_arm_config() fills these from the canonical arm YAML
+    # after parse_cli_args() has rejected every unknown flag and dotlist.
+    parser.set_defaults(model_factory=P3_MODEL_FACTORY)
     return parser
 
 

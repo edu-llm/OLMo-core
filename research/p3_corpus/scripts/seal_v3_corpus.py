@@ -22,14 +22,16 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-OLMO_P3 = (
-    REPO_ROOT.parent
-    / "eduLLM"
-    / "OLMo-core"
-    / "src"
-    / "scripts"
-    / "train"
-    / "p3_math_split"
+_P3_TRAIN_RELPATH = Path("src/scripts/train/p3_math_split")
+_OLMO_P3_CANDIDATES = (
+    # This archive lives inside OLMo-core itself.
+    REPO_ROOT.parents[1] / _P3_TRAIN_RELPATH,
+    # Legacy layout: the archive sat beside a separate OLMo-core checkout.
+    REPO_ROOT.parent / "eduLLM" / "OLMo-core" / _P3_TRAIN_RELPATH,
+)
+OLMO_P3 = next(
+    (path for path in _OLMO_P3_CANDIDATES if (path / "tokenize_corpus.py").is_file()),
+    _OLMO_P3_CANDIDATES[0],
 )
 if str(OLMO_P3) not in sys.path:
     sys.path.insert(0, str(OLMO_P3))
@@ -46,14 +48,16 @@ EXPECTED_EVAL_ROWS_DEFAULT = 4191
 TOKENIZER_DIR_DEFAULT = REPO_ROOT / "tokenizers" / "qwen25-vendored"
 
 
-def _default_sources(work_root: Path) -> dict[str, dict[str, Path]]:
+ORIGINAL_BUILDERS_RELPATH = (
+    "generation-work-persistent/p3-p3-full13-repaired.y13zg7ik/builders"
+)
+
+
+def _default_sources(
+    work_root: Path, builders_root: Path | None = None
+) -> dict[str, dict[str, Path]]:
     mml = work_root / "mml-semantic-holdout-v7"
-    gen = (
-        work_root
-        / "generation-work-persistent"
-        / "p3-p3-full13-repaired.y13zg7ik"
-        / "builders"
-    )
+    gen = builders_root if builders_root is not None else work_root / ORIGINAL_BUILDERS_RELPATH
     return {
         "mizar": {"train": mml / "shards/mizar.jsonl", "eval": mml / "eval/mizar.jsonl"},
         "thproofs": {
@@ -135,12 +139,24 @@ def main() -> None:
         default=str(REPO_ROOT / ".p3-work" / "full13" / "sealed-corpus-v3" / "sealed-corpus-manifest.json"),
         help="destination path for the sealed corpus manifest JSON",
     )
+    ap.add_argument(
+        "--builders-root",
+        default=None,
+        help=(
+            "directory holding <family>/normalized-resume/ for metamath and isabelle; "
+            f"defaults to <work-root>/{ORIGINAL_BUILDERS_RELPATH}, which names the "
+            "original build's generation id and does not exist in a fresh rebuild"
+        ),
+    )
     ap.add_argument("--tokenizer-dir", default=str(TOKENIZER_DIR_DEFAULT))
     ap.add_argument("--expected-eval-rows", type=int, default=EXPECTED_EVAL_ROWS_DEFAULT)
     args = ap.parse_args()
 
     work_root = Path(args.work_root).expanduser().resolve()
-    sources = _default_sources(work_root)
+    builders_root = (
+        Path(args.builders_root).expanduser().resolve() if args.builders_root else None
+    )
+    sources = _default_sources(work_root, builders_root)
     if set(sources) != set(FAMILIES):
         sys.exit("source map does not cover exactly the ordered P3 family set")
 

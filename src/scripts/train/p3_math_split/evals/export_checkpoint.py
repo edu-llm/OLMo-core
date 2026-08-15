@@ -58,6 +58,7 @@ from olmo_core.train.checkpoint import Checkpointer
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from p3_seeds import P3_SEEDS
 from provenance import (
     TOKENIZER_ARTIFACT_ID,
     TOKENIZER_ARTIFACT_VERSION,
@@ -217,8 +218,11 @@ def validate_saved_config(config: Dict[str, Any]) -> None:
         raise RuntimeError(
             f"checkpoint dataset version is unknown: {config.get('dataset_version')!r}"
         )
-    if config.get("init_seed") != 42:
-        raise RuntimeError(f"checkpoint seed is unknown: {config.get('init_seed')!r}")
+    if config.get("init_seed") not in P3_SEEDS:
+        raise RuntimeError(
+            f"checkpoint seed is unknown: {config.get('init_seed')!r}; "
+            f"registered replication seeds are {list(P3_SEEDS)}"
+        )
     world_size = config.get("world_size")
     if not isinstance(world_size, int) or isinstance(world_size, bool) or world_size < 1:
         raise RuntimeError(f"checkpoint world size is unknown: {world_size!r}")

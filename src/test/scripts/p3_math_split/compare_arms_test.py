@@ -1278,21 +1278,46 @@ def test_training_config_check_distinguishes_missing_from_explicit_null():
         compare.validate_training_configs(dense, split)
 
 
-def test_training_config_check_enforces_the_seed_42_checkpoint_contract():
-    dense = {
-        "arm": "dense",
-        "source_commit": "c" * 40,
-        "init_seed": 42,
-        "train_module": {"arm": "dense"},
-    }
-    split = {
-        "arm": "split",
-        "source_commit": "c" * 40,
-        "init_seed": 43,
-        "train_module": {"arm": "split"},
-    }
+def _seeded_pair(dense_seed: int, split_seed: int) -> tuple[dict, dict]:
+    return (
+        {
+            "arm": "dense",
+            "source_commit": "c" * 40,
+            "init_seed": dense_seed,
+            "train_module": {"arm": "dense"},
+        },
+        {
+            "arm": "split",
+            "source_commit": "c" * 40,
+            "init_seed": split_seed,
+            "train_module": {"arm": "split"},
+        },
+    )
 
-    with pytest.raises(ValueError, match="seed 42"):
+
+def test_training_config_check_refuses_arms_trained_on_different_seeds():
+    """Replaces the former seed-42-only contract.
+
+    The pairing is only meaningful between arms of the same replicate, so requiring
+    the two seeds to be registered AND equal is strictly stronger than requiring both
+    to be 42: it still refuses this mismatch, and additionally refuses a matched pair
+    on an undeclared seed.
+    """
+    dense, split = _seeded_pair(42, 43)
+    with pytest.raises(ValueError, match="same registered replication seed"):
+        compare.validate_training_configs(dense, split)
+
+
+@pytest.mark.parametrize("seed", [42, 43, 44])
+def test_training_config_check_accepts_a_matched_registered_replicate(seed):
+    dense, split = _seeded_pair(seed, seed)
+    compare.validate_training_configs(dense, split)
+
+
+@pytest.mark.parametrize("seed", [7, 99, 4242])
+def test_training_config_check_refuses_a_matched_but_unregistered_seed(seed):
+    dense, split = _seeded_pair(seed, seed)
+    with pytest.raises(ValueError, match="same registered replication seed"):
         compare.validate_training_configs(dense, split)
 
 
