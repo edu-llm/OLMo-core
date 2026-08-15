@@ -1,0 +1,17 @@
+# Same OLMo-ladder 370M / ~10B recipe as olmo-ladder-control, on
+# pretrain/opt-with-synthetic-10b v1 with warmup-quadratic MTLD
+# (curriculum/opt-with-synthetic-10b v1 group mtld, token-progress arm-9 pacing).
+# That parent is not a registered --dataset slug yet, so the command pins
+# EDULLM_DATASET_* and check/submit should pass --dataset none until it is.
+# Pass --hours 8 and --attempts 1 at edullm check/submit.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export PYTHONDONTWRITEBYTECODE=1 EDULLM_LAUNCH_CHECK=waived
+  EDULLM_DATASET_ID=pretrain/opt-with-synthetic-10b EDULLM_DATASET_VERSION=v1
+  EDULLM_DATASET_TOKENIZER=tokenizer/dolma2-bpe
+  EDULLM_WANDB_PROJECT=hpo-cl WANDB_PROJECT=hpo-cl
+  WANDB_RUN_GROUP=hpo-cl-olmo-ladder PARAM_DTYPE=bfloat16
+  EDULLM_CHECKPOINT_DIR="$EDULLM_CHECKPOINT_DIR" &&
+  python .edullm/olmo_ladder_opt_synthetic.py --arm warmup-quadratic'
