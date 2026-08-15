@@ -77,6 +77,61 @@ def test_an_unknown_arm_is_refused(script):
 # ------------------------------------------------------------------------------------------
 
 
+def test_both_scales_are_available_and_370m_stays_the_default(script):
+    """
+    The smaller scale exists because a 370M cell at 1.35x Chinchilla does not fit the platform's
+    runtime bound; 370M stays the default because it is the experiment as specified.
+    """
+    assert set(script.SCALES) == {"370M", "190M"}
+    assert script.parse_args(["plan"]).scale == "370M"
+
+
+@pytest.mark.parametrize("scale", ["370M", "190M"])
+def test_the_single_field_contract_holds_at_every_scale(script, scale):
+    """A second scale is only useful if it carries the same guarantee as the first."""
+    difference = script.arm_config_difference(
+        script.build_model_config("b2", scale=scale),
+        script.build_model_config("b3", scale=scale),
+    )
+
+    assert set(difference) == {TREATMENT_FIELD}
+
+
+@pytest.mark.parametrize(
+    "scale,reference",
+    [("370M", 371_262_464), ("190M", 190_354_176)],
+)
+def test_every_scale_lands_on_its_olmo3_reference(script, scale, reference):
+    for arm in script.ARMS:
+        count = script.build_model_config(arm, scale=scale).num_non_embedding_params
+        assert abs(count - reference) / reference < 0.005
+
+
+@pytest.mark.parametrize(
+    "scale,tokens",
+    [("370M", 10_000_000_000), ("190M", 3_805_863_840)],
+)
+def test_each_scale_carries_its_own_token_budget(script, scale, tokens):
+    """
+    370M keeps the ladder's 10B, which is 1.35x Chinchilla and what the repository's dense and
+    GDN runs at this size used, so the arms can be read beside them. 190M is Chinchilla-optimal at
+    20 tokens per non-embedding parameter, which is the ratio that made it worth shrinking: the
+    August wave's 1.54 was the single largest thing wrong with it.
+    """
+    assert script.parse_args(["plan", "--scale", scale]).token_budget == tokens
+
+
+def test_the_190m_budget_really_is_twenty_tokens_per_parameter(script):
+    opts = script.parse_args(["plan", "--scale", "190M"])
+    params = script.build_model_config("b2", scale="190M").num_non_embedding_params
+
+    assert round(opts.token_budget / params) == 20
+
+
+def test_an_explicit_token_budget_still_wins(script):
+    assert script.parse_args(["plan", "--scale", "190M", "--token-budget", "77"]).token_budget == 77
+
+
 def test_the_two_arms_differ_in_exactly_one_config_field(script):
     """
     A flattened diff of the two model configs must contain the block size and nothing else.

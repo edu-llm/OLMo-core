@@ -36,8 +36,16 @@ cannot express ``b=3``), a group-shared rotation timescale (per-head is 18.8x th
 ``MAMBA3_B2_VS_B3.md`` for the full audit.
 
 Data, optimizer, scheduler, trainer and the training loop are the dense
-``OLMo3-370M-dolma2mix.py``'s, imported and not modified: 10B tokens of the dolma2 source mixture
-on S3, sequence length 4096, global batch 786,432 tokens.
+``OLMo3-370M-dolma2mix.py``'s, imported and not modified: the dolma2 source mixture on S3,
+sequence length 4096, global batch 786,432 tokens.
+
+**Two scales.** ``--scale 370M`` is the experiment as specified, at the ladder's 10B tokens.
+``--scale 190M`` is the same architecture on the OLMo-3-190M shell at 20 tokens per non-embedding
+parameter, which is about a seventh of the work. Both fit the runtime bound of the eight-A100 node
+this organization provisions: rescaling the 30,442 tok/s/device the August wave measured for the
+faithful arm puts a ``b=3`` cell near 12.5 h at 370M and 3.7 h at 190M, and ``b=2`` can only be
+faster because it replaces the prefix product with a ``cumsum``. Prefer 370M; take 190M when the
+budget buys more seeds that way, or for a second scale to check a result against.
 
 Usage::
 
@@ -67,7 +75,10 @@ import rich
 
 from olmo_core.data import TokenizerConfig
 from olmo_core.nn.mamba3 import Mamba3Config
-from olmo_core.nn.mamba3.config import FAITHFUL_370M_INTERMEDIATE_SIZE
+from olmo_core.nn.mamba3.config import (
+    FAITHFUL_190M_INTERMEDIATE_SIZE,
+    FAITHFUL_370M_INTERMEDIATE_SIZE,
+)
 from olmo_core.nn.mamba3.mixer import ROTATION_TIMESCALES, Mamba3MixerConfig
 from olmo_core.nn.utils import no_weight_decay_param_names
 from olmo_core.optim import OptimGroupOverride
@@ -110,11 +121,6 @@ SEEDS = (dolma2.DEFAULT_SEED, 210007, 220014, 230021, 240028)
 PARAM_MATCH_MODES = ("off", "ffn")
 DEFAULT_PARAM_MATCH = "off"
 
-#: Non-embedding parameters one unit of feed-forward width is worth: three SwiGLU matrices of width
-#: ``d_model``, across all sixteen layers. Used to solve the parameter match, and checked against
-#: the built configs rather than trusted.
-PARAMS_PER_FFN_UNIT = 3 * 1024 * 16
-
 #: Pinned, not derived. The ladder formula reads the parameter count, so leaving it to derive would
 #: hand the two arms different learning rates off the back of the 0.16% parameter gap -- a silent
 #: confounder in a comparison whose entire claim is that one field differs. 3e-4 rather than the
@@ -132,10 +138,33 @@ ROTATION_SCAN_IMPL = "quaternion"
 #: must share one SSD backend.
 SSD_BACKEND = "official_fast"
 
-#: ``TransformerConfig.olmo3_370M``'s non-embedding parameter count, which is what the "370M" label
-#: on this experiment refers to. Hardcoded rather than computed, so that a change to the dense
-#: reference shows up as a failing check here instead of silently re-baselining the ablation.
-REFERENCE_NON_EMBEDDING_PARAMS = 371_262_464
+#: The two model scales, each named for the OLMo-3 reference it is parameter-matched to.
+#:
+#: 370M is the experiment as specified and the default. 190M exists because a 370M cell at the
+#: ladder's 10B tokens does not fit the runtime bound of the eight-A100 node this organization
+#: provisions, and ``b=3`` is the slower arm, so the pair would straddle the bound -- which is
+#: worse than both being slow, because the two arms could not then share one request. Runtime goes
+#: as parameters times tokens, so at a fixed tokens-per-parameter ratio it is quadratic in the
+#: parameter count and 190M at Chinchilla is about a quarter of the work.
+SCALES = ("370M", "190M")
+DEFAULT_SCALE = "370M"
+
+#: Each scale's OLMo-3 reference: the preset that builds it, its non-embedding parameter count, and
+#: the token budget it trains on.
+#:
+#: The two budgets are chosen on different grounds and that is deliberate. 370M keeps the ladder's
+#: 10B, which is 1.35x Chinchilla and what this repository's dense and Gated DeltaNet runs at this
+#: size used, so the arms can be read beside them. 190M is Chinchilla-optimal at 20 tokens per
+#: non-embedding parameter, because the ratio is the thing shrinking the model buys: the August
+#: eight-arm wave ran at 1.54 tokens per parameter, and its own retrospective named that the single
+#: largest reason its result was not interpretable.
+#:
+#: Counts are hardcoded rather than computed so that a change to a dense reference shows up as a
+#: failing check here instead of silently re-baselining the ablation.
+SCALE_REFERENCES = {
+    "370M": {"non_embedding_params": 371_262_464, "token_budget": dolma2.DEFAULT_TOKEN_BUDGET},
+    "190M": {"non_embedding_params": 190_354_176, "token_budget": 20 * 190_293_192},
+}
 
 #: How far either arm may sit from that reference before the label is wrong. The published expand
 #: factor of 2 makes the mixer far wider than the layer it replaces, so the feed-forward width is
@@ -172,7 +201,8 @@ def expected_config_difference(param_match: str) -> set:
 def build_model_config(
     arm: str,
     *,
-    intermediate_size: int = FAITHFUL_370M_INTERMEDIATE_SIZE,
+    scale: str = DEFAULT_SCALE,
+    intermediate_size: Optional[int] = None,
     param_match: str = DEFAULT_PARAM_MATCH,
     d_state: int = 192,
     rotation_timescale: str = "group_mean",
@@ -181,32 +211,40 @@ def build_model_config(
     Build one arm's model config.
 
     :param arm: One of :data:`ARMS`.
-    :param intermediate_size: Feed-forward width of the control arm. The treatment arm's may be
-        narrowed from it under ``param_match="ffn"``.
+    :param scale: One of :data:`SCALES`.
+    :param intermediate_size: Feed-forward width of the control arm, or ``None`` for the scale's
+        solved default. The treatment arm's may be narrowed from it under ``param_match="ffn"``.
     :param param_match: One of :data:`PARAM_MATCH_MODES`.
     :param d_state: SSM state size. Must admit both block sizes.
     :param rotation_timescale: One of
         :data:`~olmo_core.nn.mamba3.mixer.ROTATION_TIMESCALES`, shared by both arms.
 
-    :raises SystemExit: On an unknown arm or an inexpressible configuration.
+    :raises SystemExit: On an unknown arm or scale, or an inexpressible configuration.
     """
     if arm not in ARM_BLOCK_SIZE:
         raise SystemExit(f"unknown arm {arm!r}; expected one of {ARMS}")
+    if scale not in SCALES:
+        raise SystemExit(f"unknown scale {scale!r}; expected one of {SCALES}")
     if param_match not in PARAM_MATCH_MODES:
         raise SystemExit(
             f"unknown --param-match {param_match!r}; expected one of {PARAM_MATCH_MODES}"
         )
 
+    preset = _PRESET_BY_SCALE[scale]
+    if intermediate_size is None:
+        intermediate_size = _DEFAULT_INTERMEDIATE_SIZE_BY_SCALE[scale]
+
     width = intermediate_size
     if param_match == "ffn" and arm != CONTROL_ARM:
         width = _matched_intermediate_size(
             arm,
+            scale=scale,
             intermediate_size=intermediate_size,
             d_state=d_state,
             rotation_timescale=rotation_timescale,
         )
 
-    return Mamba3Config.mamba3_faithful_olmo3_370M(
+    return preset(
         vocab_size=TokenizerConfig.dolma2().padded_vocab_size(),
         rotation_block_size=ARM_BLOCK_SIZE[arm],
         d_state=d_state,
@@ -218,8 +256,18 @@ def build_model_config(
     )
 
 
+_PRESET_BY_SCALE = {
+    "370M": Mamba3Config.mamba3_faithful_olmo3_370M,
+    "190M": Mamba3Config.mamba3_faithful_olmo3_190M,
+}
+_DEFAULT_INTERMEDIATE_SIZE_BY_SCALE = {
+    "370M": FAITHFUL_370M_INTERMEDIATE_SIZE,
+    "190M": FAITHFUL_190M_INTERMEDIATE_SIZE,
+}
+
+
 def _matched_intermediate_size(
-    arm: str, *, intermediate_size: int, d_state: int, rotation_timescale: str
+    arm: str, *, scale: str, intermediate_size: int, d_state: int, rotation_timescale: str
 ) -> int:
     """
     Feed-forward width that makes ``arm`` weigh exactly what the control arm weighs.
@@ -228,19 +276,29 @@ def _matched_intermediate_size(
     surcharge is not a whole number of feed-forward units -- an approximate "parameter match" is
     worse than an honest mismatch, because it reads as exact.
     """
-    common: dict[str, Any] = dict(d_state=d_state, rotation_timescale=rotation_timescale)
+    common: dict[str, Any] = dict(
+        scale=scale, d_state=d_state, rotation_timescale=rotation_timescale
+    )
     control = build_model_config(
         CONTROL_ARM, intermediate_size=intermediate_size, param_match="off", **common
     )
     treated = build_model_config(
         arm, intermediate_size=intermediate_size, param_match="off", **common
     )
-    units, remainder = divmod(treated.num_params - control.num_params, PARAMS_PER_FFN_UNIT)
+    # What a unit of feed-forward width is worth, measured at this scale rather than assumed:
+    # three SwiGLU matrices of width `d_model` across every layer, which differs between the two
+    # scales and would be a silent off-by-a-factor if it were written down once.
+    narrower = build_model_config(
+        CONTROL_ARM, intermediate_size=intermediate_size - 1, param_match="off", **common
+    )
+    per_unit = control.num_params - narrower.num_params
+    surcharge = treated.num_params - control.num_params
+    units, remainder = divmod(surcharge, per_unit)
     if remainder:
         raise SystemExit(
-            f"cannot parameter-match {arm}: its {treated.num_params - control.num_params:,} extra "
-            f"parameters are not a whole number of feed-forward units ({PARAMS_PER_FFN_UNIT:,}). "
-            f"Run with --param-match off and report the difference instead."
+            f"cannot parameter-match {arm} at {scale}: its {surcharge:,} extra parameters are not "
+            f"a whole number of feed-forward units ({per_unit:,}). Run with --param-match off and "
+            f"report the difference instead."
         )
     return intermediate_size - units
 
@@ -282,12 +340,15 @@ def arm_config_difference(control: Mamba3Config, treated: Mamba3Config) -> dict:
     }
 
 
-def verify_arms(configs: dict, *, param_match: str = DEFAULT_PARAM_MATCH) -> dict:
+def verify_arms(
+    configs: dict, *, param_match: str = DEFAULT_PARAM_MATCH, scale: str = DEFAULT_SCALE
+) -> dict:
     """
     Check the comparison's contract and return the manifest that records it.
 
     :param configs: ``{arm name: model config}``, which must cover :data:`ARMS`.
     :param param_match: One of :data:`PARAM_MATCH_MODES`.
+    :param scale: One of :data:`SCALES`, which decides the reference to check against.
 
     :raises ArmContractError: If the arms differ in anything but the treatment, or if the parameter
         counts do not match what the mode promises.
@@ -298,14 +359,20 @@ def verify_arms(configs: dict, *, param_match: str = DEFAULT_PARAM_MATCH) -> dic
     if missing:
         raise ArmContractError(f"missing arm(s): {sorted(missing)}")
 
+    if scale not in SCALES:
+        raise ArmContractError(f"unknown scale {scale!r}; expected one of {SCALES}")
+    reference = SCALE_REFERENCES[scale]["non_embedding_params"]
+
     control = configs[CONTROL_ARM]
     manifest: dict = {
-        "experiment": "mamba3-370m-b2-vs-b3",
+        "experiment": f"mamba3-{scale.lower()}-b2-vs-b3",
+        "scale": scale,
         "param_match": param_match,
         "learning_rate": DEFAULT_LEARNING_RATE,
         "rotation_scan_impl": ROTATION_SCAN_IMPL,
         "ssd_backend": SSD_BACKEND,
-        "reference_non_embedding_params": REFERENCE_NON_EMBEDDING_PARAMS,
+        "reference_non_embedding_params": reference,
+        "token_budget": SCALE_REFERENCES[scale]["token_budget"],
         "arms": {},
         "config_difference": {},
     }
@@ -322,10 +389,8 @@ def verify_arms(configs: dict, *, param_match: str = DEFAULT_PARAM_MATCH) -> dic
             "intermediate_size": config.block["mamba3"].feed_forward.hidden_size,
             "d_state": mixer.d_state,
             "rotation_timescale": mixer.rotation_timescale,
-            "drift_from_370m_reference": round(
-                (config.num_non_embedding_params - REFERENCE_NON_EMBEDDING_PARAMS)
-                / REFERENCE_NON_EMBEDDING_PARAMS,
-                6,
+            "drift_from_reference": round(
+                (config.num_non_embedding_params - reference) / reference, 6
             ),
         }
 
@@ -367,9 +432,9 @@ def verify_arms(configs: dict, *, param_match: str = DEFAULT_PARAM_MATCH) -> dic
     )
 
     for arm, row in manifest["arms"].items():
-        if abs(row["drift_from_370m_reference"]) > MAX_REFERENCE_DRIFT:
+        if abs(row["drift_from_reference"]) > MAX_REFERENCE_DRIFT:
             raise ArmContractError(
-                f"arm {arm} is {row['drift_from_370m_reference']:.2%} from the 370M reference; "
+                f"arm {arm} is {row['drift_from_reference']:.2%} from the {scale} reference; "
                 f"adjust --intermediate-size"
             )
     return manifest
@@ -387,6 +452,7 @@ def build_plan(opts) -> list:
     and initialization all at once.
     """
     cells: list = []
+    scale = opts.scale.lower()
     for arm in ARMS:
         for replicate in range(opts.replicates):
             cells.append(
@@ -396,7 +462,7 @@ def build_plan(opts) -> list:
                     "replicate": replicate,
                     "seed": SEEDS[replicate],
                     "rotation_block_size": ARM_BLOCK_SIZE[arm],
-                    "run_name": f"mamba3-370m-{arm}-r{replicate}",
+                    "run_name": f"mamba3-{scale}-{arm}-r{replicate}",
                 }
             )
     return cells
@@ -430,6 +496,7 @@ def build_config(opts, overrides):
 
     model_config = build_model_config(
         opts.arm,
+        scale=opts.scale,
         intermediate_size=opts.intermediate_size,
         param_match=opts.param_match,
         d_state=opts.d_state,
@@ -472,18 +539,27 @@ def build_config(opts, overrides):
         Mamba3BackendMonitorCallback(expected_backend=SSD_BACKEND),
     )
 
+    # The scan is named identically on both arms so the config diff stays one field wide, but at
+    # b=2 it describes nothing: SO(2) prefix products collapse to a cumsum and the branch
+    # short-circuits before the implementation is read. Say so, rather than let a b=2 log line and
+    # a b=2 saved config both claim a quaternion scan ran.
+    scan = ROTATION_SCAN_IMPL
+    if ARM_BLOCK_SIZE[opts.arm] == 2:
+        scan = f"{ROTATION_SCAN_IMPL} (inert at b=2; SO(2) uses a cumsum of angles)"
     log.info(
-        "Mamba-3 b-ablation arm=%s b=%d (%s) params=%s non-emb=%s lr=%.3e seed=%d "
-        "param_match=%s scan=%s",
+        "Mamba-3 b-ablation scale=%s arm=%s b=%d (%s) params=%s non-emb=%s tokens=%s lr=%.3e "
+        "seed=%d param_match=%s scan=%s",
+        opts.scale,
         opts.arm,
         ARM_BLOCK_SIZE[opts.arm],
         "TC^0 control" if opts.arm == CONTROL_ARM else "NC^1 treatment",
         f"{model_config.num_params:,}",
         f"{model_config.num_non_embedding_params:,}",
+        f"{opts.token_budget:,}",
         config.train_module.optim.lr,
         dolma2_opts.seed,
         opts.param_match,
-        ROTATION_SCAN_IMPL,
+        scan,
     )
     return config
 
@@ -521,6 +597,13 @@ def _dense_opts(opts, overrides):
 
 def _shared_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
+        "--scale",
+        choices=SCALES,
+        default=DEFAULT_SCALE,
+        help="Model size, named for the OLMo-3 reference it is parameter-matched to. Each scale "
+        "carries its own token budget; see --token-budget.",
+    )
+    parser.add_argument(
         "--param-match",
         choices=PARAM_MATCH_MODES,
         default=DEFAULT_PARAM_MATCH,
@@ -530,8 +613,9 @@ def _shared_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--intermediate-size",
         type=int,
-        default=FAITHFUL_370M_INTERMEDIATE_SIZE,
-        help="Feed-forward width of the control arm, solved to land on the 370M reference.",
+        default=None,
+        help="Feed-forward width of the control arm. Defaults to the width solved for the scale's "
+        "reference parameter count.",
     )
     parser.add_argument(
         "--d-state",
@@ -552,7 +636,13 @@ def _shared_arguments(parser: argparse.ArgumentParser) -> None:
         default=DEFAULT_LEARNING_RATE,
         help="Pinned, and shared by both arms. Do not let this be derived per arm.",
     )
-    parser.add_argument("--token-budget", type=int, default=dolma2.DEFAULT_TOKEN_BUDGET)
+    parser.add_argument(
+        "--token-budget",
+        type=int,
+        default=None,
+        help="Defaults to the scale's own budget: 10B at 370M, which is the ladder's recipe and "
+        "1.35x Chinchilla, and 20 tokens per non-embedding parameter at 190M.",
+    )
     parser.add_argument("--data-config", type=str, default=dolma2.DEFAULT_DATA_CONFIG)
     parser.add_argument(
         "--replicates",
@@ -609,6 +699,8 @@ def parse_args(argv: Optional[list] = None):
 
     opts, dense_args = parser.parse_known_args(argv)
     opts.dense_args = dense_args
+    if opts.token_budget is None:
+        opts.token_budget = SCALE_REFERENCES[opts.scale]["token_budget"]
     if opts.command == "train":
         if not 0 <= opts.replicate < len(SEEDS):
             parser.error(f"--replicate must be between 0 and {len(SEEDS) - 1}")
@@ -641,6 +733,7 @@ def _arm_configs(opts) -> dict:
     return {
         arm: build_model_config(
             arm,
+            scale=opts.scale,
             intermediate_size=opts.intermediate_size,
             param_match=opts.param_match,
             d_state=opts.d_state,
@@ -668,7 +761,7 @@ def main():
     opts = parse_args()
 
     if opts.command in ("plan", "verify"):
-        manifest = verify_arms(_arm_configs(opts), param_match=opts.param_match)
+        manifest = verify_arms(_arm_configs(opts), param_match=opts.param_match, scale=opts.scale)
         _print_manifest(manifest)
         if opts.command == "plan":
             print(f"\n{2 if opts.replicates == 1 else opts.replicates * 2} cells:")
@@ -695,7 +788,7 @@ def main():
 
     # `verify_arms` runs before the run does, not after: an arm that fails the contract must cost a
     # process start, not a GPU-hour and a result nobody can use.
-    verify_arms(_arm_configs(opts), param_match=opts.param_match)
+    verify_arms(_arm_configs(opts), param_match=opts.param_match, scale=opts.scale)
 
     if opts.dry_run:
         rich.print(build_config(opts, []))

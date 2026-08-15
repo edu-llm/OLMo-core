@@ -31,6 +31,7 @@ __all__ = [
     "Mamba3BlockConfig",
     "Mamba3Config",
     "FAITHFUL_370M_INTERMEDIATE_SIZE",
+    "FAITHFUL_190M_INTERMEDIATE_SIZE",
 ]
 
 #: Feed-forward hidden size of :meth:`Mamba3Config.mamba3_faithful_olmo3_370M`.
@@ -44,6 +45,11 @@ __all__ = [
 #: 3456 rather than 3452 because it is the nearest multiple of 64, which keeps the feed-forward
 #: GEMM on a tensor-core-friendly shape. The residual is +0.049% against the reference.
 FAITHFUL_370M_INTERMEDIATE_SIZE = 3456
+
+#: The same solve for :meth:`Mamba3Config.mamba3_faithful_olmo3_190M`, against ``olmo3_190M``'s
+#: 190,354,176. A unit of feed-forward width is worth 27,648 non-embedding parameters across its 12
+#: layers; the nearest multiple of 64 to the exact solution leaves a residual of -0.032%.
+FAITHFUL_190M_INTERMEDIATE_SIZE = 2560
 
 
 class Mamba3Type(StrEnum):
@@ -519,14 +525,79 @@ class Mamba3Config(TransformerConfig):
         cls,
         vocab_size: int,
         *,
+        intermediate_size: int = FAITHFUL_370M_INTERMEDIATE_SIZE,
+        **kwargs,
+    ) -> "Mamba3Config":
+        """
+        Published Mamba-3 SISO on the OLMo-3-370M shell: ``d_model`` 1024, 16 layers.
+
+        See :meth:`mamba3_faithful_hybrid` for the architecture and its three deviations. The
+        default feed-forward width lands the arm within +0.049% of
+        :meth:`TransformerConfig.olmo3_370M
+        <olmo_core.nn.transformer.TransformerConfig.olmo3_370M>`'s 371,262,464 non-embedding
+        parameters.
+        """
+        return cls.mamba3_faithful_hybrid(
+            vocab_size,
+            d_model=1024,
+            n_layers=16,
+            intermediate_size=intermediate_size,
+            **kwargs,
+        )
+
+    @classmethod
+    def mamba3_faithful_olmo3_190M(
+        cls,
+        vocab_size: int,
+        *,
+        intermediate_size: int = FAITHFUL_190M_INTERMEDIATE_SIZE,
+        **kwargs,
+    ) -> "Mamba3Config":
+        """
+        The same architecture on the OLMo-3-190M shell: ``d_model`` 768, 12 layers.
+
+        This scale is a budget choice rather than a scientific one; 370M also fits the runtime
+        bound of the eight-A100 node this organization provisions, on the throughput the August
+        wave measured for the faithful arm. Runtime goes as parameters times tokens, so at a fixed
+        tokens-per-parameter ratio it is quadratic in the parameter count: 190M at Chinchilla is
+        roughly a quarter of the work of 370M at Chinchilla and a seventh of 370M at 10B. Take it
+        when the budget buys more seeds that way, or for a second point to check that a result at
+        one scale survives at another.
+
+        It is also the scale below which the comparison stops meaning much: published Mamba-3's
+        smallest reported model is 180M, and 12 layers keeps the 3:1 substitution intact at 9
+        Mamba layers to 3 attention. Nothing about the mixer changes between the two scales, which
+        :func:`test_the_190m_preset_differs_from_the_370m_one_only_in_geometry` asserts field by
+        field, so a result at one is evidence about the other.
+
+        The default feed-forward width lands within -0.032% of
+        :meth:`TransformerConfig.olmo3_190M
+        <olmo_core.nn.transformer.TransformerConfig.olmo3_190M>`'s 190,354,176 non-embedding
+        parameters.
+        """
+        return cls.mamba3_faithful_hybrid(
+            vocab_size,
+            d_model=768,
+            n_layers=12,
+            intermediate_size=intermediate_size,
+            **kwargs,
+        )
+
+    @classmethod
+    def mamba3_faithful_hybrid(
+        cls,
+        vocab_size: int,
+        *,
+        d_model: int,
+        n_layers: int,
+        intermediate_size: int,
         rotation_block_size: int = 2,
         d_state: int = DEFAULT_D_STATE,
-        intermediate_size: int = FAITHFUL_370M_INTERMEDIATE_SIZE,
         rotation_timescale: str = "group_mean",
         **kwargs,
     ) -> "Mamba3Config":
         """
-        OLMo-3-370M with **published** Mamba-3 SISO in place of the sliding-window layers.
+        An OLMo-3 shell with **published** Mamba-3 SISO in place of the sliding-window layers.
 
         The difference from :meth:`mamba3_olmo3_370M` is fidelity. That preset predates the
         August audit and departs from published SISO in seven ways beyond the rotation -- expand 1
@@ -547,36 +618,41 @@ class Mamba3Config(TransformerConfig):
            192 to 256; no power of two is divisible by three, so that is intrinsic to ``b=3``.
         2. ``rotation_timescale`` is ``group_mean``. The published rotation is scaled by the
            per-head ``dt``, which makes it head-specific and forces ``B``/``C`` to be broadcast to
-           heads before the scan -- measured at 276.8 ms a layer against 14.7 ms group-shared at
-           batch 2, sequence 4096, i.e. 18.8x. Pass ``rotation_timescale="per_head"`` for the
-           faithful-and-slow form.
+           heads before the scan. Both forms were run end to end on eight A100s over three seeds:
+           group-shared is 1.375x the throughput at 68% of the peak memory (30,442 against 22,133
+           tok/s a device, 16.43 against 24.17 GiB) and costs 0.0028 nats of held-out
+           cross-entropy, which is well inside the 0.0126 seed spread. Pass
+           ``rotation_timescale="per_head"`` for the faithful-and-slower form.
         3. ``A`` keeps a learned per-head ``A_log`` baseline under ``dynamic_a``, where the
            reference module produces ``A`` from the projection alone through a heavy-tail
            activation.
 
-        The backbone is OLMo-3-370M's, unchanged: 16 layers at ``d_model`` 1024, the same 3:1
-        substitution the reference's ``[4096, 4096, 4096, -1]`` attention pattern has, RoPE at
-        theta 500k, QK-norm, and a 1e-6 norm epsilon.
+        The backbone is the OLMo-3 reference's for this width, unchanged: the same 3:1
+        substitution its ``[4096, 4096, 4096, -1]`` attention pattern has, RoPE at theta 500k,
+        QK-norm, and a 1e-6 norm epsilon. Use :meth:`mamba3_faithful_olmo3_370M` or
+        :meth:`mamba3_faithful_olmo3_190M` rather than calling this directly; they carry the
+        geometry and the solved feed-forward width for their reference.
 
+        :param d_model: Model hidden size. Sets the mixer width too, since expand is 2.
+        :param n_layers: Total layers, which must be divisible by 4 for the 3:1 pattern.
         :param rotation_block_size: Size ``b``. ``2`` is the paper's complex diagonal and the
             default because it is the control; ``3`` is the non-solvable ``SO(3)`` treatment.
         :param d_state: SSM state size. The default admits ``b`` in ``{2, 3, 4}``.
-        :param intermediate_size: Feed-forward hidden size. The default is solved so that the
-            arm lands on :meth:`TransformerConfig.olmo3_370M
-            <olmo_core.nn.transformer.TransformerConfig.olmo3_370M>`'s non-embedding parameter
-            count despite the published expand factor of 2 widening the mixer well past what the
-            layer it replaces used. Narrowing the MLP is how the paper parameter-matches its own
-            variants (Appendix C), and it is the knob a caller turns to match the two arms exactly.
+        :param intermediate_size: Feed-forward hidden size. Solved per scale so that the arm lands
+            on its OLMo-3 reference's non-embedding parameter count despite the published expand
+            factor of 2 widening the mixer well past what the layer it replaces used. Narrowing
+            the MLP is how the paper parameter-matches its own variants (Appendix C), and it is
+            the knob a caller turns to match the two arms exactly.
         :param rotation_timescale: See deviation 2 above.
         """
         return cls.mamba3_hybrid_like(
-            d_model=1024,
+            d_model=d_model,
             vocab_size=vocab_size,
-            n_layers=16,
-            n_heads=16,
+            n_layers=n_layers,
+            n_heads=d_model // 64,
             intermediate_size=intermediate_size,
-            # expand=2: the published SISO mixer width, 32 heads x 64 = 2048 = 2 * d_model.
-            mamba_n_heads=kwargs.pop("mamba_n_heads", 32),
+            # expand=2: the published SISO mixer width, `2 * d_model` split into 64-wide heads.
+            mamba_n_heads=kwargs.pop("mamba_n_heads", 2 * d_model // 64),
             mamba_head_dim=kwargs.pop("mamba_head_dim", 64),
             d_state=d_state,
             rotation_block_size=rotation_block_size,

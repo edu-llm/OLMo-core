@@ -10,23 +10,34 @@
 #
 #   edullm check --json \
 #     --experiment mamba3-370m-b-ablation \
-#     --dataset <release> \
+#     --dataset olmo-150b-dolma2-v1 \
+#     --team <team> \
 #     --spec .edullm/run-b-ablation.yaml \
 #     --fanout-size 2 --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX \
-#     --compute <shape> --hours <hours> --attempts 1
+#     --attempts 1
 #
-# Submit by replacing `check --json` with `submit`.
+# Submit by replacing `check --json` with `submit`. Read `cost` and `approval_class` out of that
+# output; no price, runtime bound or approver belongs in this file, because a copy here is a copy
+# nothing updates.
 #
-# TWO THINGS TO SETTLE BEFORE SUBMITTING, both of which `check` will raise if you get them wrong.
+# `olmo-150b-dolma2-v1` is the release behind the `s3://edullm-datasets/olmo-150b-dolma2/` mixture
+# this entrypoint's `--data-config` defaults to. It is a statement about what the run reads, and
+# `none` would be the wrong one: this run does read a corpus, unlike a smoke or an evaluation.
 #
-# 1. The corpus. This entrypoint inherits the 370M ladder's data path, which reads a
-#    SourceMixtureList YAML directly (`--data-config`, defaulting to the dolma2 mixture on S3)
-#    rather than resolving a registry release the way `train_core6_arm.py` does. Pass the
-#    `--dataset` the platform expects for that corpus; `none` is not the answer here, because this
-#    run does read a corpus.
-# 2. The compute shape and hours. Both cells are 12,715 steps at a 786,432-token global batch, and
-#    b=3 is the slower of the two by a margin this repository has not yet measured on the faithful
-#    arm. Size the request off a measured smoke, not off this comment.
+# SIZING THE HOURS. `check` prices against the workload's runtime bound, and that bound is a
+# ceiling rather than a dial: ask for more hours than it allows and it returns no price at all.
+#
+# The faithful `b=3` arm has been measured on this exact shape -- the August eight-arm wave's
+# `mamba-b3` rerun ran at 30,442 tok/s/device on eight A100s at sequence 4096, with about 1.6 h of
+# fixed overhead per cell for image pull, compile, checkpointing and the end-of-run evaluation.
+# This arm computes 0.954x that cell's FLOPs per token, which puts 10B tokens near 12.5 h, and
+# `--scale 190M` at 20 tokens per parameter near 3.7 h. Both are inside the bound; `b=2` replaces a
+# non-commutative prefix product with a cumsum and can only be faster than `b=3`, so the slower arm
+# is the one those numbers describe.
+#
+# Those are rescaled measurements, not measurements. Confirm with a throughput smoke before
+# committing the wave, and note that the run history `check` prints alongside the price is for the
+# ~600M-token bakeoff cells rather than for this one.
 #
 # The dtype is written into the command on purpose. The program sets bfloat16 in code, where the
 # precision guard cannot see it, so a command that did not name it would be admitted onto a card
@@ -43,7 +54,7 @@ command: >-
   python -m torch.distributed.run --nproc-per-node=8 --standalone
   src/scripts/train/OLMo3/OLMo3-370M-mamba3-b-ablation.py train
   "$EDULLM_RUN_ID-${ARMS[$I]}"
-  --arm "${ARMS[$I]}" --replicate 0
+  --scale 370M --arm "${ARMS[$I]}" --replicate 0
   --rank-microbatch-size 8192
   --save-folder "$EDULLM_CHECKPOINT_DIR"
   train_module.dp_config.param_dtype=bfloat16'

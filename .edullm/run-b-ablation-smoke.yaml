@@ -1,0 +1,51 @@
+# Ten steps of each arm of the b=2 / b=3 ablation. Run this before the wave, every time.
+#
+# It answers the two questions the configuration checks cannot. First, whether `b=2` runs at all on
+# the production path: `prefer_official_kernel=True`, `ssd_backend="official_fast"` and
+# `rotation_scan_impl="quaternion"` are strict requests that raise rather than fall back, and until
+# now only `b=3` had ever been through them -- the August wave ran the treatment and never the
+# control, so the baseline of this experiment is the one configuration nobody has executed. Second,
+# what the arms actually cost, which is what `--hours` on the real wave should be sized from
+# instead of from a number rescaled out of another study.
+#
+# Ten steps at the wave's own global batch, so the per-step time it reports is the wave's per-step
+# time. Multiply by 12,715 for a 370M cell or 4,839 for a 190M one, add the fixed overhead the log
+# shows before step 1, and size the request off that.
+#
+#   edullm check --json \
+#     --experiment mamba3-b-ablation-smoke \
+#     --dataset olmo-150b-dolma2-v1 \
+#     --team <team> \
+#     --spec .edullm/run-b-ablation-smoke.yaml \
+#     --fanout-size 2 --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX \
+#     --attempts 1
+#
+# Submit by replacing `check --json` with `submit`. Read `cost` and `approval_class` out of that.
+#
+# What to look for in the logs, beyond it not crashing:
+#   - the startup banner naming `b=2` / `b=3`, the pinned lr, and the seed;
+#   - `mamba3_sentinel` confirming the block size reached every mixer;
+#   - `mamba3_backend_monitor` confirming `official_fast`, i.e. that neither arm quietly took the
+#     chunked scan, which trains fine and is 2.2x slower;
+#   - a finite grad norm on step 1. The pre-faithful arm opened at 2,138 and clipped 43-75% of its
+#     steps; the faithful one has a median of 0.287 and clips none, so anything in between is worth
+#     stopping for.
+#
+# 7,864,320 tokens is exactly ten steps at the wave's 786,432-token global batch, and it is under
+# every checkpoint interval, so nothing is written and nothing is left behind to clean up.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export TRITON_F32_DEFAULT=ieee PYTHONDONTWRITEBYTECODE=1 &&
+  I=${AWS_BATCH_JOB_ARRAY_INDEX:-0} &&
+  ARMS=(b2 b3) &&
+  python -m torch.distributed.run --nproc-per-node=8 --standalone
+  src/scripts/train/OLMo3/OLMo3-370M-mamba3-b-ablation.py train
+  "$EDULLM_RUN_ID-smoke-${ARMS[$I]}"
+  --scale 370M --arm "${ARMS[$I]}" --replicate 0
+  --token-budget 7864320
+  --rank-microbatch-size 8192
+  --no-wandb
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  train_module.dp_config.param_dtype=bfloat16'

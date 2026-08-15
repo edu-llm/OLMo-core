@@ -116,12 +116,18 @@ real difference in the decay parameterization and it is *not* forced by anything
 **B — the rotation timescale is group-shared, not per head.** The reference scales each head's
 rotation by that head's `Δ_t`. Doing so makes the rotation head-specific, which forces `B`/`C` to be
 broadcast to heads before the scan, which destroys GQA and multiplies the prefix product by
-`n_heads`. Measured on the production quaternion path at this arm's own microbatch shape (batch 2,
-sequence 4096): **276.8 ms per layer per-head against 14.7 ms group-shared, 18.8×.** At 10B tokens
-that is the difference between a run and a non-run. `group_mean` averages `Δ_t` over each group's
-heads, so the rotation still advances with the timestep but at group granularity. A side effect: the
-post-BCNorm `B`/`C` bias becomes group-shared rather than head-specific, since a head-specific
-additive bias cannot exist without head-specific `B`/`C`.
+`n_heads` — 276.8 ms per layer against 14.7 ms group-shared on the rotation alone, at batch 2 and
+sequence 4096. `group_mean` averages `Δ_t` over each group's heads, so the rotation still advances
+with the timestep but at group granularity. A side effect: the post-BCNorm `B`/`C` bias becomes
+group-shared rather than head-specific, since a head-specific additive bias cannot exist without
+head-specific `B`/`C`.
+
+Both forms were then run end to end on eight A100s, three seeds each, and the deviation is cheap
+where it counts. Whole-model, the group-shared form is **1.375× the throughput at 68% of the peak
+memory** (30,442 against 22,133 tok/s/device, 16.43 against 24.17 GiB), and it costs **0.0028 nats**
+of held-out cross-entropy — 3.4176 against 3.4148, well inside a seed spread of 0.0126. That is the
+measured basis for the default; the 18.8× above is the rotation kernel in isolation and overstates
+what it does to a whole step.
 
 **C — `d_state` is 192, not 128.** 128 is not divisible by 3, so it cannot express `b=3` at all
 (`admissible_block_sizes(128) == (2, 4, 8)`). 192 is the smallest value admitting `b ∈ {2,3,4}`, which
@@ -145,6 +151,31 @@ half the state.
 
 That preset is left untouched — other scripts and tests depend on it — and the new comparison uses a
 new one.
+
+### 1.5 What the difference was worth, measured
+
+This is not a stylistic preference. The August eight-arm wave ran both versions of the arm on eight
+A100s, three seeds each, 600M tokens, everything else held:
+
+| `mamba-b3` | Held-out CE | Seed range | Steps gradient-clipped | Median grad norm |
+| --- | --- | --- | --- | --- |
+| Pre-faithful (the seven departures) | 4.5418 | 0.965 | 43–75% | 0.87–2.62 |
+| Faithful (`b=3` the only deviation) | 3.4176 | 0.0126 | 0.0% | 0.287 |
+
+The same architecture, the same recipe, the same data: **1.12 nats**, and last place of eight became
+first by 0.02 nats over the best delta-rule arm. The arm was never capacity-limited; it was
+optimization-limited by the departures, and the clipping rate is the mechanism — the seed that
+clipped least trained best.
+
+Two things follow for this comparison. A `b=2` number from the July preset would have been a
+measurement of that pathology rather than of SO(2), which is why the ablation is built on the
+faithful preset. And the faithful arm's seed spread is small enough to resolve a real `b` effect,
+where the pre-faithful arm's was not.
+
+One caveat on the "first of eight" claim, from the study's own preregistration: only two of the four
+re-shelled arms were actually rerun, so the final ranked table mixes two shells and `mamba-b3`'s win
+is not a clean contrast against the arms it beats. It is a clean contrast against its own earlier
+self, which is the part that matters here.
 
 ---
 
@@ -319,22 +350,51 @@ over:
 
 ## Running it
 
-The comparison lives in `src/scripts/train/OLMo3/OLMo3-370M-mamba3-b-ablation.py`, on the published
-preset `Mamba3Config.mamba3_faithful_olmo3_370M`, over the 370M ladder's own recipe: 10B tokens of
-the dolma2 source mixture on S3, sequence length 4096, global batch 786,432 tokens, 12,715 steps.
+The comparison lives in `src/scripts/train/OLMo3/OLMo3-370M-mamba3-b-ablation.py`, over the ladder's
+own recipe: the dolma2 source mixture on S3, sequence length 4096, global batch 786,432 tokens.
 
 ```bash
 # The wave, and the proof that it is a one-field difference. No network, no GPU.
-python src/scripts/train/OLMo3/OLMo3-370M-mamba3-b-ablation.py plan
+python src/scripts/train/OLMo3/OLMo3-370M-mamba3-b-ablation.py plan --scale 190M
 
 # One cell.
 torchrun --standalone --nproc-per-node=8 \
-    src/scripts/train/OLMo3/OLMo3-370M-mamba3-b-ablation.py train mamba3-370m-b2-r0 \
-    --arm b2 --replicate 0 --save-folder s3://<bucket>/mamba3-370m-b2-r0
+    src/scripts/train/OLMo3/OLMo3-370M-mamba3-b-ablation.py train mamba3-190m-b2-r0 \
+    --scale 190M --arm b2 --replicate 0 --save-folder s3://<bucket>/mamba3-190m-b2-r0
 ```
 
-Two 10B-token runs is the minimum. `--replicates 3` is better and costs three times as much; the
-August wave's one-nat seed spread on this architecture is the reason to want more than one.
+### Which scale
+
+| | `--scale 370M` | `--scale 190M` |
+| --- | --- | --- |
+| Preset | `mamba3_faithful_olmo3_370M` | `mamba3_faithful_olmo3_190M` |
+| Shell | `d_model` 1024, 16 layers | `d_model` 768, 12 layers |
+| Non-embedding parameters | 371,445,632 | 190,293,192 |
+| Token budget | 10.00B (1.35x Chinchilla, the ladder's) | 3.81B (20/parameter, Chinchilla) |
+| Steps | 12,715 | 4,839 |
+| `b=3` parameter surcharge | +589,824 (0.159%) | +331,776 (0.174%) |
+| Tokens per parameter | 26.9 | 20.0 |
+| Estimated `b=3` cell, eight A100s | ~12.5 h | ~3.7 h |
+
+The architecture is identical between them — the preset test asserts it field by field — so this is
+a budget decision, not a scientific one, and both fit inside the runtime bound of the eight-A100
+node this organization provisions.
+
+The runtime figures are rescaled from a real measurement rather than guessed: the August wave's
+faithful `mamba-b3` rerun ran at **30,442 tok/s/device** on that shape at sequence 4096, with about
+1.6 h of fixed overhead per cell. These arms compute 0.954× and 0.489× that cell's FLOPs per token.
+`b=2` replaces a non-commutative prefix product with a `cumsum`, so it can only be faster than
+`b=3`, which makes those the binding numbers. A throughput smoke is still the honest confirmation.
+
+370M is the experiment as specified and it is affordable, so prefer it. 190M is the cheaper option —
+about a seventh of the work — and it is the better one if you want more seeds for the same money, or
+a second point to check that a result at one scale survives at another.
+
+Two runs is the minimum experiment. `--replicates 3` is better and costs three times as much. The
+faithful arm's measured seed spread is **0.0126 nats of range across three seeds**, which is tight
+enough that three seeds would resolve a `b` effect down to a few hundredths of a nat. Do not size
+this off the one-nat spread the *pre-faithful* arm showed: that was 43–75% of steps being
+gradient-clipped, and the fidelity fixes took it to 0%.
 
 `.edullm/run-b-ablation.yaml` is the platform spec. Run `edullm check --json` against it before
 submitting and read `cost` and `approval_class` out of that, not out of this document.

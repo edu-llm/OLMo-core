@@ -254,6 +254,56 @@ def test_the_mixer_runs_and_differentiates_at_the_production_geometry(block_size
 
 
 # ------------------------------------------------------------------------------------------
+# The 190M sibling
+# ------------------------------------------------------------------------------------------
+
+
+def test_the_190m_preset_differs_from_the_370m_one_only_in_geometry():
+    """
+    Two scales, one architecture.
+
+    The smaller preset exists because a 370M cell at 1.35x Chinchilla does not fit the platform's
+    runtime bound on the eight-A100 node, not because anything about the model should change. So
+    every mixer field except the ones width and depth force is asserted equal to the 370M preset's:
+    a fidelity fix applied to one and not the other would make the two scales incomparable.
+    """
+    small = mixer_of(Mamba3Config.mamba3_faithful_olmo3_190M(vocab_size=VOCAB))
+    large = mixer_of(Mamba3Config.mamba3_faithful_olmo3_370M(vocab_size=VOCAB))
+
+    geometry = {"n_heads"}
+    for field in small.__dataclass_fields__:
+        if field in geometry:
+            continue
+        assert getattr(small, field) == getattr(large, field), f"{field} differs between scales"
+    assert small.n_heads * 64 == 2 * 768, "expand 2 at d_model 768"
+
+
+def test_the_190m_preset_lands_on_the_olmo3_190m_reference():
+    from olmo_core.nn.transformer import TransformerConfig
+
+    reference = TransformerConfig.olmo3_190M(vocab_size=VOCAB).num_non_embedding_params
+    count = Mamba3Config.mamba3_faithful_olmo3_190M(vocab_size=VOCAB).num_non_embedding_params
+
+    assert abs(count - reference) / reference < 0.005
+
+
+def test_the_190m_preset_uses_the_olmo3_190m_shell():
+    config = Mamba3Config.mamba3_faithful_olmo3_190M(vocab_size=VOCAB)
+
+    assert config.d_model == 768
+    assert config.n_layers == 12, "9 Mamba + 3 attention, the same 3:1 substitution"
+    assert config.block_pattern == ["mamba3", "mamba3", "mamba3", "attn"]
+
+
+def test_b3_costs_the_extra_angle_projection_at_190m_too():
+    """Nine Mamba layers of width 768, 48 extra angles each."""
+    b2 = Mamba3Config.mamba3_faithful_olmo3_190M(vocab_size=VOCAB, rotation_block_size=2)
+    b3 = Mamba3Config.mamba3_faithful_olmo3_190M(vocab_size=VOCAB, rotation_block_size=3)
+
+    assert b3.num_params - b2.num_params == (96 - 48) * 768 * 9
+
+
+# ------------------------------------------------------------------------------------------
 # The preset it must not disturb
 # ------------------------------------------------------------------------------------------
 
