@@ -1,7 +1,7 @@
 import logging
 from dataclasses import dataclass
 from fnmatch import fnmatch
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from olmo_core.config import DType, StrEnum
 from olmo_core.exceptions import OLMoConfigurationError
@@ -25,7 +25,25 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-__all__ = ["Mamba3Type", "Mamba3BlockType", "Mamba3BlockConfig", "Mamba3Config"]
+__all__ = [
+    "Mamba3Type",
+    "Mamba3BlockType",
+    "Mamba3BlockConfig",
+    "Mamba3Config",
+    "FAITHFUL_370M_INTERMEDIATE_SIZE",
+]
+
+#: Feed-forward hidden size of :meth:`Mamba3Config.mamba3_faithful_olmo3_370M`.
+#:
+#: Solved, not chosen. Published Mamba-3 SISO runs at expand 2, which makes the mixer roughly twice
+#: the width of the sliding-window layer it replaces, so holding the reference's 4096 would put the
+#: arm at 403M non-embedding parameters against ``olmo3_370M``'s 371,262,464 -- 8.5% over, and no
+#: longer a 370M model. Each unit of feed-forward width is worth 49,152 non-embedding parameters
+#: across the 16 layers, which puts the exact solution at 3452.3.
+#:
+#: 3456 rather than 3452 because it is the nearest multiple of 64, which keeps the feed-forward
+#: GEMM on a tensor-core-friendly shape. The residual is +0.049% against the reference.
+FAITHFUL_370M_INTERMEDIATE_SIZE = 3456
 
 
 class Mamba3Type(StrEnum):
@@ -182,7 +200,17 @@ class Mamba3Config(TransformerConfig):
         a_log_init_max: float = 16.0,
         prefer_official_kernel: Optional[bool] = None,
         rotation_scan_impl: Optional[str] = None,
+        ssd_backend: Optional[str] = None,
         theta_max: Optional[float] = None,
+        bc_norm: Optional[bool] = None,
+        bc_bias: Optional[bool] = None,
+        dynamic_a: Optional[bool] = None,
+        d_skip: Optional[bool] = None,
+        norm_before_gate: Optional[bool] = None,
+        bc_bias_after_norm: Optional[bool] = None,
+        dt_scaled_rotation: Optional[bool] = None,
+        rope_fraction: Optional[float] = None,
+        rotation_timescale: Optional[str] = None,
         fuse_input_projections: Optional[bool] = None,
         block_pattern: Optional[list[str]] = None,
         block_name: Mamba3BlockType = Mamba3BlockType.reordered_norm,
@@ -235,11 +263,34 @@ class Mamba3Config(TransformerConfig):
             ``MAMBA3_ROTATION_SCAN_IMPL``. Setting it here is what records the choice in the
             saved config; left in the environment alone it is invisible to the checkpoint and a
             resume that loses the export silently drops to ``chunked``.
+        :param ssd_backend: Which of :data:`~olmo_core.nn.mamba3.mamba3_ssd_api.SSD_BACKENDS` runs
+            the scan.
         :param theta_max: Bound on the per-step rotation angle, applied at every
             ``rotation_block_size`` (see
             :attr:`~olmo_core.nn.mamba3.mixer.Mamba3MixerConfig.theta_max`). ``None`` leaves it
             unbounded. Set to about ``1/sqrt(sequence_length)`` so the random walk's mixing time
             stays past the sequence length.
+        :param bc_norm: Whether ``B``/``C`` carry BCNorm.
+        :param bc_bias: Whether the ``B``/``C`` projections carry a linear bias. Published Mamba-3
+            does not; its bias is the post-BCNorm one below.
+        :param dynamic_a: Token-dependent decay on top of the ``A_log`` baseline (published).
+        :param d_skip: Learned per-head identity path initialized to one (published).
+        :param norm_before_gate: Normalize the SSM output before gating rather than after
+            (published for hybrids).
+        :param bc_bias_after_norm: Head-specific ``B``/``C`` bias initialized to one and applied
+            after BCNorm (published). Requires ``dt_scaled_rotation`` and ``bc_bias=False``.
+        :param dt_scaled_rotation: Use the published ``tanh(theta) * pi * dt`` angle over the
+            leading ``rope_fraction`` of the state instead of a raw angle over all of it.
+        :param rope_fraction: Fraction of the state the rotation covers; the rest is an identity
+            transition. Published Mamba-3 defaults to ``0.5``.
+        :param rotation_timescale: One of
+            :data:`~olmo_core.nn.mamba3.mixer.ROTATION_TIMESCALES`. ``per_head`` is the published
+            semantics and is expensive at ``b >= 3``; ``group_mean`` keeps ``B``/``C`` one group
+            wide and is a recorded deviation.
+
+            The mixer options above all default to ``None``, meaning "leave
+            :class:`~olmo_core.nn.mamba3.mixer.Mamba3MixerConfig` at its own default", so their
+            addition moved no existing preset.
         :param fuse_input_projections: Pack compatible mixer projections into three GEMMs.
             ``None`` preserves the legacy seven-projection layout.
         :param block_pattern: Override the repeating block pattern. Pass ``["mamba3"]`` for a
@@ -256,6 +307,25 @@ class Mamba3Config(TransformerConfig):
         """
         mamba_n_heads = mamba_n_heads if mamba_n_heads is not None else n_heads
         block_pattern = block_pattern or ["mamba3", "mamba3", "mamba3", "attn"]
+
+        # Forwarded only when set, so every one of these leaves the mixer at its own default and
+        # no existing preset moved when they were added.
+        published_siso_options: dict[str, Any] = {
+            name: value
+            for name, value in (
+                ("ssd_backend", ssd_backend),
+                ("bc_norm", bc_norm),
+                ("bc_bias", bc_bias),
+                ("dynamic_a", dynamic_a),
+                ("d_skip", d_skip),
+                ("norm_before_gate", norm_before_gate),
+                ("bc_bias_after_norm", bc_bias_after_norm),
+                ("dt_scaled_rotation", dt_scaled_rotation),
+                ("rope_fraction", rope_fraction),
+                ("rotation_timescale", rotation_timescale),
+            )
+            if value is not None
+        }
 
         layer_norm = LayerNormConfig(
             name=LayerNormType.rms,
@@ -282,6 +352,7 @@ class Mamba3Config(TransformerConfig):
                 theta_max=theta_max,
                 fuse_input_projections=fuse_input_projections,
                 dtype=dtype,
+                **published_siso_options,
             ),
             feed_forward=FeedForwardConfig(hidden_size=intermediate_size, bias=False, dtype=dtype),
             layer_norm=layer_norm,
@@ -438,6 +509,94 @@ class Mamba3Config(TransformerConfig):
             n_groups=kwargs.pop("n_groups", 1),
             a_log_init_min=kwargs.pop("a_log_init_min", 0.05),
             a_log_init_max=kwargs.pop("a_log_init_max", 16.0),
+            use_rope=kwargs.pop("use_rope", True),
+            rope_theta=kwargs.pop("rope_theta", 500_000),
+            **kwargs,
+        )
+
+    @classmethod
+    def mamba3_faithful_olmo3_370M(
+        cls,
+        vocab_size: int,
+        *,
+        rotation_block_size: int = 2,
+        d_state: int = DEFAULT_D_STATE,
+        intermediate_size: int = FAITHFUL_370M_INTERMEDIATE_SIZE,
+        rotation_timescale: str = "group_mean",
+        **kwargs,
+    ) -> "Mamba3Config":
+        """
+        OLMo-3-370M with **published** Mamba-3 SISO in place of the sliding-window layers.
+
+        The difference from :meth:`mamba3_olmo3_370M` is fidelity. That preset predates the
+        August audit and departs from published SISO in seven ways beyond the rotation -- expand 1
+        instead of 2, static ``A``, a pre-BCNorm zero-initialized ``B``/``C`` bias instead of a
+        post-BCNorm one initialized to one, no ``D`` skip, post-gate normalization, the OLMo-2
+        reordered-norm block, and a clamped group-shared angle over the whole state instead of
+        ``tanh(theta) * pi * dt`` over half of it. Each of those is restored here, so a ``b=2``
+        run of this preset is Mamba-3 and a ``b=2`` run of the other one is not. Neither preset
+        moves the other; ``mamba3_olmo3_370M`` is live in
+        ``src/scripts/train/OLMo3/OLMo3-370M-mamba3.py`` and stays exactly as it was.
+
+        Three deviations from the paper remain, all shared by every ``rotation_block_size`` and so
+        none of them a confounder for a ``b`` comparison:
+
+        1. ``d_state`` is 192, not 128. 128 is not divisible by three and cannot express ``b=3``
+           at all, so a shared state size across the two arms requires it
+           (:func:`~olmo_core.nn.mamba3.admissible_block_sizes`). The official kernel zero-pads
+           192 to 256; no power of two is divisible by three, so that is intrinsic to ``b=3``.
+        2. ``rotation_timescale`` is ``group_mean``. The published rotation is scaled by the
+           per-head ``dt``, which makes it head-specific and forces ``B``/``C`` to be broadcast to
+           heads before the scan -- measured at 276.8 ms a layer against 14.7 ms group-shared at
+           batch 2, sequence 4096, i.e. 18.8x. Pass ``rotation_timescale="per_head"`` for the
+           faithful-and-slow form.
+        3. ``A`` keeps a learned per-head ``A_log`` baseline under ``dynamic_a``, where the
+           reference module produces ``A`` from the projection alone through a heavy-tail
+           activation.
+
+        The backbone is OLMo-3-370M's, unchanged: 16 layers at ``d_model`` 1024, the same 3:1
+        substitution the reference's ``[4096, 4096, 4096, -1]`` attention pattern has, RoPE at
+        theta 500k, QK-norm, and a 1e-6 norm epsilon.
+
+        :param rotation_block_size: Size ``b``. ``2`` is the paper's complex diagonal and the
+            default because it is the control; ``3`` is the non-solvable ``SO(3)`` treatment.
+        :param d_state: SSM state size. The default admits ``b`` in ``{2, 3, 4}``.
+        :param intermediate_size: Feed-forward hidden size. The default is solved so that the
+            arm lands on :meth:`TransformerConfig.olmo3_370M
+            <olmo_core.nn.transformer.TransformerConfig.olmo3_370M>`'s non-embedding parameter
+            count despite the published expand factor of 2 widening the mixer well past what the
+            layer it replaces used. Narrowing the MLP is how the paper parameter-matches its own
+            variants (Appendix C), and it is the knob a caller turns to match the two arms exactly.
+        :param rotation_timescale: See deviation 2 above.
+        """
+        return cls.mamba3_hybrid_like(
+            d_model=1024,
+            vocab_size=vocab_size,
+            n_layers=16,
+            n_heads=16,
+            intermediate_size=intermediate_size,
+            # expand=2: the published SISO mixer width, 32 heads x 64 = 2048 = 2 * d_model.
+            mamba_n_heads=kwargs.pop("mamba_n_heads", 32),
+            mamba_head_dim=kwargs.pop("mamba_head_dim", 64),
+            d_state=d_state,
+            rotation_block_size=rotation_block_size,
+            mimo_rank=kwargs.pop("mimo_rank", 1),
+            n_groups=kwargs.pop("n_groups", 1),
+            bc_norm=kwargs.pop("bc_norm", True),
+            # The published bias is the post-BCNorm one; a linear bias as well would be a second,
+            # unpublished one, and the mixer refuses the pair.
+            bc_bias=kwargs.pop("bc_bias", False),
+            bc_bias_after_norm=kwargs.pop("bc_bias_after_norm", True),
+            dynamic_a=kwargs.pop("dynamic_a", True),
+            d_skip=kwargs.pop("d_skip", True),
+            norm_before_gate=kwargs.pop("norm_before_gate", True),
+            dt_scaled_rotation=kwargs.pop("dt_scaled_rotation", True),
+            rope_fraction=kwargs.pop("rope_fraction", 0.5),
+            rotation_timescale=rotation_timescale,
+            # `tanh(theta) * pi * dt` bounds the angle already, and the mixer rejects both bounds
+            # at once rather than silently ignoring one.
+            theta_max=kwargs.pop("theta_max", None),
+            block_name=kwargs.pop("block_name", Mamba3BlockType.default),
             use_rope=kwargs.pop("use_rope", True),
             rope_theta=kwargs.pop("rope_theta", 500_000),
             **kwargs,
