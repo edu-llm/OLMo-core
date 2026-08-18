@@ -1,0 +1,11 @@
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'EDULLM_CHECKPOINT_CHECK=waived torchrun --nproc-per-node=8
+  .edullm/eval_flores_bpb.py "$EDULLM_RUN_ID"
+  --checkpoint s3://sbsandbox-intern-edullm-outputs/teams/pre-training/runs/run_019ff8b2-a48e-70a2-afa4-3c81d973f997/checkpoints/step80200/
+  --model-factory olmo2_1B_v2 --model.n_layers=12
+  --sequence-length 2048 --global-batch-size 16384 --rank-microbatch-size 2048
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  train_module.dp_config.param_dtype=bfloat16'
