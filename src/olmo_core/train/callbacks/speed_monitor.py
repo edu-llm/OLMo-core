@@ -15,6 +15,80 @@ from .callback import Callback
 log = logging.getLogger(__name__)
 
 
+def get_device_peak_flops_per_second(device_name: str) -> Optional[int]:
+    """
+    Get a CUDA device's peak BF16/FP16 tensor core throughput, for use as the denominator
+    of MFU.
+
+    The figure returned is the *dense* rate with *FP32 accumulation*, which is the only rate
+    torch can reach: cuBLAS is called with ``CUBLAS_COMPUTE_32F`` for BF16 inputs and there
+    is no BF16-accumulate path to opt into. Two independent factors of two stand between a
+    datasheet headline and that rate:
+
+    - **Sparsity.** Headline figures are quoted with 2:4 structured sparsity, which is twice
+      the dense rate.
+    - **Accumulation.** The consumer-class dies (Ampere GA10x, Ada AD10x) run FP16/BF16
+      matrix math at half rate when the accumulator is FP32. The data-center dies (GA100,
+      GH100, GB100) have no such penalty. Whether this correction applies to a *published
+      figure* depends on which of the two rates that figure is, and NVIDIA is not consistent
+      about it even between two SKUs of one die — compare the L40S and L40 below.
+
+    :param device_name: The device name, as reported by :func:`torch.cuda.get_device_name`.
+
+    :returns: The peak FLOP/s, or ``None`` if the device isn't recognized. Attributing an
+        unrecognized device the peak of some other device is how a wrong MFU gets reported
+        as if it were a right one.
+    """
+    dense_correction = 0.5  # listed specs are one-half lower without sparsity
+    fp32_accumulate_correction = 0.5  # only for the consumer-class dies; see above
+
+    if "H100" in device_name:
+        # data from https://www.nvidia.com/en-us/data-center/h100/
+        if "NVL" in device_name:
+            return int(1671e12 * dense_correction)
+        elif "PCIe" in device_name:
+            return int(1513e12 * dense_correction)
+        else:  # for SXM and other variants
+            return int(1979e12 * dense_correction)
+    elif "B200" in device_name:
+        # data from https://www.nvidia.com/en-us/data-center/hgx/
+        return int(4.5e15 * dense_correction)
+    elif "A100" in device_name:
+        # data from https://www.nvidia.com/en-us/data-center/a100/
+        return int(624e12 * dense_correction)
+    # The three Ada names below are prefixes of one another, so the order of these branches
+    # is what makes them mean anything: "L4" matches an L40S too.
+    elif "L40S" in device_name:
+        # data from https://www.nvidia.com/en-us/data-center/l40s/, which lists BF16 as
+        # "362.05 | 733*". Both corrections apply: 733 is with sparsity, and the pair is
+        # quoted with FP16 accumulation, which is why it is twice the L40's pair below for
+        # a die clocked 1.2% higher. Cross-check: the Ada whitepaper gives AD102 165.2
+        # TFLOP/s dense with FP32 accumulate over 128 SMs at 2.52 GHz, i.e. 512
+        # FLOP/clock/SM, and the L40S's 142 SMs at 2.52 GHz come to 183.2.
+        return int(733e12 * dense_correction * fp32_accumulate_correction)
+    elif "L40" in device_name:
+        # data from https://resources.nvidia.com/en-us-l40/l40-datasheet, which lists BF16
+        # as "181.05 | 362.1**". Only the sparsity correction applies: 512 FLOP/clock/SM
+        # over 142 SMs at the L40's 2.49 GHz is 181.0, so the datasheet's dense figure is
+        # already the FP32-accumulate one. The Ada whitepaper's L40 appendix agrees.
+        return int(362.1e12 * dense_correction)
+    elif "L4" in device_name:
+        # data from https://www.nvidia.com/en-us/data-center/l4/, which lists BF16 as "242
+        # teraFLOPS*" with sparsity. Both corrections apply: 512 FLOP/clock/SM over AD104's
+        # 58 SMs at 2.04 GHz is 60.6, so the whitepaper appendix's dense 121 is the
+        # FP16-accumulate rate.
+        return int(242e12 * dense_correction * fp32_accumulate_correction)
+    elif "A10G" in device_name:
+        # data from AWS's A10G datasheet, which lists BF16 as "70 TF | 140 TF*". Only the
+        # sparsity correction applies: 512 FLOP/clock/SM over the A10G's 80 SMs at 1.71 GHz
+        # is 70.1, so the dense 70 is already the FP32-accumulate rate. The A10G is a
+        # different part from the A10, whose datasheet quotes "125 | 250" for a smaller,
+        # slower die and does so with FP16 accumulation.
+        return int(140e12 * dense_correction)
+    else:
+        return None
+
+
 @dataclass
 class SpeedMonitorCallback(Callback):
     """
@@ -96,21 +170,13 @@ class SpeedMonitorCallback(Callback):
                 tm.dp_config is not None and tm.dp_config.param_dtype == DType.bfloat16
             )
             if using_half_precision:
-                dense_correction = 0.5  # listed specs are one-half lower without sparsity
-                if "H100" in device_name:
-                    # data from https://www.nvidia.com/en-us/data-center/h100/
-                    if "NVL" in device_name:
-                        self.device_peak_flops_per_second = int(1671e12 * dense_correction)
-                    elif "PCIe" in device_name:
-                        self.device_peak_flops_per_second = int(1513e12 * dense_correction)
-                    else:  # for SXM and other variants
-                        self.device_peak_flops_per_second = int(1979e12 * dense_correction)
-                elif "B200" in device_name:
-                    # data from https://www.nvidia.com/en-us/data-center/hgx/
-                    self.device_peak_flops_per_second = int(4.5e15 * dense_correction)
-                else:  # for other GPU types, assume A100
-                    # data from https://www.nvidia.com/en-us/data-center/a100/
-                    self.device_peak_flops_per_second = int(624e12 * dense_correction)
+                self.device_peak_flops_per_second = get_device_peak_flops_per_second(device_name)
+                if self.device_peak_flops_per_second is None:
+                    log.warning(
+                        f"Unrecognized CUDA device '{device_name}', so MFU won't be reported. "
+                        "Set 'device_peak_flops_per_second' on this callback to the device's "
+                        "dense peak FLOP/s with FP32 accumulation to get MFU back."
+                    )
             log.info(
                 f"Device: {device_name}, Device peak Flops/s: {self.device_peak_flops_per_second}"
             )
