@@ -27,7 +27,6 @@ from olmo_core.hpo.curriculum import (
     CurriculumInputIdentity,
     ParentChunkDataset,
     build_curriculum_hpo_experiment,
-    build_olmoe_curriculum_hpo_experiment,
     curriculum_corpus_from_reads,
     curriculum_pool_for_tokens,
     token_phase_boundaries,
@@ -110,44 +109,6 @@ def test_parent_chunks_are_shard_local_and_reserve_a_next_token(tmp_path):
     assert dataset[0]["input_ids"].tolist() == [0, 1, 2, 3]
     assert dataset[2]["input_ids"].tolist() == [100, 101, 102, 103]
     assert dataset[-1]["input_ids"].tolist() == [104, 105, 106, 107]
-
-
-def test_parent_chunks_and_order_support_remote_range_reads(monkeypatch):
-    import olmo_core.hpo.curriculum as curriculum_module
-
-    parent_path = "s3://mirror/parent/source-a/train-00000.u32le.bin"
-    order_path = "s3://mirror/order/mtld/train-00000.u64le.bin"
-    parent = np.arange(9, dtype="<u4")
-    order = np.array([1, 0], dtype="<u8")
-    objects = {parent_path: parent.tobytes(), order_path: order.tobytes()}
-
-    monkeypatch.setattr(
-        curriculum_module,
-        "get_file_size",
-        lambda path: len(objects[str(path)]),
-    )
-    monkeypatch.setattr(
-        curriculum_module,
-        "get_bytes_range",
-        lambda path, start, length: objects[str(path)][start : start + length],
-    )
-    monkeypatch.setattr(
-        curriculum_module,
-        "load_array_slice_into_tensor",
-        lambda path, start, end, dtype: curriculum_module.torch.tensor(
-            np.frombuffer(objects[str(path)], dtype=dtype)[start:end].astype(np.int64)
-        ),
-    )
-
-    dataset = ParentChunkDataset([parent_path], sequence_length=4, dtype="<u4")
-    resolved_order = curriculum_module._load_order(
-        [order_path], curriculum_module.NumpyDatasetDType.uint64
-    )
-
-    assert len(dataset) == 2
-    assert dataset.source_ids == ("source-a",)
-    assert dataset[1]["input_ids"].tolist() == [4, 5, 6, 7]
-    assert resolved_order.tolist() == [1, 0]
 
 
 def test_arm9_boundaries_use_exact_integer_token_fractions_for_every_batch_size():
@@ -279,26 +240,6 @@ def test_read_contract_keeps_token_and_permutation_dtypes_independent():
     assert corpus.order_dtype.value == "uint64"
 
 
-def test_olmoe_curriculum_factory_uses_fixed_olmoe_batch_contract(monkeypatch):
-    import olmo_core.hpo.curriculum as curriculum_module
-
-    captured = {}
-    marker = object()
-
-    def fake_build(base_builder, **kwargs):
-        captured["base_builder"] = base_builder
-        captured.update(kwargs)
-        return marker
-
-    monkeypatch.setattr(curriculum_module, "_build_curriculum_hpo_experiment", fake_build)
-
-    assert build_olmoe_curriculum_hpo_experiment() is marker
-    assert captured["base_builder"].__name__ == "build_olmoe_hpo_experiment"
-    assert captured["sequence_length"] == 2_048
-    assert captured["global_batch_size"] == 262_144
-    assert captured["rank_microbatch_size"] == 8_192
-
-
 def test_factory_requests_exact_parent_and_order_groups(monkeypatch):
     parent = SimpleNamespace(
         paths=["/data/tokens/source-a/train-00000.bin"],
@@ -307,6 +248,7 @@ def test_factory_requests_exact_parent_and_order_groups(monkeypatch):
         dtype="uint32",
         byte_order=None,
         header_bytes=0,
+        manifest_sha256=PARENT_HASH,
     )
     order = SimpleNamespace(
         paths=["/data/mtld/train-00000.bin"],
@@ -315,6 +257,7 @@ def test_factory_requests_exact_parent_and_order_groups(monkeypatch):
         dtype="uint64",
         byte_order=None,
         header_bytes=0,
+        manifest_sha256=ORDER_HASH,
     )
     calls = []
 
@@ -326,38 +269,11 @@ def test_factory_requests_exact_parent_and_order_groups(monkeypatch):
     fake_read = types.ModuleType("edullm_data.read")
     fake_s3 = types.ModuleType("edullm_data.s3")
     fake_read.dataset_paths = dataset_paths
-    fake_read.DATA_BUCKET = "edullm-data"
-
-    class S3:
-        metadata_reads = []
-
-        def get(self, bucket, key):
-            self.metadata_reads.append((bucket, key))
-            order_metadata = key.startswith("curriculum/")
-            dataset_id = (
-                "curriculum/opt-with-synthetic-10b"
-                if order_metadata
-                else "pretrain/opt-with-synthetic-10b"
-            )
-            return json.dumps(
-                {
-                    "dataset_id": dataset_id,
-                    "version": {"id": "v1"},
-                    "groups": [
-                        {
-                            "name": "mtld" if order_metadata else "tokens",
-                            "manifest_sha256": ORDER_HASH if order_metadata else PARENT_HASH,
-                        }
-                    ],
-                }
-            ).encode()
-
-    s3 = S3()
 
     class Boto3S3:
         @classmethod
         def default(cls):
-            return s3
+            return object()
 
     fake_s3.Boto3S3 = Boto3S3
     monkeypatch.setitem(sys.modules, "edullm_data", fake_package)
@@ -368,7 +284,7 @@ def test_factory_requests_exact_parent_and_order_groups(monkeypatch):
     monkeypatch.setenv("EDULLM_DATASET_TOKENIZER", "tokenizer/dolma2-bpe")
     monkeypatch.setenv("EDULLM_CHECKPOINT_DIR", "/tmp/checkpoints")
 
-    config = build_curriculum_hpo_experiment(data_bucket="edullm-data-us-east-2")
+    config = build_curriculum_hpo_experiment()
 
     assert config.data_loader.order_dtype.value == "uint64"
     assert [(dataset_id, group) for dataset_id, _, group, _ in calls] == [
@@ -376,8 +292,6 @@ def test_factory_requests_exact_parent_and_order_groups(monkeypatch):
         ("pretrain/opt-with-synthetic-10b", "tokens"),
         ("curriculum/opt-with-synthetic-10b", "mtld"),
     ]
-    assert all(kwargs["data_bucket"] == "edullm-data-us-east-2" for _, _, _, kwargs in calls)
-    assert len(s3.metadata_reads) == 2
 
 
 def test_synthetic_factory_loader_checkpoint_resume_end_to_end(monkeypatch, tmp_path):
@@ -432,7 +346,6 @@ def test_synthetic_factory_loader_checkpoint_resume_end_to_end(monkeypatch, tmp_
     fake_read = types.ModuleType("edullm_data.read")
     fake_s3 = types.ModuleType("edullm_data.s3")
     fake_read.dataset_paths = dataset_paths
-    fake_read.DATA_BUCKET = "edullm-data"
 
     class Boto3S3:
         @classmethod

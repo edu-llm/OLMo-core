@@ -17,14 +17,12 @@ from ..data import (
     TokenizerConfig,
 )
 from ..distributed.parallel import DataParallelType
-from ..float8 import Float8Config
-from ..nn.transformer import TransformerConfig, TransformerDataParallelWrappingStrategy
-from ..optim import AdamWConfig, CosWithWarmup, OptimGroupOverride, SkipStepAdamWConfig
+from ..nn.transformer import TransformerConfig
+from ..optim import AdamWConfig, CosWithWarmup, OptimGroupOverride
 from ..train import Duration, TrainerConfig
 from ..train.callbacks import CheckpointerCallback, LMEvaluatorCallbackConfig
 from ..train.train_module import (
     TransformerDataParallelConfig,
-    TransformerExpertParallelConfig,
     TransformerTrainModuleConfig,
 )
 
@@ -40,7 +38,6 @@ __all__ = [
     "comparison_heldout_label",
     "comparison_heldout_metric",
     "build_comparison_experiment",
-    "build_olmoe_hpo_experiment",
     "build_umup_hpo_experiment",
     "smoke_final_evaluator",
 ]
@@ -158,7 +155,6 @@ def build_comparison_experiment(
     eval_steps: int = 2,
     work_dir: str = "/tmp/hpo-comparison-data",
     dataset_group: str | None = None,
-    data_bucket: str | None = None,
 ) -> ComparisonExperimentConfig:
     """Build the matched model/data/eval contract used by both comparison arms."""
     if sequence_length <= 0 or global_batch_size <= 0:
@@ -181,8 +177,6 @@ def build_comparison_experiment(
     read_kwargs: dict[str, Any] = {"s3": Boto3S3.default()}
     if dataset_group is not None:
         read_kwargs["group"] = dataset_group
-    if data_bucket is not None:
-        read_kwargs["data_bucket"] = data_bucket
     read = dataset_paths(dataset_id, version, **read_kwargs)
     corpus = comparison_dataset_from_read(
         read,
@@ -275,83 +269,6 @@ def build_comparison_experiment(
         dataset_version=version,
         init_seed=init_seed,
     )
-
-
-def build_olmoe_hpo_experiment(
-    *,
-    sequence_length: int = 2048,
-    global_batch_size: int = 262_144,
-    rank_microbatch_size: int = 8_192,
-    data_seed: int = 210007,
-    init_seed: int = 110007,
-    eval_steps: int = 2,
-    work_dir: str = "/tmp/hpo-comparison-data",
-    dataset_group: str | None = None,
-    data_bucket: str | None = None,
-) -> ComparisonExperimentConfig:
-    """Build the stock OLMoE-1B-7B HPO experiment with its fixed eight-rank batch contract."""
-
-    fixed_batch_contract = {
-        "sequence_length": 2_048,
-        "global_batch_size": 262_144,
-        "rank_microbatch_size": 8_192,
-    }
-    requested_batch_contract = {
-        "sequence_length": sequence_length,
-        "global_batch_size": global_batch_size,
-        "rank_microbatch_size": rank_microbatch_size,
-    }
-    if requested_batch_contract != fixed_batch_contract:
-        raise ValueError(
-            "OLMoE HPO uses the fixed batch contract "
-            f"{fixed_batch_contract}, got {requested_batch_contract}"
-        )
-
-    config = build_comparison_experiment(
-        sequence_length=sequence_length,
-        global_batch_size=global_batch_size,
-        rank_microbatch_size=rank_microbatch_size,
-        data_seed=data_seed,
-        init_seed=init_seed,
-        eval_steps=eval_steps,
-        work_dir=work_dir,
-        dataset_group=dataset_group,
-        data_bucket=data_bucket,
-    )
-    # Cold torch.compile latency can differ substantially across ranks for OLMoE. Keep metric
-    # collectives on the training thread so an early rank cannot time out an asynchronous Gloo
-    # reduction while its peers are still compiling their first microbatch.
-    config.trainer.async_bookkeeping = False
-    config.model = TransformerConfig.olmoe_1B_7B(vocab_size=config.model.vocab_size)
-    config.train_module = TransformerTrainModuleConfig(
-        rank_microbatch_size=rank_microbatch_size,
-        max_sequence_length=sequence_length,
-        optim=SkipStepAdamWConfig(
-            lr=4e-4,
-            weight_decay=0.1,
-            betas=(0.9, 0.95),
-            group_overrides=[
-                OptimGroupOverride(
-                    params=["embeddings.weight"],
-                    opts={"weight_decay": 0.0},
-                )
-            ],
-        ),
-        scheduler=CosWithWarmup(warmup=24, alpha_f=0.1),
-        compile_model=True,
-        dp_config=TransformerDataParallelConfig(
-            name=DataParallelType.hsdp,
-            param_dtype=DType.bfloat16,
-            reduce_dtype=DType.float32,
-            num_replicas=1,
-            wrapping_strategy=TransformerDataParallelWrappingStrategy.full,
-        ),
-        ep_config=TransformerExpertParallelConfig(degree=-1),
-        float8_config=Float8Config(enabled=False),
-        z_loss_multiplier=1e-5,
-        max_grad_norm=1.0,
-    )
-    return config
 
 
 def build_umup_hpo_experiment(**kwargs: Any) -> ComparisonExperimentConfig:

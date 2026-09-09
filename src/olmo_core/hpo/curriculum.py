@@ -10,7 +10,7 @@ import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -21,14 +21,11 @@ from ..config import Config
 from ..data import NumpyDatasetDType, TokenizerConfig
 from ..data.collator import DataCollator
 from ..data.data_loader import DataLoaderConfig, TextDataLoaderBase
-from ..data.utils import load_array_slice_into_tensor
 from ..distributed.parallel import get_dp_process_group
 from ..distributed.utils import get_fs_local_rank, get_rank, get_world_size
-from ..io import get_bytes_range, get_file_size, is_url
 from .comparison import (
     ComparisonExperimentConfig,
     build_comparison_experiment,
-    build_olmoe_hpo_experiment,
     comparison_heldout_label,
 )
 
@@ -51,7 +48,6 @@ __all__ = [
     "ParentChunkDataset",
     "ParentChunkDatasetConfig",
     "build_curriculum_hpo_experiment",
-    "build_olmoe_curriculum_hpo_experiment",
     "curriculum_corpus_from_reads",
     "curriculum_pool_for_tokens",
     "token_phase_boundaries",
@@ -154,35 +150,6 @@ def _require_manifest(read: Any, expected: str, *, role: str) -> None:
         )
 
 
-def _populate_manifest_identity(
-    read: Any,
-    *,
-    s3: Any,
-    data_bucket: str,
-    dataset_id: str,
-    version: str,
-    group: str,
-) -> None:
-    """Fill manifest identity omitted by older ``edullm-data`` readers from sealed metadata."""
-
-    if getattr(read, "manifest_sha256", None) is not None:
-        return
-    payload = json.loads(s3.get(data_bucket, f"{dataset_id}/{version}/dataset.json").decode())
-    if (
-        payload.get("dataset_id") != dataset_id
-        or (payload.get("version") or {}).get("id") != version
-    ):
-        raise CurriculumDataError(
-            f"resolved metadata identity does not match {dataset_id}/{version}"
-        )
-    groups = [entry for entry in payload.get("groups", ()) if entry.get("name") == group]
-    if len(groups) != 1 or not groups[0].get("manifest_sha256"):
-        raise CurriculumDataError(
-            f"resolved metadata does not declare one manifest hash for group {group!r}"
-        )
-    read.manifest_sha256 = str(groups[0]["manifest_sha256"])
-
-
 def curriculum_corpus_from_reads(parent_read: Any, order_read: Any) -> CurriculumCorpus:
     """Validate resolved train/validation/order reads against the immutable arm inputs."""
 
@@ -254,7 +221,7 @@ class ParentChunkDataset:
         sequence_length: int,
         dtype: str | np.dtype[Any] | type[np.unsignedinteger],
     ) -> None:
-        self.paths = tuple(str(path) for path in paths)
+        self.paths = tuple(Path(path) for path in paths)
         self.sequence_length = int(sequence_length)
         self.dtype = np.dtype(dtype)
         if self.sequence_length <= 0:
@@ -262,23 +229,14 @@ class ParentChunkDataset:
         if not self.paths:
             raise CurriculumDataError("parent pool has no shards")
         self.source_ids = _source_ids(tuple(str(path) for path in self.paths))
-        self._arrays: list[np.memmap[Any, Any] | None] = []
+        self._arrays: list[np.memmap[Any, Any]] = []
         self._ends: list[int] = []
         total = 0
         for path in self.paths:
-            if is_url(path):
-                size_bytes = get_file_size(path)
-                if size_bytes % self.dtype.itemsize:
-                    raise CurriculumDataError(f"parent shard has a partial token: {path}")
-                token_count = size_bytes // self.dtype.itemsize
-                array = None
-            else:
-                local_path = Path(path)
-                if not local_path.is_file():
-                    raise CurriculumDataError(f"missing staged parent shard: {path}")
-                array = np.memmap(local_path, mode="r", dtype=self.dtype)
-                token_count = len(array)
-            chunks = (token_count - 1) // self.sequence_length
+            if not path.is_file():
+                raise CurriculumDataError(f"missing staged parent shard: {path}")
+            array = np.memmap(path, mode="r", dtype=self.dtype)
+            chunks = (len(array) - 1) // self.sequence_length
             if chunks <= 0:
                 continue
             self._arrays.append(array)
@@ -301,21 +259,11 @@ class ParentChunkDataset:
         prior_end = self._ends[shard - 1] if shard else 0
         local_index = index - prior_end
         start = local_index * self.sequence_length
-        array = self._arrays[shard]
-        if array is None:
-            tokens = load_array_slice_into_tensor(
-                self.paths[shard],
-                start,
-                start + self.sequence_length,
-                self.dtype.type,
-            )
-        else:
-            values = np.asarray(
-                array[start : start + self.sequence_length],
-                dtype=np.int64,
-            )
-            tokens = torch.from_numpy(values.copy())
-        return {"input_ids": tokens, "index": index}
+        tokens = np.asarray(
+            self._arrays[shard][start : start + self.sequence_length],
+            dtype=np.int64,
+        )
+        return {"input_ids": torch.from_numpy(tokens.copy()), "index": index}
 
 
 def token_phase_boundaries(target_tokens: int) -> tuple[int, ...]:
@@ -585,16 +533,7 @@ class ParentChunkDatasetConfig(Config):
 
 
 def _load_order(paths: Sequence[str], dtype: NumpyDatasetDType) -> np.ndarray:
-    np_dtype = np.dtype(dtype.as_np_dtype())
-    parts = []
-    for path in paths:
-        if is_url(path):
-            size_bytes = get_file_size(path)
-            if size_bytes % np_dtype.itemsize:
-                raise CurriculumDataError(f"curriculum order has a partial index: {path}")
-            parts.append(np.frombuffer(get_bytes_range(path, 0, size_bytes), dtype=np_dtype))
-        else:
-            parts.append(np.memmap(path, mode="r", dtype=np_dtype))
+    parts = [np.memmap(path, mode="r", dtype=dtype.as_np_dtype()) for path in paths]
     if not parts:
         raise CurriculumDataError("curriculum order resolved to no objects")
     return np.asarray(
@@ -667,8 +606,7 @@ def _required_env(name: str) -> str:
     return value
 
 
-def _build_curriculum_hpo_experiment(
-    base_builder: Callable[..., ComparisonExperimentConfig],
+def build_curriculum_hpo_experiment(
     *,
     sequence_length: int = 2048,
     global_batch_size: int = 524_288,
@@ -678,9 +616,8 @@ def _build_curriculum_hpo_experiment(
     eval_steps: int = 2,
     target_tokens: int = CURRICULUM_TARGET_TOKENS,
     work_dir: str = "/tmp/hpo-curriculum-data",
-    data_bucket: str | None = None,
 ) -> CurriculumExperimentConfig:
-    """Build a supplied model recipe with arm 9's fixed token-progress MTLD pacing."""
+    """Build stock ``olmo2_190M`` with arm 9's fixed token-progress MTLD pacing."""
 
     dataset_id = _required_env("EDULLM_DATASET_ID")
     version = _required_env("EDULLM_DATASET_VERSION")
@@ -696,7 +633,7 @@ def _build_curriculum_hpo_experiment(
     if global_batch_size < 256 * 1024 or global_batch_size > 1024 * 1024:
         raise ValueError("curriculum HPO global batch must be in the approved 256 Ki-1 Mi range")
 
-    base = base_builder(
+    base = build_comparison_experiment(
         sequence_length=sequence_length,
         global_batch_size=global_batch_size,
         rank_microbatch_size=rank_microbatch_size,
@@ -705,45 +642,24 @@ def _build_curriculum_hpo_experiment(
         eval_steps=eval_steps,
         work_dir=work_dir,
         dataset_group=PARENT_DATASET_GROUP,
-        data_bucket=data_bucket,
     )
 
-    from edullm_data.read import DATA_BUCKET, dataset_paths
+    from edullm_data.read import dataset_paths
     from edullm_data.s3 import Boto3S3
 
     s3 = Boto3S3.default()
-    resolved_data_bucket = data_bucket or DATA_BUCKET
-    read_kwargs: dict[str, Any] = {"s3": s3}
-    if data_bucket is not None:
-        read_kwargs["data_bucket"] = data_bucket
     parent_read = dataset_paths(
         PARENT_DATASET_ID,
         PARENT_DATASET_VERSION,
         group=PARENT_DATASET_GROUP,
-        **read_kwargs,
+        s3=s3,
     )
     order_read = dataset_paths(
         CURRICULUM_DATASET_ID,
         CURRICULUM_DATASET_VERSION,
         split="train",
         group=CURRICULUM_ORDER_GROUP,
-        **read_kwargs,
-    )
-    _populate_manifest_identity(
-        parent_read,
         s3=s3,
-        data_bucket=resolved_data_bucket,
-        dataset_id=PARENT_DATASET_ID,
-        version=PARENT_DATASET_VERSION,
-        group=PARENT_DATASET_GROUP,
-    )
-    _populate_manifest_identity(
-        order_read,
-        s3=s3,
-        data_bucket=resolved_data_bucket,
-        dataset_id=CURRICULUM_DATASET_ID,
-        version=CURRICULUM_DATASET_VERSION,
-        group=CURRICULUM_ORDER_GROUP,
     )
     corpus = curriculum_corpus_from_reads(parent_read, order_read)
     tokenizer = TokenizerConfig.dolma2()
@@ -786,60 +702,4 @@ def _build_curriculum_hpo_experiment(
         umup_parity_validated=base.umup_parity_validated,
         umup_metadata=base.umup_metadata,
         curriculum_identity=curriculum_identity,
-    )
-
-
-def build_curriculum_hpo_experiment(
-    *,
-    sequence_length: int = 2048,
-    global_batch_size: int = 524_288,
-    rank_microbatch_size: int = 4096,
-    data_seed: int = 210007,
-    init_seed: int = 110007,
-    eval_steps: int = 2,
-    target_tokens: int = CURRICULUM_TARGET_TOKENS,
-    work_dir: str = "/tmp/hpo-curriculum-data",
-    data_bucket: str | None = None,
-) -> CurriculumExperimentConfig:
-    """Build stock ``olmo2_190M`` with arm 9's fixed token-progress MTLD pacing."""
-
-    return _build_curriculum_hpo_experiment(
-        build_comparison_experiment,
-        sequence_length=sequence_length,
-        global_batch_size=global_batch_size,
-        rank_microbatch_size=rank_microbatch_size,
-        data_seed=data_seed,
-        init_seed=init_seed,
-        eval_steps=eval_steps,
-        target_tokens=target_tokens,
-        work_dir=work_dir,
-        data_bucket=data_bucket,
-    )
-
-
-def build_olmoe_curriculum_hpo_experiment(
-    *,
-    sequence_length: int = 2048,
-    global_batch_size: int = 262_144,
-    rank_microbatch_size: int = 8_192,
-    data_seed: int = 210007,
-    init_seed: int = 110007,
-    eval_steps: int = 2,
-    target_tokens: int = CURRICULUM_TARGET_TOKENS,
-    work_dir: str = "/tmp/hpo-olmoe-curriculum-data",
-    data_bucket: str | None = None,
-) -> CurriculumExperimentConfig:
-    """Build stock OLMoE-1B-7B with arm 9's fixed token-progress MTLD pacing."""
-
-    return _build_curriculum_hpo_experiment(
-        build_olmoe_hpo_experiment,
-        sequence_length=sequence_length,
-        global_batch_size=global_batch_size,
-        rank_microbatch_size=rank_microbatch_size,
-        data_seed=data_seed,
-        init_seed=init_seed,
-        eval_steps=eval_steps,
-        target_tokens=target_tokens,
-        work_dir=work_dir,
-        data_bucket=data_bucket,
     )
