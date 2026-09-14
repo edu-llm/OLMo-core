@@ -39,6 +39,7 @@ _EDULLM = Path(__file__).resolve().parents[1]
 if str(_EDULLM) not in sys.path:
     sys.path.insert(0, str(_EDULLM))
 from curriculum_model import build_model_config  # noqa: E402
+from task_loss.per_item import reduce_per_item, write_per_item  # noqa: E402
 
 try:
     from olmo.util import add_cached_path_clients
@@ -249,6 +250,36 @@ def model_logits(model: torch.nn.Module, input_ids: torch.Tensor) -> torch.Tenso
     raise RuntimeError(f"unexpected model output type: {type(output)}")
 
 
+def capture_per_item(evaluator: Any) -> list[tuple[int, int, float]]:
+    """Read per-document values off the ICL metric before they are reduced.
+
+    `ICLMetric.update()` accumulates `(doc_id, cont_id, log_likelihood)`
+    triples, and for a `*_bpb` label that third value is ALREADY the
+    per-continuation bits-per-byte -- the metric divides by
+    `cont_byte_len` at update time. `compute()` then keeps only the gold
+    continuation per document and averages, discarding everything else.
+
+    So the per-item numbers we want already exist; they are thrown away one
+    line before the caller sees them. This reads them out instead.
+
+    Returns this rank's LOCAL shard only. The eval loader uses a
+    `DistributedSampler`, so the caller must gather across ranks, and must
+    expect duplicate `doc_id`s because that sampler pads to divisibility.
+    """
+    state = getattr(evaluator.eval_metric, "loglikelihoods", None)
+    if state is None:
+        raise RuntimeError(
+            "ICLMetric has no `loglikelihoods` state; the installed ai2-olmo "
+            "has changed shape and per-item capture would silently record "
+            "nothing. Refusing to continue."
+        )
+    rows: list[tuple[int, int, float]] = []
+    for entry in state:
+        doc_id, cont_id, value = (float(x) for x in entry.tolist())
+        rows.append((int(doc_id), int(cont_id), float(value)))
+    return rows
+
+
 def evaluate_label(
     model: torch.nn.Module,
     config: TrainConfig,
@@ -256,7 +287,7 @@ def evaluate_label(
     device: torch.device,
     label: str,
     batch_size: int,
-) -> float:
+) -> tuple[float, list[tuple[int, int, float]]]:
     evaluator = build_evaluator(
         config,
         EvaluatorConfig(
@@ -274,10 +305,15 @@ def evaluate_label(
             for key, value in batch.items()
         }
         evaluator.eval_metric.update(batch, model_logits(model, batch["input_ids"]))
+    # Capture BEFORE compute_metrics(): torchmetrics syncs state across ranks
+    # inside compute() and then unsyncs, so reading afterwards would give the
+    # local shard anyway -- but reading first keeps the intent explicit and
+    # avoids depending on that restore behaviour.
+    per_item = capture_per_item(evaluator)
     metrics = evaluator.compute_metrics()
     if len(metrics) != 1:
         raise RuntimeError(f"{label} returned unexpected metrics: {sorted(metrics)}")
-    return float(next(iter(metrics.values())))
+    return float(next(iter(metrics.values()))), per_item
 
 
 def run_suite(
@@ -335,16 +371,25 @@ def run_suite(
         label: evaluate_label(model, config, tokenizer, device, label, batch_size)
         for label in TASK_LABELS
     }
-    gathered: list[dict[str, float] | None] = [None] * world_size
+    gathered: list[dict[str, tuple[float, list]] | None] = [None] * world_size
     dist.all_gather_object(gathered, local_results)
     merged: dict[str, float] = {}
+    # The scalar is already synced across ranks by compute_metrics(), so
+    # overwriting is fine for it -- but the per-item rows are rank-local
+    # shards and must be concatenated, not overwritten.
+    raw_rows: dict[str, list[tuple[int, int, float]]] = {label: [] for label in TASK_LABELS}
     for result in gathered:
-        if result:
-            merged.update(result)
+        if not result:
+            continue
+        for label, (value, rows) in result.items():
+            merged[label] = float(value)
+            raw_rows[label].extend(tuple(row) for row in rows)
     missing = [label for label in TASK_LABELS if label not in merged]
     if missing:
         raise RuntimeError(f"incomplete 20-label suite; first missing label: {missing[0]}")
     labels = {label: float(merged[label]) for label in TASK_LABELS}
+    per_item, padding_duplicates = reduce_per_item(raw_rows, labels)
+    per_item_path = output.parent / f"{output.stem}_per_item.jsonl.gz"
     payload: dict[str, Any] = {
         "run_name": run_name,
         "checkpoint": str(checkpoint),
@@ -355,9 +400,13 @@ def run_suite(
         "macro_mean": sum(labels.values()) / len(labels),
         "raw_label_count": len(labels),
         "suite_complete": True,
+        "per_item_file": per_item_path.name,
+        "per_item_rows": sum(len(values) for values in per_item.values()),
+        "sampler_padding_duplicates": padding_duplicates,
     }
     if rank == 0:
         output.parent.mkdir(parents=True, exist_ok=True)
+        write_per_item(per_item_path, per_item, step)
         output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     dist.barrier()
     return payload
