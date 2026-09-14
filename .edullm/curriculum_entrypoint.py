@@ -830,7 +830,21 @@ def parser() -> argparse.ArgumentParser:
         help="for --pacing control only: which metric's materialized parent to train on",
     )
     out.add_argument("--lr-schedule", choices=LR_SCHEDULES, required=True)
-    out.add_argument("--seed", type=int, required=True)
+    out.add_argument(
+        "--seed",
+        type=int,
+        required=True,
+        help=(
+            "ONE seed, driving both data order and model initialization -- "
+            "ratified, not an oversight. Combined with the pacing tag being "
+            "absent from the step seed (plan 1g), two arms at the same seed "
+            "share their data stream and their initial weights, which is what "
+            "common random numbers requires and is worth more at this budget "
+            "than an extra replicate. Do not split this into separate data "
+            "and init seeds: it is part of the frozen contract, and a split "
+            "would allow two arms to differ in init unnoticed."
+        ),
+    )
     out.add_argument(
         "--parent-manifest",
         type=Path,

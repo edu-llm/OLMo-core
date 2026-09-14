@@ -167,3 +167,44 @@ def test_ratified_metric_definition_reaches_the_fingerprint() -> None:
     # And every declared metric is covered (curriculum_pacing asserts this at
     # import, but state it where a reader of the contract will look).
     assert set(DIFFICULTY_METRIC_DEFINITIONS) == set(ce.DIFFICULTY_METRICS)
+
+
+def test_model_init_is_seeded_from_the_cli_seed() -> None:
+    """Harness item 8's other half: `--seed` must drive model init too.
+
+    The pacing harness covers data order, but it is torch-free and cannot
+    reach initialization. The defect this guards is the original one -- a
+    module-level `SEED = 42` that made replicate seeds unrunnable -- so the
+    property worth asserting is that the init seed comes from the CLI
+    argument and from nowhere else.
+
+    Checked at source level deliberately: calling the real seeding path
+    would require standing up a distributed environment, and the failure
+    mode here is someone reintroducing a constant, which source inspection
+    catches exactly.
+    """
+    import inspect
+    import re
+
+    source = inspect.getsource(ce)
+
+    calls = re.findall(r"prepare_training_environment\(([^)]*)\)", source)
+    # One import line plus exactly one call site.
+    assert len(calls) == 1, f"expected one prepare_training_environment call, got {calls}"
+    assert "seed=args.seed" in calls[0], (
+        "model init must be seeded from the --seed CLI argument, not a "
+        f"constant; call site passes: {calls[0]!r}"
+    )
+
+    # And no module-level seed constant may shadow it.
+    assert not re.search(r"(?m)^_?SEED\s*=", source), (
+        "a module-level SEED constant is the defect finding 1f names: it made "
+        "replicate seeds unrunnable because load_recipe rejected any other value"
+    )
+
+    # --seed is required, so a run cannot silently inherit a default.
+    seed_action = next(
+        action for action in ce.parser()._actions if "--seed" in action.option_strings
+    )
+    assert seed_action.required is True
+    assert seed_action.default is None
