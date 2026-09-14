@@ -1,0 +1,30 @@
+# Shell scripts and job files must be LF on every platform.
+#
+# On Windows, git checks these out with CRLF. Git Bash tolerates a CRLF
+# script -- and, worse, translates \r away on read, so `grep` and `bash -n`
+# there both report a clean file. WSL bash does not tolerate it:
+# `set -Eeuo pipefail\r` fails with "pipefail: invalid option name", and a
+# heredoc terminator followed by \r is never recognised, so the file dies
+# with "unexpected end of file".
+#
+# That combination makes the failure invisible from the shell most likely to
+# be used to check it. It matters here because the FarmShare launchers are
+# run from WSL -- the SSH control socket lives there -- while git runs on the
+# Windows side. sync_repo.sh strips \r on the *remote* copy, which kept the
+# problem hidden until the laptop-side scripts were run directly.
+*.sh text eol=lf
+*.sbatch text eol=lf
+*.env text eol=lf
+
+# Python under .edullm carries shebangs and is executed directly on
+# FarmShare; `#!/usr/bin/env python3\r` is not a valid interpreter line.
+# Scoped to this directory to avoid renormalising the upstream tree.
+.edullm/**/*.py text eol=lf
+
+# Windows batch files are the one thing that must stay CRLF.
+*.bat text eol=crlf
+
+# Leave upstream data files exactly as committed; they are not scripts and
+# renormalising them would produce a five-thousand-line diff for no reason.
+*.csv -text
+*.txt -text
