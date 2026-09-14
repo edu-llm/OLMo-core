@@ -205,11 +205,13 @@ def load_base_config(path: Path) -> TrainConfig:
             embedding_size=int(model.get("embedding_size", EMBEDDING_SIZE)),
             eos_token_id=int(model.get("eos_token_id", 100_257)),
             pad_token_id=int(model.get("pad_token_id", 100_277)),
-            # Was omitted entirely -> ai2-olmo's ModelConfig default (1024),
-            # silently truncating 5-shot ICL context at half the model's
-            # trained 2048 sequence length (audit finding 1e). Must be
-            # confirmed against the pinned ai2-olmo version's actual field
-            # name for this setting (see ladder_base_config.yaml's comment).
+            # Was omitted entirely -> ai2-olmo's ModelConfig default, which
+            # is confirmed to be 1024 at the pinned commit
+            # (090253dac6688f2532509daa7aa2eb5fae50e956, olmo/config.py:
+            # `max_sequence_length: int = 1024`), silently truncating 5-shot
+            # ICL context at half the model's trained 2048 sequence length
+            # (audit finding 1e). The field name is correct: ModelConfig is
+            # a dataclass, so a wrong keyword would raise at construction.
             max_sequence_length=int(model.get("max_sequence_length", 2048)),
         ),
         tokenizer=TokenizerConfig(

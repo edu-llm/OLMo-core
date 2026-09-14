@@ -121,7 +121,10 @@ def test_anneal_follows_one_minus_sqrt(lr_schedule: str) -> None:
     cannot be confused."""
     curve = _curve(lr_schedule)
     start = curve[ce.CURRICULUM_STEPS]
-    midpoint = ce.CURRICULUM_STEPS + ce.ANNEAL_STEPS // 2
+    # ANNEAL_STEPS lives in curriculum_pacing and is not re-exported by the
+    # entrypoint, so derive it from the two constants that are.
+    anneal_steps = ce.TOTAL_STEPS - ce.CURRICULUM_STEPS
+    midpoint = ce.CURRICULUM_STEPS + anneal_steps // 2
     expected = start * (1.0 - (0.5 ** 0.5))
     assert curve[midpoint] == pytest.approx(expected, rel=1e-6), (
         f"{lr_schedule}: anneal midpoint LR {curve[midpoint]:.8g} != 1-sqrt "

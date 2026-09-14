@@ -7,11 +7,21 @@
 # are computed from `curriculum_model.py` / `TransformerConfig.olmo2_370M`:
 # d_model=1024, hidden_size_multiplier=1.5, hidden_size_multiple_of=256 ->
 # FFN hidden size = ensure_multiple_of(int(1.5 * int(8*1024/3)), 256) = 4096,
-# so mlp_ratio = 4096 / 1024 = 4 -- ASSUMING ai2-olmo's `mlp_ratio` field
-# means `mlp_hidden_size = mlp_ratio * d_model`. This assumption could not be
-# checked against the actual ai2-olmo source in this environment (the
-# package is not installed here); confirm it against the pinned ai2-olmo
-# commit before the first production run, per plan section 9 verification.
+# so mlp_ratio = 4096 / 1024 = 4.
+#
+# CONFIRMED against the pinned ai2-olmo commit
+# (090253dac6688f2532509daa7aa2eb5fae50e956, olmo/config.py): `mlp_ratio`
+# is documented there as "The ratio of the inner MLP dimensionality to
+# ``d_model``. This is only used when ``mlp_hidden_size`` is not set", and
+# its default is 4. So 4 is correct on that reading.
+#
+# It is also inert here, which is the more useful fact: this file builds an
+# ai2-olmo TrainConfig used only for tokenizer and downstream-evaluator
+# construction. The model actually under test is built separately from
+# `curriculum_model.build_model_config` (eval_task_loss_olmo_core.py:85), so
+# no ai2-olmo model is ever instantiated and no width from this file reaches
+# the measurement. What does matter here is max_sequence_length, the vocab
+# and embedding sizes, the special token ids, and the tokenizer identifier.
 run_name: curriculum-370m-ladder
 seed: 42
 model:
