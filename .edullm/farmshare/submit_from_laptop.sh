@@ -47,6 +47,12 @@ fi
 if [[ -n "${PARENT_MANIFEST:-}" ]]; then
   TRAIN_EXPORT+=",PARENT_MANIFEST='${PARENT_MANIFEST}'"
 fi
+# launch.sh reads KEEP_CHECKPOINTS but nothing was threading it through, so
+# `KEEP_CHECKPOINTS=all` on the laptop was silently ignored and the run
+# pruned its ladder anyway.
+if [[ -n "${KEEP_CHECKPOINTS:-}" ]]; then
+  TRAIN_EXPORT+=",KEEP_CHECKPOINTS='${KEEP_CHECKPOINTS}'"
+fi
 if [[ -n "${CORPUS_ROOT:-}" ]]; then
   TRAIN_EXPORT+=",CORPUS_ROOT='${CORPUS_ROOT}'"
 fi

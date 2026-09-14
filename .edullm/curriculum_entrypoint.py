@@ -95,7 +95,14 @@ LR_SCHEDULES = ("constant", "cosine")
 COSINE_ALPHA_F = 0.1
 CHECKPOINT_INTERVAL = 125
 WANDB_PROJECT_NAME = "curriculum-new"
-WANDB_PROJECT_NAMES = frozenset((WANDB_PROJECT_NAME,))
+# The pre-campaign smoke runs the real W&B path -- that is the only way to
+# verify that eval and metrics artifacts upload while model weights do not
+# (see ALLOW_MODEL_ARTIFACT_UPLOAD) -- but a 250-step shakedown must not sit
+# in the campaign's project, where it could later be mistaken for data. The
+# allowlist exists to stop runs landing in the wrong project, so the smoke
+# gets a named member rather than a silent override.
+WANDB_SMOKE_PROJECT_NAME = "curriculum-new-smoke"
+WANDB_PROJECT_NAMES = frozenset((WANDB_PROJECT_NAME, WANDB_SMOKE_PROJECT_NAME))
 CHECKPOINT_RESTART_REQUEST = "restart_after_checkpoint.json"
 
 
