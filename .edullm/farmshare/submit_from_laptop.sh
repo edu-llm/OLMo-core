@@ -11,7 +11,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/config.env"
 
-EDULLM_ROOT="${EDULLM_ROOT:-/mnt/c/alpha_ai/edullm}"
 SUNET="${FARMSHARE_SUNET:-nzhao2}"
 SOCK="${FARMSHARE_SOCK:-/tmp/farmshare-${SUNET}.sock}"
 HOST="${SUNET}@login.farmshare.stanford.edu"
@@ -31,7 +30,9 @@ export PACING METRIC CONTROL_METRIC LR_SCHEDULE SEED RECOVERY_MODE
 export TRAIN_GPUS TRAIN_CPUS TRAIN_MEM TRAIN_TIME
 
 bash "${SCRIPT_DIR}/sync_repo.sh"
-bash "${EDULLM_ROOT}/scripts/farmshare/push_wandb_session_to_farmshare.sh" "${RUN_DIR}"
+# Was a call into a separate repository, which left this branch unable to
+# submit from a clean checkout. Now self-contained (no edullm repo).
+RUN_DIR="${RUN_DIR}" SOCK="${SOCK}" HOST="${HOST}" \n  bash "${SCRIPT_DIR}/push_wandb_key.sh"
 
 TRAIN_EXPORT="RUN_DIR='${RUN_DIR}',SCRIPTS_DIR='${RUN_DIR}/scripts',PACING='${PACING}',LR_SCHEDULE='${LR_SCHEDULE}',SEED='${SEED}',RECOVERY_MODE='${RECOVERY_MODE}'"
 if [[ -n "${METRIC}" ]]; then
