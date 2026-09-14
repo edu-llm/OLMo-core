@@ -36,9 +36,16 @@ def test_permanent_ladder_and_checkpointer_contract() -> None:
     assert 2360 not in kwargs["fixed_steps"]
 
 
-def test_task_loss_callback_uploads_only_the_final_checkpoint(
+def test_task_loss_callback_never_uploads_a_model_checkpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Campaign policy: model weights never leave FarmShare scratch.
+
+    This previously asserted the final checkpoint WAS uploaded. A 370M
+    checkpoint is multi-GB, W&B stages a second local copy under $HOME, and
+    FarmShare home has a 48 GB quota -- so the final step must be False too,
+    not just the intermediate ones.
+    """
     save_folder = tmp_path / "checkpoints"
     for step in (125, 250):
         checkpoint_dir = save_folder / f"step{step}"
@@ -64,7 +71,7 @@ def test_task_loss_callback_uploads_only_the_final_checkpoint(
     callback._maybe_finalize(125)
     callback._maybe_finalize(250)
 
-    assert uploads == [(125, False), (250, True)]
+    assert uploads == [(125, False), (250, False)]
 
 
 def test_finalize_skips_nonfinal_checkpoint_artifact(
@@ -106,7 +113,7 @@ def test_finalize_skips_nonfinal_checkpoint_artifact(
 
     monkeypatch.setattr(artifacts, "_wandb", type("Wandb", (), {"Artifact": FakeArtifact})())
     (tmp_path / "progress").mkdir()
-    for step, upload_checkpoint in ((125, False), (250, True)):
+    for step, upload_checkpoint in ((125, False), (250, False)):
         checkpoint_dir = tmp_path / "checkpoints" / f"step{step}"
         checkpoint_dir.mkdir(parents=True)
         (checkpoint_dir / "state.pt").write_bytes(b"state")
@@ -125,8 +132,10 @@ def test_finalize_skips_nonfinal_checkpoint_artifact(
             run_evaluator=evaluator,
         )
 
-    assert artifact_types[:3] == ["eval", "metrics", "eval"]
-    assert artifact_types[3:] == ["model", "eval", "metrics", "eval"]
+    # Eval and metrics artifacts still upload at every permanent checkpoint;
+    # no "model" artifact appears at any step, including the final one.
+    assert artifact_types == ["eval", "metrics", "eval", "eval", "metrics", "eval"]
+    assert "model" not in artifact_types
 
 
 def test_fingerprint_refuses_changed_scientific_identity(tmp_path: Path) -> None:
@@ -246,8 +255,62 @@ def test_strict_wandb_upload_waits_and_fails_closed(
             return FailedUpload()
 
     monkeypatch.setattr(artifacts, "_wandb", type("Wandb", (), {"Artifact": FakeArtifact})())
+    # Exercise the upload mechanics, which the campaign policy otherwise
+    # blocks outright (see test_model_artifact_upload_is_refused_by_policy).
+    monkeypatch.setattr(artifacts, "ALLOW_MODEL_ARTIFACT_UPLOAD", True)
     with pytest.raises(artifacts.WandbArtifactError, match="did not complete"):
         artifacts.wandb_log_checkpoint(FakeRun(), checkpoint_dir, step=125, strict=True)
+
+
+def test_model_artifact_upload_is_refused_by_policy(tmp_path: Path) -> None:
+    """The refusal lives at the upload function, not only at its callers.
+
+    A call site can be edited back by accident; the cost of that mistake is
+    a full 48 GB home quota discovered hours into a run, so the block is
+    placed where the bytes would actually move.
+    """
+    checkpoint_dir = tmp_path / "step2500"
+    checkpoint_dir.mkdir()
+    (checkpoint_dir / "state.pt").write_bytes(b"state")
+
+    assert artifacts.ALLOW_MODEL_ARTIFACT_UPLOAD is False
+    with pytest.raises(artifacts.WandbArtifactError, match="uploads are disabled"):
+        artifacts.wandb_log_checkpoint(
+            object(), checkpoint_dir, step=2500, strict=False
+        )
+
+
+def test_small_artifacts_still_upload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The policy blocks model weights only. Eval results, metrics and other
+    small directory artifacts are exactly what W&B is still for here."""
+    logged: list[str] = []
+
+    class FakeArtifact:
+        def __init__(self, name, type, metadata=None):
+            self.type = type
+
+        def add_dir(self, path):
+            pass
+
+        def add_file(self, path, name=None):
+            pass
+
+    class FakeRun:
+        name = "unit"
+
+        def log_artifact(self, artifact, aliases=None):
+            logged.append(artifact.type)
+            return type("Done", (), {"wait": lambda self: None})()
+
+    monkeypatch.setattr(artifacts, "_wandb", type("Wandb", (), {"Artifact": FakeArtifact})())
+    metrics_dir = tmp_path / "progress"
+    metrics_dir.mkdir()
+    (metrics_dir / "progress.json").write_text("{}", encoding="utf-8")
+
+    artifacts.wandb_log_directory_artifact(
+        FakeRun(), metrics_dir, name="unit-progress", artifact_type="metrics", strict=True
+    )
+    assert logged == ["metrics"]
 
 
 def test_durable_marker_advances_only_after_required_uploads(
@@ -343,27 +406,6 @@ def test_prune_leaves_newer_incomplete_checkpoints_alone(tmp_path: Path) -> None
     ]
 
 
-def test_prune_preserves_ema_source_checkpoints(tmp_path: Path) -> None:
-    save_folder = tmp_path / "checkpoints"
-    for step in (1875, 2000, 2125, 2250, 2384):
-        checkpoint_dir = save_folder / f"step{step}"
-        checkpoint_dir.mkdir(parents=True)
-        (checkpoint_dir / "state.pt").write_bytes(b"state")
-
-    removed = checkpoint.prune_older_permanent_checkpoints(
-        save_folder,
-        keep_step=2384,
-        preserve_steps=(2000, 2125, 2250, 2384),
-    )
-    assert [path.name for path in removed] == ["step1875"]
-    assert [path.name for _, path in checkpoint.list_step_checkpoint_dirs(save_folder)] == [
-        "step2000",
-        "step2125",
-        "step2250",
-        "step2384",
-    ]
-
-
 def test_prune_refuses_to_delete_missing_keep_step(tmp_path: Path) -> None:
     save_folder = tmp_path / "checkpoints"
     checkpoint_dir = save_folder / "step125"
@@ -439,3 +481,89 @@ def test_finalize_prunes_older_checkpoints_after_durable_marker(
     ]
     assert not (save_folder / "step125" / "model_eval.pt").is_file()
     assert (save_folder / "step125" / "state.pt").is_file()
+
+
+def test_directory_artifact_refuses_a_multi_gb_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The size cap is the backstop for the other route to W&B.
+
+    `wandb_log_directory_artifact` takes an arbitrary path, so pointing it at
+    a checkpoint directory would bypass the model-artifact block entirely.
+    """
+    big = tmp_path / "checkpoints"
+    big.mkdir()
+    (big / "state.pt").write_bytes(b"\0" * 2048)
+    monkeypatch.setattr(artifacts, "MAX_DIRECTORY_ARTIFACT_BYTES", 1024)
+    monkeypatch.setattr(artifacts, "_wandb", type("Wandb", (), {"Artifact": object})())
+
+    class FakeRun:
+        name = "unit"
+
+    with pytest.raises(artifacts.WandbArtifactError, match="exceeds the"):
+        artifacts.wandb_log_directory_artifact(
+            FakeRun(), big, name="unit-ckpt", artifact_type="model", strict=True
+        )
+
+
+def test_resume_never_depends_on_a_wandb_artifact(tmp_path: Path) -> None:
+    """Resume must work from FarmShare scratch alone.
+
+    Nothing uploads a model artifact any more, so the durable marker records
+    no artifact reference and must not claim a W&B replica. Resume reads the
+    local save_folder; if this ever regressed, a run would be unrecoverable
+    after the first hard-stop/resume cycle.
+    """
+    progress = tmp_path / "progress"
+    progress.mkdir()
+    checkpoint.write_last_durable_step(progress, 250, checkpoint_artifact=None)
+
+    marker = checkpoint.read_last_durable_step(progress)
+    assert marker is not None
+    assert marker["last_durable_step"] == 250
+    assert marker["durability"] == "local_scratch"
+    assert "checkpoint_artifact" not in marker
+
+
+def test_prune_keeps_the_step_resume_needs(tmp_path: Path) -> None:
+    """The unconditional post-marker prune must leave the durable step intact.
+
+    Disabling uploads removed the pre-staging prune, so this is now the only
+    prune on the path; if it dropped keep_step there would be nothing to
+    resume from.
+    """
+    save_folder = tmp_path / "checkpoints"
+    for step in (125, 250):
+        directory = save_folder / f"step{step}"
+        directory.mkdir(parents=True)
+        (directory / "state.pt").write_bytes(b"state")
+
+    checkpoint.prune_older_permanent_checkpoints(save_folder, keep_step=250)
+    remaining = [path.name for _, path in checkpoint.list_step_checkpoint_dirs(save_folder)]
+    assert remaining == ["step250"]
+
+
+def test_finalize_can_keep_the_whole_ladder(tmp_path: Path) -> None:
+    """prune_older=False must leave every earlier checkpoint in place."""
+    save_folder = tmp_path / "checkpoints"
+    for step in (125, 250):
+        directory = save_folder / f"step{step}"
+        directory.mkdir(parents=True)
+        (directory / "state.pt").write_bytes(b"state")
+
+    checkpoint.finalize_permanent_checkpoint(
+        arm="probe",
+        checkpoint_dir=save_folder / "step250",
+        step=250,
+        run_name="unit",
+        task_loss_dir=tmp_path / "task-loss",
+        task_loss_enabled=False,
+        progress_dir=None,
+        wandb_run=None,
+        wandb_mode="disabled",
+        production=False,
+        upload_checkpoint=False,
+        prune_older=False,
+    )
+    remaining = [path.name for _, path in checkpoint.list_step_checkpoint_dirs(save_folder)]
+    assert remaining == ["step125", "step250"]

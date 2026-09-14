@@ -2,15 +2,21 @@
 
 Pure Python and numpy: no torch, no olmo_core, no network, no FarmShare
 access. Executes the real `curriculum_pacing` and `curriculum_sampling`
-code at production geometry (the real corpus size, 4,875,093 chunks, and
-the real 2048-sequence global batch) to catch exactly the class of defect
-that the five-reviewer audit found: an arm whose exposure, coverage, or
-sampling regime silently does not do what its name says.
+code at production geometry (the real per-metric corpus sizes measured from
+the materialized manifests, and the real 2048-sequence global batch) to
+catch exactly the class of defect that the five-reviewer audit found: an
+arm whose exposure, coverage, or sampling regime silently does not do what
+its name says.
 
-Items below are numbered to match plan section 8. Items 7 and 10 (chunk
-purity, decile-1 content) require the actual scored/materialized corpus and
-are out of scope for this CPU-only, no-corpus harness; they are covered
-separately once the corpus rebuild (plan section 4) has run on FarmShare.
+Items below are numbered to match plan section 8. Items 4, 7 and 10
+(realized domain mixture, chunk purity, decile-1 content) need the actual
+materialized corpus and cannot run here; they were run on FarmShare against
+all three metrics as jobs 1721421, 1721422, 1723433 (mixture and purity)
+and 1721465, 1723432 (decile-1 content). Item 1 (sort direction) needs real
+metric scores judged against an external anchor and is deferred to the
+reference-CE check in plan 4h, which runs on the Phase 0 control checkpoint;
+that is safe to defer because Phase 0 is control-only and a uniform shuffle
+is independent of sort direction.
 """
 
 from __future__ import annotations
@@ -26,10 +32,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import curriculum_pacing as cp
 from curriculum_sampling import PoolSampler
 
-# Production geometry (plan section 4): 4,875,093 chunks after the corpus
-# rebuild's gating, before any additional attrition from the metric scoring
-# itself. Used for every "at scale" assertion below.
-PRODUCTION_SIZE = 4_875_093
+# Production geometry, measured from the materialized manifests rather than
+# projected. 4,875,093 -- the number this constant held until the corpus was
+# actually built -- is the PRE-gate chunk count; the validity gate removed
+# 53,954 documents and re-chunking the remainder yields the counts below.
+# The three metrics differ by at most 2 chunks, from per-shard remainder
+# truncation under different sort orders, so no single constant covers all
+# three and the invariants are checked against each.
+PRODUCTION_SIZES = {
+    "mtld": 4_872_915,
+    "flesch": 4_872_916,
+    "compression_ratio": 4_872_917,
+}
+# Default for the bulk of the assertions below. Smallest of the three, so a
+# pool that fits here fits under every metric.
+PRODUCTION_SIZE = PRODUCTION_SIZES["mtld"]
 TAKE = 2048  # global_sequences_per_batch at 4,194,304-token global batch / 2048 seq len
 
 NON_CONTROL_PACINGS = [p for p in cp.PACING_NAMES if p != "control"]
@@ -394,3 +411,51 @@ class TestPriorDrawsClosedForm:
                 f"{pool.prior_draws}, brute force says {expected_prior}"
             )
             seen_draws[key] = expected_prior + take
+
+
+# --- Every metric's real materialized geometry, not just the default -----
+
+
+class TestAllMetricGeometries:
+    """The three metrics produce chunk counts differing by up to 2, and the
+    decile boundaries are a frozen artifact derived from that count. A
+    geometry that is only ever checked at one of the three sizes is not
+    checked at production geometry for the other two.
+    """
+
+    @pytest.mark.parametrize("metric,size", sorted(PRODUCTION_SIZES.items()))
+    def test_deciles_tile_the_corpus_exactly(self, metric: str, size: int) -> None:
+        buckets = cp.split_equal_mass(size)
+        assert len(buckets) == cp.N_BUCKETS
+        assert buckets[0][0] == 0, f"{metric}: first bucket must start at 0"
+        assert buckets[-1][1] == size, f"{metric}: last bucket must end at {size}"
+        for (_, prev_end), (next_start, _) in zip(buckets, buckets[1:]):
+            assert prev_end == next_start, f"{metric}: buckets must be contiguous"
+        widths = [end - start for start, end in buckets]
+        assert max(widths) - min(widths) <= 1, (
+            f"{metric}: largest-remainder split must not differ by more than one "
+            f"chunk across deciles, got widths {widths}"
+        )
+
+    @pytest.mark.parametrize("metric,size", sorted(PRODUCTION_SIZES.items()))
+    def test_linear_spends_equal_steps_per_decile(self, metric: str, size: int) -> None:
+        counts: dict[tuple[int, int], int] = {}
+        for step in range(cp.CURRICULUM_STEPS):
+            pool = cp.pool_for_step(step, size, "linear_n10", TAKE)
+            key = (pool.start, pool.end)
+            counts[key] = counts.get(key, 0) + 1
+        assert len(counts) == cp.N_BUCKETS
+        assert set(counts.values()) == {cp.CURRICULUM_STEPS // cp.N_BUCKETS}, (
+            f"{metric}: expected {cp.CURRICULUM_STEPS // cp.N_BUCKETS} steps in every "
+            f"decile, got {sorted(counts.values())}"
+        )
+
+    @pytest.mark.parametrize("metric,size", sorted(PRODUCTION_SIZES.items()))
+    @pytest.mark.parametrize("pacing", NON_CONTROL_PACINGS)
+    def test_pools_stay_inside_the_corpus(self, metric: str, size: int, pacing: str) -> None:
+        for step in range(cp.CURRICULUM_STEPS):
+            pool = cp.pool_for_step(step, size, pacing, TAKE)
+            assert 0 <= pool.start < pool.end <= size, (
+                f"{metric}/{pacing} step {step}: pool [{pool.start}, {pool.end}) "
+                f"escapes [0, {size})"
+            )

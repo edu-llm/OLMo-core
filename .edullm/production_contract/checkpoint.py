@@ -5,10 +5,10 @@ task-loss suite, upload required W&B artifacts, then advance the local durable
 step marker. Production online runs fail before advancing the marker if any
 required operation fails.
 
-After the durable marker advances, older local ``step*`` directories are pruned so
-only the most recent durable checkpoint remains, except EMA source steps which
-must survive until post-hoc EMA at step 2385. That keeps resume pointed at the
-latest complete checkpoint and bounds disk use.
+After the durable marker advances, older local ``step*`` directories are pruned
+so only the most recent durable checkpoint remains, unless pruning is disabled
+outright, in which case the whole ladder is kept. That keeps resume pointed at
+the latest complete checkpoint and bounds disk use.
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ import os
 import re
 import shutil
 import tempfile
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
@@ -210,7 +209,11 @@ def write_last_durable_step(
     payload: dict[str, Any] = {
         "schema_version": 2,
         "last_durable_step": step,
-        "durability": "local_scratch+wandb",
+        # Model weights are never uploaded (see ALLOW_MODEL_ARTIFACT_UPLOAD in
+        # wandb_artifacts.py), so FarmShare scratch is the only copy and this
+        # marker must not claim a W&B replica that does not exist. Small
+        # artifacts (eval, metrics) still go to W&B; they are not durability.
+        "durability": "local_scratch",
     }
     if checkpoint_artifact:
         payload["checkpoint_artifact"] = str(checkpoint_artifact)
@@ -269,7 +272,6 @@ def prune_older_permanent_checkpoints(
     save_folder: str | Path,
     *,
     keep_step: int,
-    preserve_steps: Sequence[int] = (),
 ) -> list[Path]:
     """Delete local ``step*`` checkpoints with step strictly less than ``keep_step``.
 
@@ -277,13 +279,12 @@ def prune_older_permanent_checkpoints(
     marker has advanced to ``keep_step``. Newer directories are left untouched so a
     mid-finalize newer checkpoint cannot be removed by a stale prune. The kept
     directory is never removed, so resume still finds the latest durable
-    checkpoint. ``preserve_steps`` keeps additional earlier checkpoints, which
-    the post-hoc EMA merge needs until step 2385.
+    checkpoint. To keep earlier checkpoints instead, do not call this at all
+    (see ``prune_older`` on :func:`finalize_permanent_checkpoint`).
     """
     keep_step = int(keep_step)
     if keep_step < 0:
         raise ValueError(f"keep_step must be >= 0, got {keep_step}")
-    preserved = {int(step) for step in preserve_steps}
     root = Path(save_folder)
     kept = root / f"step{keep_step}"
     if not kept.is_dir():
@@ -294,7 +295,7 @@ def prune_older_permanent_checkpoints(
 
     removed: list[Path] = []
     for step, path in list_step_checkpoint_dirs(root):
-        if step >= keep_step or step in preserved:
+        if step >= keep_step:
             continue
         log.info("Pruning older permanent checkpoint at %s (keeping step %d)", path, keep_step)
         shutil.rmtree(path)
@@ -320,14 +321,22 @@ def finalize_permanent_checkpoint(
     production: bool = False,
     upload_checkpoint: bool,
     run_evaluator: Optional[Callable[..., Any]] = None,
-    preserve_steps: Sequence[int] = (),
+    prune_older: bool = True,
 ) -> Optional[dict[str, Any]]:
     """Publish every evaluation and only an explicitly selected checkpoint.
 
-    After the durable-step marker advances, regenerable ``model_eval.pt`` weights
-    are discarded and older local ``step*`` directories under the save folder
-    are pruned so resume keeps ``step``. ``preserve_steps`` retains extra
-    earlier checkpoints, which post-hoc EMA needs until it runs.
+    After the durable-step marker advances, regenerable ``model_eval.pt``
+    weights are discarded and older local ``step*`` directories under the
+    save folder are pruned so resume keeps ``step``.
+
+    ``prune_older=False`` disables pruning outright, keeping the whole
+    permanent ladder.
+
+    Keeping the ladder is what a post-hoc analysis over intermediate
+    checkpoints needs -- per-document loss trajectories for a learnability
+    measurement, for instance. That decision has to be made *before* the run
+    starts: once a checkpoint is pruned it is gone, and FarmShare scratch is
+    the only copy (model artifacts are never uploaded).
     """
     from . import task_loss
     from . import wandb_artifacts as artifacts
@@ -365,9 +374,8 @@ def finalize_permanent_checkpoint(
     if upload_checkpoint:
         if task_loss_enabled:
             discard_regenerable_eval_weights(checkpoint)
-        prune_older_permanent_checkpoints(
-            checkpoint.parent, keep_step=int(step), preserve_steps=preserve_steps
-        )
+        if prune_older:
+            prune_older_permanent_checkpoints(checkpoint.parent, keep_step=int(step))
 
     artifact_ref: Optional[str] = None
     if upload_checkpoint:
@@ -426,8 +434,9 @@ def finalize_permanent_checkpoint(
     # the kept checkpoint stays resume-safe without holding a second full copy.
     if task_loss_enabled:
         discard_regenerable_eval_weights(checkpoint)
-    # Resume keeps the latest durable checkpoint plus any EMA source steps.
-    prune_older_permanent_checkpoints(
-        checkpoint.parent, keep_step=int(step), preserve_steps=preserve_steps
-    )
+    # Resume keeps the latest durable checkpoint. With prune_older=False
+    # nothing is removed and the full permanent ladder survives on scratch
+    # for post-hoc analysis.
+    if prune_older:
+        prune_older_permanent_checkpoints(checkpoint.parent, keep_step=int(step))
     return payload

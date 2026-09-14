@@ -16,6 +16,29 @@ log = logging.getLogger(__name__)
 
 DEFAULT_WANDB_MODE = "online"
 
+# Campaign policy (curriculum-new): model weights are NEVER uploaded to W&B.
+#
+# A 370M checkpoint is multiple GB, W&B stages a second full copy locally
+# before uploading, and its staging/cache directories default to $HOME --
+# which on FarmShare carries a 48 GB quota. Every checkpoint is already
+# durable on FarmShare scratch, which is the campaign's system of record, so
+# the upload buys nothing and can take out the run's home directory.
+#
+# Small artifacts are unaffected and still upload: task-loss results,
+# progress metrics, configs, code. Only `type="model"` payloads are blocked.
+#
+# This is enforced here, at the one function that performs the upload,
+# rather than only at the call sites -- a call site can be edited back by
+# accident, and the failure mode (a full home quota mid-run) is expensive.
+# Tests that need to exercise upload mechanics monkeypatch this constant.
+ALLOW_MODEL_ARTIFACT_UPLOAD = False
+
+# Size cap for directory/file artifacts, which take an arbitrary path and so
+# are the other route a multi-GB payload could reach W&B. Eval JSON and
+# progress metrics are kilobytes; 512 MiB leaves several orders of magnitude
+# of headroom while still catching a checkpoint directory.
+MAX_DIRECTORY_ARTIFACT_BYTES = 512 * 2**20
+
 try:
     import wandb as _wandb
 except ImportError:  # pragma: no cover - W&B is optional for local tests.
@@ -85,6 +108,14 @@ def wandb_log_checkpoint(
     strict: bool = False,
     run_name: Optional[str] = None,
 ) -> Any | None:
+    if not ALLOW_MODEL_ARTIFACT_UPLOAD:
+        raise WandbArtifactError(
+            "model artifact uploads are disabled for this campaign: a 370M "
+            "checkpoint is multi-GB, W&B stages a second copy under $HOME "
+            "(48 GB quota on FarmShare), and the checkpoint is already durable "
+            "on scratch. Small artifacts (eval, metrics, code) still upload. "
+            "See ALLOW_MODEL_ARTIFACT_UPLOAD in wandb_artifacts.py."
+        )
     if run is None:
         if strict:
             raise WandbArtifactError("required W&B checkpoint upload has no active run")
@@ -186,6 +217,24 @@ def wandb_log_directory_artifact(
         if strict:
             raise WandbArtifactError(f"artifact source does not exist: {source}")
         return None
+    # This function takes an arbitrary path, so it is the other way a
+    # multi-GB payload could reach W&B: point it at a checkpoint directory
+    # and the model-artifact block above is bypassed entirely. Cap the size
+    # instead of trusting the caller. Legitimate uploads here are eval JSON
+    # and progress metrics -- kilobytes, not gigabytes.
+    total_bytes = (
+        sum(p.stat().st_size for p in source.rglob("*") if p.is_file())
+        if source.is_dir()
+        else source.stat().st_size
+    )
+    if total_bytes > MAX_DIRECTORY_ARTIFACT_BYTES:
+        raise WandbArtifactError(
+            f"refusing to upload {source} as a '{artifact_type}' artifact: "
+            f"{total_bytes / 2**20:.1f} MiB exceeds the "
+            f"{MAX_DIRECTORY_ARTIFACT_BYTES / 2**20:.0f} MiB cap. Large payloads "
+            f"(model weights) stay on FarmShare scratch; see "
+            f"ALLOW_MODEL_ARTIFACT_UPLOAD in wandb_artifacts.py."
+        )
     artifact = _wandb.Artifact(
         name=_artifact_slug(name),
         type=artifact_type,
@@ -214,7 +263,21 @@ def restore_checkpoint_artifact(
     api: Any | None = None,
     require_fingerprint: bool = True,
 ) -> Path:
-    """Restore into an absent ``stepN`` directory, refusing ambiguous overwrite."""
+    """Restore into an absent ``stepN`` directory, refusing ambiguous overwrite.
+
+    Unused in this campaign, and it cannot succeed: nothing uploads a model
+    artifact, so there is never one to restore. It also pulls multiple GB
+    down onto the node, which is the same traffic the upload policy exists
+    to avoid. Kept (rather than deleted) because the resume path's metadata
+    still records an artifact field, but refused at the front so a caller
+    gets the reason instead of a confusing 404 from the W&B API.
+    """
+    if not ALLOW_MODEL_ARTIFACT_UPLOAD:
+        raise WandbArtifactError(
+            "model artifacts are neither uploaded nor restored in this campaign; "
+            "checkpoints are resumed from FarmShare scratch. See "
+            "ALLOW_MODEL_ARTIFACT_UPLOAD in wandb_artifacts.py."
+        )
     if _wandb is None and api is None:
         raise WandbArtifactError("wandb is required to restore a checkpoint")
     reference = str(artifact_ref).strip()

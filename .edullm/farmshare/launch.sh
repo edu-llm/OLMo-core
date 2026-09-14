@@ -109,6 +109,7 @@ args=(
   --task-loss-eval-script "${REPO_DIR}/.edullm/task_loss/eval_task_loss_olmo_core.py"
   --ladder-base-config "${REPO_DIR}/.edullm/task_loss/ladder_base_config.yaml"
   --task-loss-nproc "${TRAIN_GPUS}"
+  --keep-checkpoints "${KEEP_CHECKPOINTS:-latest}"
   "${recovery[@]}"
 )
 if [[ -n "${LENGTH_TOKENS}" ]]; then

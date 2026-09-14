@@ -5,11 +5,11 @@ Rewritten from scratch for `curriculum-new` (no code copied from the
 edullm repo). Differences from the prior `edullm/curriculum-370m`
 implementation, all driven by the five-reviewer audit (plan section 1):
 
-- No EMA. The reported model is the true final checkpoint, produced after
-  a post-curriculum anneal phase rather than a post-hoc weighted average
-  (plan 6a) -- the audit found the old EMA mixed in checkpoints from before
-  an arm's hardest decile had ever been presented, an arm-dependent bias
-  as large as the effect being measured.
+- The reported model is the true final checkpoint, produced after a
+  post-curriculum anneal phase (plan 6a). No post-hoc averaging of any
+  kind: averaging across checkpoints would mix in weights from before an
+  arm's hardest decile had ever been presented, an arm-dependent bias as
+  large as the effect being measured.
 - Plain `AdamWConfig`, not `SkipStepAdamW`. The skip-step guard's rolling
   loss window is not checkpointed and is lost across every forced restart,
   and curriculum decile boundaries are themselves large, arm-dependent loss
@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import logging
 import os
 import sys
 from dataclasses import dataclass
@@ -79,6 +80,8 @@ PACKAGED_LADDER_CONFIG = Path(__file__).with_name("task_loss") / "ladder_base_co
 
 SEQUENCE_LENGTH = 2048
 GLOBAL_BATCH_TOKENS = 4_194_304
+log = logging.getLogger(__name__)
+
 RANK_MICROBATCH_TOKENS = 16_384  # 8 sequences/rank, verified to fit 4xL40S (plan freeze contract)
 PEAK_LR = 4e-4
 WARMUP_STEPS = 24
@@ -208,21 +211,52 @@ def checkpoint_steps(total_steps: int) -> list[int]:
     return checkpoint_contract.permanent_checkpoint_steps(total_steps, CHECKPOINT_INTERVAL)
 
 
+def numerics_identity() -> dict[str, Any]:
+    """Resolve every EDULLM_BENCH_* knob that changes the arithmetic.
+
+    Single source of truth for both :func:`train_module_config` and the run
+    fingerprint (plan finding 1f). These variables alter parallelism
+    strategy, gradient-reduction dtype, expert parallelism, prefetch depth
+    and fp8 linears; none of them entered `scientific_identity` before, so
+    two runs could be recorded as identical while computing differently.
+
+    Resolved values are returned rather than raw env strings, so an unset
+    variable and an explicitly-default one produce the same fingerprint.
+    """
+    return {
+        "dp_name": (
+            "fsdp" if os.environ.get("EDULLM_BENCH_DP") == "fsdp" else "hsdp"
+        ),
+        "reduce_dtype": (
+            "bfloat16" if os.environ.get("EDULLM_BENCH_REDUCE_BF16") == "1" else "float32"
+        ),
+        "param_dtype": "bfloat16",
+        "ep_degree": int(os.environ.get("EDULLM_BENCH_EP_DEGREE", "0")),
+        "prefetch_factor": int(os.environ.get("EDULLM_BENCH_PREFETCH", "0")),
+        "float8": os.environ.get("EDULLM_BENCH_FLOAT8") == "1",
+        "compile_model": True,
+        "z_loss_multiplier": 1e-5,
+        "max_grad_norm": 1.0,
+        "attn_backend": os.environ.get("OLMO_ATTN_BACKEND", "torch"),
+        "flash_attention": os.environ.get("OLMO_FLASH_ATTENTION", "0") == "1",
+        "fused_loss": os.environ.get("OLMO_FUSED_LOSS", "0") == "1",
+    }
+
+
 def train_module_config(
     lr_schedule: str,
     rank_microbatch_tokens: int = RANK_MICROBATCH_TOKENS,
 ) -> TransformerTrainModuleConfig:
+    numerics = numerics_identity()
     dp_name = (
         DataParallelType.fsdp
-        if os.environ.get("EDULLM_BENCH_DP") == "fsdp"
+        if numerics["dp_name"] == "fsdp"
         else DataParallelType.hsdp
     )
     reduce_dtype = (
-        DType.bfloat16
-        if os.environ.get("EDULLM_BENCH_REDUCE_BF16") == "1"
-        else DType.float32
+        DType.bfloat16 if numerics["reduce_dtype"] == "bfloat16" else DType.float32
     )
-    ep_degree = int(os.environ.get("EDULLM_BENCH_EP_DEGREE", "0"))
+    ep_degree = int(numerics["ep_degree"])
     dp_options: dict[str, Any] = {}
     if ep_degree and dp_name == DataParallelType.hsdp:
         dp_options["num_replicas"] = 1
@@ -243,7 +277,7 @@ def train_module_config(
             name=dp_name,
             param_dtype=DType.bfloat16,
             reduce_dtype=reduce_dtype,
-            prefetch_factor=int(os.environ.get("EDULLM_BENCH_PREFETCH", "0")),
+            prefetch_factor=int(numerics["prefetch_factor"]),
             wrapping_strategy=TransformerDataParallelWrappingStrategy.full,
             **dp_options,
         ),
@@ -252,7 +286,7 @@ def train_module_config(
         ),
         float8_config=(
             Float8Config(ao=AOFloat8LinearConfig.recommended())
-            if os.environ.get("EDULLM_BENCH_FLOAT8") == "1"
+            if numerics["float8"]
             else Float8Config(enabled=False)
         ),
         z_loss_multiplier=1e-5,
@@ -293,10 +327,9 @@ def assert_distributed_runtime(expected_world_size: int) -> None:
 class CurriculumCheckpointCallback(Callback):
     """Checkpoint -> all-rank eval/reload -> awaited W&B artifacts -> marker.
 
-    No EMA finalization step: the true final checkpoint (reached after the
-    post-curriculum anneal) is evaluated and published like every other
-    permanent checkpoint, nothing more (plan finding on EMA's arm-dependent
-    bias, see the module docstring).
+    No post-hoc finalization step: the true final checkpoint (reached after
+    the post-curriculum anneal) is evaluated and published like every other
+    permanent checkpoint, nothing more (see the module docstring).
     """
 
     priority = 0
@@ -316,7 +349,9 @@ class CurriculumCheckpointCallback(Callback):
         run_name: str,
         fingerprint_path: Path,
         module_builder: Callable[[], Any],
+        prune_older: bool = True,
     ) -> None:
+        self.prune_older = bool(prune_older)
         self.arm = arm
         self.total_steps = int(total_steps)
         self.save_folder = save_folder
@@ -450,7 +485,13 @@ class CurriculumCheckpointCallback(Callback):
                     wandb_run=wandb_artifacts.wandb_run_from_trainer(self.trainer),
                     wandb_mode=self.wandb_mode,
                     production=self.production,
-                    upload_checkpoint=(step == self.total_steps),
+                    # Never upload model weights; see
+                    # ALLOW_MODEL_ARTIFACT_UPLOAD in wandb_artifacts.py.
+                    # Checkpoints stay on FarmShare scratch, which is this
+                    # campaign's system of record. Eval and metrics artifacts
+                    # (small) still upload.
+                    upload_checkpoint=False,
+                    prune_older=self.prune_older,
                     run_evaluator=self._already_evaluated,
                 )
             except BaseException as exc:  # noqa: BLE001
@@ -521,6 +562,7 @@ def scientific_identity(
     total_steps: int,
     rank_microbatch_tokens: int,
     parent: ResolvedInput,
+    task_loss_nproc: int,
 ) -> dict[str, Any]:
     return {
         "family": "curriculum-new",
@@ -541,6 +583,13 @@ def scientific_identity(
         "cosine_alpha_f": COSINE_ALPHA_F,
         "checkpoint_steps": checkpoint_steps(total_steps),
         "optimizer": "AdamW",
+        # Plan 1f: every numerics-affecting value, resolved. Changing any of
+        # these changes the arithmetic, so resume refuses and two runs that
+        # differ here can never be pooled by accident.
+        "numerics": numerics_identity(),
+        # Plan 1e: DistributedSampler pads to divisibility, so bpb from a
+        # 4-rank eval is not comparable to bpb from an 8-rank eval.
+        "task_loss_nproc": int(task_loss_nproc),
     }
 
 
@@ -572,9 +621,25 @@ def _validate_runtime(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     save_folder = Path(args.save_folder or run_root / "checkpoints")
     progress_dir = Path(args.progress_dir or run_root / "progress")
     cache_dir = Path(args.cache_dir or run_root / "cache")
+    # FarmShare home carries a 48 GB quota, which one 370M run's checkpoints
+    # will exhaust on its own. Runtime paths must be on scratch. Local smoke
+    # runs are exempt: they write a few MB into a temp dir, which on some
+    # platforms legitimately lives under the user's home.
+    try:
+        home = Path.home().resolve()
+    except (RuntimeError, OSError):  # no resolvable home; nothing to guard
+        home = None
     for path in (save_folder, progress_dir, cache_dir):
         if "://" in str(path):
             raise CurriculumConfigError("curriculum runtime paths must be job-local scratch")
+        if home is not None and not args.local_smoke:
+            resolved = path.resolve()
+            if resolved == home or home in resolved.parents:
+                raise CurriculumConfigError(
+                    f"curriculum runtime path {resolved} is under $HOME ({home}); "
+                    f"FarmShare home has a 48 GB quota that one run will exhaust. "
+                    f"Use /scratch/users/$USER/..."
+                )
         path.mkdir(parents=True, exist_ok=True)
     return save_folder, progress_dir, cache_dir
 
@@ -648,6 +713,7 @@ def run_worker(args: argparse.Namespace) -> None:
         total_steps=total_steps,
         rank_microbatch_tokens=rank_microbatch_tokens,
         parent=parent,
+        task_loss_nproc=task_loss_nproc,
     )
     if get_rank() == 0:
         checkpoint_contract.write_run_fingerprint(progress_dir / "current_fingerprint", identity)
@@ -664,6 +730,14 @@ def run_worker(args: argparse.Namespace) -> None:
         raise CurriculumConfigError(f"task-loss evaluator not found: {eval_script}")
     task_loss_dir = progress_dir / "task_loss_results"
     task_loss_dir.mkdir(parents=True, exist_ok=True)
+    prune_older = args.keep_checkpoints != "all"
+    if not prune_older:
+        log.warning(
+            "--keep-checkpoints=all: retaining the full %d-step permanent ladder on "
+            "scratch. Nothing is pruned, and model artifacts are never uploaded, so "
+            "scratch is the only copy.",
+            len(checkpoint_contract.permanent_checkpoint_steps(total_steps, CHECKPOINT_INTERVAL)),
+        )
     callback = CurriculumCheckpointCallback(
         arm=arm,
         total_steps=total_steps,
@@ -677,6 +751,7 @@ def run_worker(args: argparse.Namespace) -> None:
         run_name=os.environ.get("EDULLM_RUN_ID", arm.name),
         fingerprint_path=fingerprint,
         module_builder=lambda: build_train_module(arm.lr_schedule, rank_microbatch_tokens),
+        prune_older=prune_older,
     )
     checkpointer_options = checkpoint_contract.checkpointer_kwargs_for_ladder(total_steps)
     checkpointer_options["fixed_steps"] = [
@@ -770,6 +845,18 @@ def parser() -> argparse.ArgumentParser:
     out.add_argument("--ladder-base-config", type=Path, default=PACKAGED_LADDER_CONFIG)
     out.add_argument("--task-loss-nproc", type=int)
     out.add_argument("--no-task-loss", action="store_true")
+    out.add_argument(
+        "--keep-checkpoints",
+        choices=("latest", "all"),
+        default="latest",
+        help=(
+            "checkpoint retention. 'latest' (default) keeps only the newest "
+            "durable checkpoint, which is all a resume needs. 'all' keeps the "
+            "whole permanent ladder -- required if intermediate checkpoints are "
+            "themselves data (e.g. per-document loss trajectories), since a "
+            "pruned checkpoint is gone and scratch is the only copy."
+        ),
+    )
     return out
 
 

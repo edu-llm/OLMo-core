@@ -368,10 +368,12 @@ class TaskLossEvalCallback(Callback if _HAS_OLMO_CORE else object):  # type: ign
         production: bool = False,
         wandb_mode: Optional[str] = None,
         checkpoint_wait_seconds: int = 3600,
+        prune_older: bool = True,
     ) -> None:
         if not _HAS_OLMO_CORE:
             raise ImportError("olmo_core is required for TaskLossEvalCallback")
         super().__init__()  # type: ignore[misc]
+        self.prune_older = bool(prune_older)
         self.total_steps = int(total_steps)
         self.save_folder = Path(save_folder)
         self.run_name = str(run_name)
@@ -439,7 +441,11 @@ class TaskLossEvalCallback(Callback if _HAS_OLMO_CORE else object):  # type: ign
                     wandb_run=wandb_run_from_trainer(self.trainer),
                     wandb_mode=self.wandb_mode,
                     production=self.production,
-                    upload_checkpoint=step == self.total_steps,
+                    # Never upload model weights; see ALLOW_MODEL_ARTIFACT_UPLOAD
+                    # in wandb_artifacts.py. Checkpoints live on FarmShare
+                    # scratch only. Eval and metrics artifacts still upload.
+                    upload_checkpoint=False,
+                    prune_older=self.prune_older,
                 )
             except BaseException as exc:  # noqa: BLE001
                 failure[0] = f"{type(exc).__name__}: {exc}"
