@@ -32,7 +32,7 @@ export TRAIN_GPUS TRAIN_CPUS TRAIN_MEM TRAIN_TIME
 bash "${SCRIPT_DIR}/sync_repo.sh"
 # Was a call into a separate repository, which left this branch unable to
 # submit from a clean checkout. Now self-contained (no edullm repo).
-RUN_DIR="${RUN_DIR}" SOCK="${SOCK}" HOST="${HOST}" \n  bash "${SCRIPT_DIR}/push_wandb_key.sh"
+bash "${SCRIPT_DIR}/push_wandb_key.sh"
 
 TRAIN_EXPORT="RUN_DIR='${RUN_DIR}',SCRIPTS_DIR='${RUN_DIR}/scripts',PACING='${PACING}',LR_SCHEDULE='${LR_SCHEDULE}',SEED='${SEED}',RECOVERY_MODE='${RECOVERY_MODE}'"
 if [[ -n "${METRIC}" ]]; then
