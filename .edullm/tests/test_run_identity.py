@@ -121,3 +121,49 @@ def test_numerics_and_eval_world_size_reach_the_run_fingerprint(
     assert checkpoint_contract.make_run_fingerprint(
         identity_for(4)
     ) != checkpoint_contract.make_run_fingerprint(baseline)
+
+
+def test_ratified_metric_definition_reaches_the_fingerprint() -> None:
+    """Plan section 2: the difficulty metric's definition is frozen.
+
+    compression_ratio is ratified in its RAW form -- length coupling and all
+    -- so the definition, its measured rho against document length, and the
+    zlib version must travel in the fingerprint. If anyone rescores or edits
+    a formula, the fingerprint moves, resume refuses, and runs either side of
+    the change cannot be pooled by accident.
+    """
+    from curriculum_pacing import DIFFICULTY_METRIC_DEFINITIONS
+    from production_contract import checkpoint as checkpoint_contract
+
+    class FakeParent:
+        identity = {"metric": "compression_ratio", "sha256": "0" * 64}
+
+    def identity_for(metric: str | None, pacing: str) -> dict:
+        return ce.scientific_identity(
+            arm=ce.Arm(pacing=pacing, metric=metric, lr_schedule="constant"),
+            seed=42,
+            total_steps=ce.TOTAL_STEPS,
+            rank_microbatch_tokens=ce.RANK_MICROBATCH_TOKENS,
+            parent=FakeParent(),
+            task_loss_nproc=4,
+        )
+
+    compression = identity_for("compression_ratio", "linear_n10")
+    definition = compression["difficulty_metric_definition"]
+    assert "zlib.compress" in definition["formula"]
+    assert definition["rho_rank_vs_n_tokens"] == -0.7023
+    assert definition["zlib_version_at_verification"] == "1.3"
+
+    # Each metric must carry its own definition, not a shared blob.
+    mtld = identity_for("mtld", "linear_n10")
+    assert mtld["difficulty_metric_definition"] != definition
+    assert checkpoint_contract.make_run_fingerprint(
+        mtld
+    ) != checkpoint_contract.make_run_fingerprint(compression)
+
+    # Control is ordered by nothing, so it records no definition.
+    assert identity_for(None, "control")["difficulty_metric_definition"] is None
+
+    # And every declared metric is covered (curriculum_pacing asserts this at
+    # import, but state it where a reader of the contract will look).
+    assert set(DIFFICULTY_METRIC_DEFINITIONS) == set(ce.DIFFICULTY_METRICS)

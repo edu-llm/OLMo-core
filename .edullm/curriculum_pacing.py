@@ -73,6 +73,81 @@ CURRICULUM_DATASET_ID = "curriculum/opt-with-synthetic-10b"
 # string as it did before (plan 4c/4d).
 DIFFICULTY_METRICS = ("compression_ratio", "mtld", "flesch")
 
+# RATIFIED, and frozen by the plan's section 2 contract: each metric's
+# definition, provenance, and measured properties.
+#
+# Scores were NOT recomputed for this rebuild. They were inherited from an
+# earlier labeling pass and filtered to this corpus, and that inheritance was
+# verified rather than assumed: recomputing `compression_ratio` from the
+# `trim/` text reproduced the stored value on 1,718 of 1,718 documents across
+# all 8 domains, which pins the score-to-text join byte-exactly (a continuous
+# function of the whole byte string cannot match everywhere unless the text is
+# identical). That verification also identified the formula exactly.
+#
+# This dict is hashed into the run fingerprint. Its purpose is to make a
+# silent substitution impossible: if anyone rescores a metric or changes a
+# formula, the fingerprint changes, resume refuses, and runs from before and
+# after can never be pooled by accident.
+DIFFICULTY_METRIC_DEFINITIONS = {
+    "compression_ratio": {
+        # The RAW ratio, deliberately. A length-decoupled variant was built
+        # and calibrated over 13 configurations; none cleared both acceptance
+        # criteria, because they move in opposite directions -- shrinking the
+        # measurement window decouples length (512 B reached rho=+0.0021) but
+        # hands the ordering to the priming prefix (sensitivity 0.886 against
+        # a 0.99 requirement), and at that window the result correlates only
+        # +0.2915 with this metric, making it a different measurement rather
+        # than a repaired one. Removing fixed stream overhead barely moved it
+        # (0.7085 -> 0.7000 with no header at all), so the coupling is
+        # intrinsic to within-document self-redundancy, not an artifact that
+        # can be subtracted off.
+        "formula": (
+            "len(text.encode('utf-8')) / "
+            "len(zlib.compress(text.encode('utf-8'), 6))"
+        ),
+        "scope": "whole document, no preset dictionary, header not subtracted",
+        "reproduced": "1718/1718 documents, all 8 domains (|diff| < 0.01)",
+        "zlib_version_at_verification": "1.3",
+        # Compressed sizes are implementation-dependent, so the zlib version
+        # is part of the definition, not a footnote.
+        "rho_rank_vs_n_tokens": -0.7023,
+        "known_limitation": (
+            "difficulty rank is ~49% document length (rho^2 = 0.49), in the "
+            "direction 'short documents rank hard'; decile 1 is long academic "
+            "and technical documents rather than easy prose. Reported, not "
+            "corrected."
+        ),
+    },
+    "mtld": {
+        "formula": "inherited; not independently reproduced",
+        "scope": "measure of textual lexical diversity over the document",
+        "reproduced": "no -- inputs verified via the compression join above",
+        "rho_rank_vs_n_tokens": 0.0052,
+        "known_limitation": (
+            "a `factors == 0` branch returns the raw token count, and under "
+            "10 tokens a raw type count in [1, 9]; both are gated out (plan "
+            "4b) rather than imputed"
+        ),
+    },
+    "flesch": {
+        "formula": "inherited Flesch Reading Ease; not independently reproduced",
+        "scope": "per-document readability",
+        "reproduced": "no -- inputs verified via the compression join above",
+        "rho_rank_vs_n_tokens": 0.0076,
+        "known_limitation": (
+            "the syllables-per-word term uses an English vowel-group "
+            "heuristic, so non-English text and digit strings score as "
+            "spuriously easy; n_sentences is floored at 1, which the gate "
+            "targets. ~1 in 20 uniform-random decile-1 documents is affected"
+        ),
+    },
+}
+if set(DIFFICULTY_METRIC_DEFINITIONS) != set(DIFFICULTY_METRICS):
+    raise AssertionError(
+        "every difficulty metric must carry a frozen definition: "
+        f"{sorted(set(DIFFICULTY_METRICS) ^ set(DIFFICULTY_METRIC_DEFINITIONS))}"
+    )
+
 PACING_NAMES = (
     "control",
     "linear_n10",

@@ -70,7 +70,13 @@ from olmo_core.train.train_module import (
 from curriculum_data import PublishedInputError, ResolvedInput, resolve_local_parent
 from curriculum_loader import CurriculumDataLoader, ParentChunkDataset
 from curriculum_model import MODEL_IDENTITY, build_model_config
-from curriculum_pacing import CURRICULUM_STEPS, DIFFICULTY_METRICS, PACING_NAMES, TOTAL_STEPS
+from curriculum_pacing import (
+    CURRICULUM_STEPS,
+    DIFFICULTY_METRIC_DEFINITIONS,
+    DIFFICULTY_METRICS,
+    PACING_NAMES,
+    TOTAL_STEPS,
+)
 from production_contract import checkpoint as checkpoint_contract
 from production_contract import task_loss
 from production_contract import wandb_artifacts
@@ -590,6 +596,14 @@ def scientific_identity(
         # Plan 1e: DistributedSampler pads to divisibility, so bpb from a
         # 4-rank eval is not comparable to bpb from an 8-rank eval.
         "task_loss_nproc": int(task_loss_nproc),
+        # Plan section 2: the ratified definition of the difficulty metric
+        # this arm is ordered by. Recorded so a rescore or a changed formula
+        # cannot be substituted silently -- the fingerprint moves, resume
+        # refuses, and runs either side of the change are never pooled.
+        # Only this arm's metric is recorded; control carries None.
+        "difficulty_metric_definition": (
+            DIFFICULTY_METRIC_DEFINITIONS[arm.metric] if arm.metric else None
+        ),
     }
 
 
