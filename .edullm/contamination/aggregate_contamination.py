@@ -8,9 +8,10 @@ scan's own coverage gates pass.
 Three gates run before any rate is printed:
 
   1. Exactly one DONE sentinel per domain, and `sum(docs_scanned)` equal to
-     5,857,887. A silently failed array task would otherwise move that task's
+     5,911,841 -- the PRE-gate count, because the scanner reads every trim/
+     line. A silently failed array task would otherwise move that task's
      share of matches into the unmatched group and bias every rate downward
-     by its share -- larger than any effect being measured, and invisible.
+     by its share: larger than any effect being measured, and invisible.
   2. Spike rows removed by identity, with the removed count asserted equal to
      the number injected and no non-spike row removed.
   3. The row margin -- an item found anywhere in the corpus -- must be
@@ -50,7 +51,20 @@ DOMAINS = (
 )
 MIN_WIDTH = 8
 FIELD_STEM, FIELD_GOLD = 0, 1
+
+# Three different document counts, and conflating them is a real hazard.
+#
+# SCANNED_DOCS is what `trim/` actually holds and therefore what the scanner
+# enumerates: the PRE-gate corpus. CORPUS_DOCS is the post-gate corpus that
+# was tokenized and trained on, and is the denominator for every rate.
+# GATE_DROPPED is the difference -- documents present in `trim/`, scanned, and
+# then excluded from the join because they are not part of the trained corpus.
+#
+# The coverage gate has to assert the PRE-gate number or it fails on a
+# complete scan, which is how this was found.
+SCANNED_DOCS = 5_911_841
 CORPUS_DOCS = 5_857_887
+GATE_DROPPED = 53_954
 CORPUS_TOKENS = 9_979_762_663
 
 
@@ -86,11 +100,18 @@ def check_sentinels(hits_dir: Path) -> dict:
             )
         sentinels[domain] = json.loads(path.read_text(encoding="utf-8"))
 
-    total_docs = sum(s["docs_scanned"] for s in sentinels.values())
-    if total_docs != CORPUS_DOCS:
+    if SCANNED_DOCS - CORPUS_DOCS != GATE_DROPPED:
         raise RuntimeError(
-            f"scanned {total_docs} documents but the corpus holds "
-            f"{CORPUS_DOCS}; coverage is incomplete"
+            f"the three document counts do not reconcile: "
+            f"{SCANNED_DOCS} - {CORPUS_DOCS} != {GATE_DROPPED}"
+        )
+    total_docs = sum(s["docs_scanned"] for s in sentinels.values())
+    if total_docs != SCANNED_DOCS:
+        raise RuntimeError(
+            f"scanned {total_docs} documents but trim/ holds {SCANNED_DOCS}; "
+            f"coverage is incomplete. (Note this is the PRE-gate count: the "
+            f"scanner reads every trim/ line, and the {GATE_DROPPED} "
+            f"gate-dropped documents are excluded later, at the join.)"
         )
     for domain, s in sentinels.items():
         if not s.get("canary_ok"):
@@ -109,6 +130,11 @@ def build_doc_lookup(decile: dict) -> dict[int, np.ndarray]:
         mask = domain_id == d
         rows = np.flatnonzero(mask)
         docs = source_doc[mask]
+        # Sized from the gated source_doc values, which is one short of the
+        # trim/ line count for any domain whose LAST document was gate-dropped.
+        # That does not happen in the current corpus, but an IndexError here
+        # would be a confusing way to discover it, so the hit loop range-checks
+        # instead and treats an out-of-range index as gate-dropped.
         table = np.full(int(docs.max()) + 1 if docs.size else 1, -1, dtype=np.int64)
         table[docs] = rows
         lookup[d] = table
@@ -145,6 +171,7 @@ def main() -> int:
     }
     found_any: set[tuple[int, int]] = set()
     spike_rows_removed = 0
+    gate_dropped_hits = 0
     matched_span_words = 0
     matched_doc_words = 0
     matched_docs = 0
@@ -161,10 +188,14 @@ def main() -> int:
                     spike_rows_removed += 1
                     continue
                 did = domain_index[rec["domain"]]
-                row = int(lookup[did][int(rec["source_doc"])])
+                source_doc = int(rec["source_doc"])
+                table = lookup[did]
+                row = int(table[source_doc]) if source_doc < table.shape[0] else -1
                 if row < 0:
-                    # Document was dropped by the quality gate, so it is not
-                    # part of the trained corpus and must not be counted.
+                    # Present in trim/ and scanned, but dropped by the quality
+                    # gate, so it is not part of the trained corpus and must
+                    # not enter any rate.
+                    gate_dropped_hits += 1
                     continue
                 matched_docs += 1
                 matched_span_words += int(rec["matched_words"])
@@ -208,14 +239,24 @@ def main() -> int:
         "sentinels": sentinels,
         "n_items": n_items,
         "corpus": {
+            "documents_scanned": SCANNED_DOCS,
+            "documents_gate_dropped": GATE_DROPPED,
+            "matched_documents_discarded_as_gate_dropped": gate_dropped_hits,
             "documents": CORPUS_DOCS,
             "tokens": CORPUS_TOKENS,
             "matched_documents": matched_docs,
             "matched_document_rate": matched_docs / CORPUS_DOCS,
             "matched_span_words": matched_span_words,
-            "words_scanned": sum(s["words_scanned"] for s in sentinels.values()),
+            # Words in trim/, i.e. including the gate-dropped documents.
+            # Labelled rather than adjusted: the scanner reports words per
+            # domain, not per document, so kept-only words are not recoverable
+            # from its output, and the difference is 0.91% of documents.
+            "words_scanned_including_gate_dropped": sum(
+                s["words_scanned"] for s in sentinels.values()
+            ),
             "matched_span_word_rate": matched_span_words
             / max(sum(s["words_scanned"] for s in sentinels.values()), 1),
+            "gate_dropped_hit_share": gate_dropped_hits / max(matched_docs + gate_dropped_hits, 1),
             "tokens_in_matched_documents_upper_bound_rate": matched_doc_words
             / max(sum(s["words_scanned"] for s in sentinels.values()), 1),
         },

@@ -9,8 +9,10 @@ against fixtures small enough to reason about.
 The gates under test:
 
   1. Coverage -- exactly one DONE sentinel per domain, and docs_scanned
-     summing to the corpus size. A silently failed array task would move its
-     share of matches into the unmatched group.
+     summing to the PRE-gate trim/ line count, because the scanner reads
+     every line. A silently failed array task would move its share of matches
+     into the unmatched group. Asserting the post-gate count here instead
+     fails on a complete scan, which is how that bug was found.
   2. Spikes -- removed by identity, with the count asserted.
   3. Margin -- an item found anywhere must be found identically under all
      three metrics, because the three corpora hold the same documents in
@@ -89,7 +91,7 @@ def _even_split(total: int) -> dict[str, int]:
 
 def test_missing_sentinel_is_refused(tmp_path: Path) -> None:
     hits = tmp_path / "hits"
-    split = _even_split(agg.CORPUS_DOCS)
+    split = _even_split(agg.SCANNED_DOCS)
     split.pop("wiki")
     _write_sentinels(hits, split)
     with pytest.raises(RuntimeError, match="missing DONE sentinel for wiki"):
@@ -100,7 +102,7 @@ def test_short_coverage_is_refused(tmp_path: Path) -> None:
     """The failure this gate exists for: every task reports success but one
     scanned fewer documents than it should have."""
     hits = tmp_path / "hits"
-    split = _even_split(agg.CORPUS_DOCS)
+    split = _even_split(agg.SCANNED_DOCS)
     split["dclm"] -= 1000
     _write_sentinels(hits, split)
     with pytest.raises(RuntimeError, match="coverage is incomplete"):
@@ -109,7 +111,7 @@ def test_short_coverage_is_refused(tmp_path: Path) -> None:
 
 def test_unrecovered_spikes_are_refused(tmp_path: Path) -> None:
     hits = tmp_path / "hits"
-    _write_sentinels(hits, _even_split(agg.CORPUS_DOCS))
+    _write_sentinels(hits, _even_split(agg.SCANNED_DOCS))
     path = hits / "DONE_wiki.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["spikes_recovered"] = 1
@@ -120,7 +122,7 @@ def test_unrecovered_spikes_are_refused(tmp_path: Path) -> None:
 
 def test_failed_canary_is_refused(tmp_path: Path) -> None:
     hits = tmp_path / "hits"
-    _write_sentinels(hits, _even_split(agg.CORPUS_DOCS))
+    _write_sentinels(hits, _even_split(agg.SCANNED_DOCS))
     path = hits / "DONE_dclm.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["canary_ok"] = False
@@ -131,15 +133,15 @@ def test_failed_canary_is_refused(tmp_path: Path) -> None:
 
 def test_complete_coverage_passes(tmp_path: Path) -> None:
     hits = tmp_path / "hits"
-    _write_sentinels(hits, _even_split(agg.CORPUS_DOCS))
+    _write_sentinels(hits, _even_split(agg.SCANNED_DOCS))
     sentinels = agg.check_sentinels(hits)
-    assert sum(s["docs_scanned"] for s in sentinels.values()) == agg.CORPUS_DOCS
+    assert sum(s["docs_scanned"] for s in sentinels.values()) == agg.SCANNED_DOCS
 
 
 def _tiny_corpus(tmp_path: Path, hit_records: list[dict]) -> tuple[Path, Path, Path]:
     """Build a 4-document, 2-item fixture and return (hits, items, decile map)."""
     hits = tmp_path / "hits"
-    _write_sentinels(hits, _even_split(agg.CORPUS_DOCS), spikes=1)
+    _write_sentinels(hits, _even_split(agg.SCANNED_DOCS), spikes=1)
     for domain in DOMAINS:
         rows = [r for r in hit_records if r["domain"] == domain]
         # One spike row per domain, matching spikes_injected=1.
@@ -267,3 +269,46 @@ def test_spike_count_mismatch_is_refused(tmp_path: Path) -> None:
     )
     assert result.returncode != 0
     assert "spike rows" in result.stdout + result.stderr
+
+
+def test_the_three_document_counts_reconcile() -> None:
+    """trim/ holds the pre-gate corpus; the trained corpus is smaller by
+    exactly the gate's drop count. Conflating them is what broke the coverage
+    gate, so the relationship is asserted rather than assumed."""
+    assert agg.SCANNED_DOCS - agg.CORPUS_DOCS == agg.GATE_DROPPED
+    assert agg.SCANNED_DOCS == 5_911_841
+    assert agg.CORPUS_DOCS == 5_857_887
+    assert agg.GATE_DROPPED == 53_954
+
+
+def test_a_hit_on_a_gate_dropped_document_is_discarded(tmp_path: Path) -> None:
+    """A document can be present in trim/, be scanned, match an item, and
+    still not belong to the trained corpus. Counting it would inflate every
+    rate against a denominator it is not part of."""
+    records = [
+        {
+            "domain": "wiki",
+            # Beyond the 4 documents the fixture's decile map knows about.
+            "source_doc": 99,
+            "n_words": 500,
+            "matched_words": 13,
+            "items": [[0, 0]],
+        }
+    ]
+    hits, items, dm = _tiny_corpus(tmp_path, records)
+    out = tmp_path / "report.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(CONTAM / "aggregate_contamination.py"),
+            "--hits", str(hits), "--items", str(items),
+            "--decile-map", str(dm), "--out", str(out),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["corpus"]["matched_documents"] == 0
+    assert report["corpus"]["matched_documents_discarded_as_gate_dropped"] == 1
+    assert report["margin"]["hellaswag"]["stem_found"] == 0
