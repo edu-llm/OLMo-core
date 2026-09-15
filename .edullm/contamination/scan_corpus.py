@@ -41,9 +41,11 @@ from __future__ import annotations
 import argparse
 import gzip
 import hashlib
+import io
 import json
 import logging
 import pickle
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -70,6 +72,61 @@ CANARY_EXPECTED_NORM = "the quick brown fox jumps over the lazy dog s back again
 # evaluator, so it is asserted rather than discovered as a mysteriously clean
 # result.
 NORMALIZER_FINGERPRINT = "5a2a82f60fdadc20eeeb4283df1aae8b87fee422ab655e66815870feec48f6f5"
+
+
+def iter_text_lines(path: Path):
+    """Iterate decoded lines from a .gz, .zst/.zstd, or plain JSONL file.
+
+    Not every corpus uses one compressor. In the olmo-mix pool, dclm ships as
+    `.jsonl.zstd` while all six other domains are `.json.gz` -- and a
+    gzip-only reader fails on it instantly, which is how 68 of 89 array tasks
+    died on the first attempt.
+
+    zstd is streamed through the CLI because no Python zstd module is
+    installed here (no `zstandard`, `pyzstd`, or stdlib `compression.zstd`)
+    while /usr/bin/zstd is.
+
+    The exit status is enforced only when the stream was read to EOF. That
+    distinction matters in both directions: a decompressor that dies partway
+    just ends the pipe, so the caller's loop finishes normally and an
+    unchecked failure would silently truncate the scan and report a clean
+    result over a fraction of the corpus -- but a caller that stops early on
+    purpose (--limit-docs) closes the pipe and earns a SIGPIPE, which is not
+    an error. A generator gets this right for free: natural exhaustion sets
+    the flag, an early `break` closes the generator instead.
+    """
+    suffixes = "".join(path.suffixes[-2:]).lower()
+    if not suffixes.endswith((".zst", ".zstd")):
+        opener = gzip.open if suffixes.endswith(".gz") else open
+        with opener(path, "rt", encoding="utf-8") as fh:  # type: ignore[operator]
+            yield from fh
+        return
+
+    proc = subprocess.Popen(
+        ["zstd", "-dc", str(path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert proc.stdout is not None
+    stream = io.TextIOWrapper(proc.stdout, encoding="utf-8")
+    completed = False
+    try:
+        yield from stream
+        completed = True
+    finally:
+        stream.close()
+        stderr = proc.stderr.read().decode("utf-8", "replace") if proc.stderr else ""
+        if proc.stderr:
+            proc.stderr.close()
+        if not completed:
+            proc.kill()
+        code = proc.wait()
+        if completed and code != 0:
+            raise RuntimeError(
+                f"zstd exited {code} decompressing {path}; the scan read a "
+                f"truncated stream and its rate would be low by an unknown "
+                f"amount. stderr: {stderr.strip()[:400]}"
+            )
 
 
 def word_hash(word: str) -> int:
@@ -256,9 +313,14 @@ def main() -> int:
         # a per-file counter would collide across them.
         trim = Path(args.trim)
         if trim.is_dir():
-            files = sorted(p for p in trim.iterdir() if p.name.endswith((".json.gz", ".jsonl.gz")))
+            files = sorted(
+                p
+                for p in trim.iterdir()
+                if p.name.endswith((".json.gz", ".jsonl.gz", ".json.zst", ".jsonl.zst",
+                                    ".json.zstd", ".jsonl.zstd"))
+            )
             if not files:
-                raise RuntimeError(f"{trim}: no .json.gz or .jsonl.gz files")
+                raise RuntimeError(f"{trim}: no .json.gz / .jsonl.zstd shards")
         else:
             files = [trim]
         log.info("%s: %d input file(s)", args.domain, len(files))
@@ -268,51 +330,50 @@ def main() -> int:
         for path in files:
             if stop:
                 break
-            with gzip.open(path, "rt", encoding="utf-8") as fh:
-                for line in fh:
-                    if args.limit_docs and docs >= args.limit_docs:
-                        stop = True
-                        break
-                    source_doc += 1
-                    rec = json.loads(line)
-                    words = normalize(rec.get("text", "")).split()
-                    docs += 1
-                    words_total += len(words)
-                    hits = scanner.scan_words(words)
-                    if hits:
-                        # One record per matched document. (item, field) pairs are
-                        # collapsed -- a document either contains an item's text or
-                        # it does not, and counting a mirrored phrase twice would
-                        # inflate the rate. Matched word spans are unioned so the
-                        # aggregator can compute a matched-span rate rather than
-                        # only the length-biased whole-document upper bound.
-                        pairs: set[tuple[int, int]] = set()
-                        covered: set[int] = set()
-                        for row, field, width, pos in hits:
-                            pairs.add((row, field))
-                            covered.update(range(pos, pos + width))
-                        out.write(
-                            json.dumps(
-                                {
-                                    "domain": args.domain,
-                                    "source_doc": source_doc,
-                                    "n_words": len(words),
-                                    "matched_words": len(covered),
-                                    "items": sorted(pairs),
-                                }
-                            )
-                            + "\n"
+            for line in iter_text_lines(path):
+                if args.limit_docs and docs >= args.limit_docs:
+                    stop = True
+                    break
+                source_doc += 1
+                rec = json.loads(line)
+                words = normalize(rec.get("text", "")).split()
+                docs += 1
+                words_total += len(words)
+                hits = scanner.scan_words(words)
+                if hits:
+                    # One record per matched document. (item, field) pairs are
+                    # collapsed -- a document either contains an item's text or
+                    # it does not, and counting a mirrored phrase twice would
+                    # inflate the rate. Matched word spans are unioned so the
+                    # aggregator can compute a matched-span rate rather than
+                    # only the length-biased whole-document upper bound.
+                    pairs: set[tuple[int, int]] = set()
+                    covered: set[int] = set()
+                    for row, field, width, pos in hits:
+                        pairs.add((row, field))
+                        covered.update(range(pos, pos + width))
+                    out.write(
+                        json.dumps(
+                            {
+                                "domain": args.domain,
+                                "source_doc": source_doc,
+                                "n_words": len(words),
+                                "matched_words": len(covered),
+                                "items": sorted(pairs),
+                            }
                         )
-                        hit_rows += 1
-                    if docs % 200_000 == 0:
-                        log.info(
-                            "%s: %d docs, %.2fB words, %d hits, %.0fs",
-                            args.domain,
-                            docs,
-                            words_total / 1e9,
-                            hit_rows,
-                            time.time() - started,
-                        )
+                        + "\n"
+                    )
+                    hit_rows += 1
+                if docs % 200_000 == 0:
+                    log.info(
+                        "%s: %d docs, %.2fB words, %d hits, %.0fs",
+                        args.domain,
+                        docs,
+                        words_total / 1e9,
+                        hit_rows,
+                        time.time() - started,
+                    )
 
     sentinel = {
         "domain": args.domain,
