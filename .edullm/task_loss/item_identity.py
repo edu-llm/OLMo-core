@@ -191,6 +191,30 @@ def item_identity(raw_context: str, raw_gold: str) -> dict[str, str | int]:
     }
 
 
+def strip_exemplars(contexts: list[str]) -> tuple[list[str], str, list[int]]:
+    """Remove a label's few-shot exemplars in two stages.
+
+    Stage 1 removes the prefix shared by EVERY item -- the prompt header, e.g.
+    MMLU's "the following are multiple choice questions about". Stage 2 runs
+    the sliding-window strip on what remains, catching per-subject exemplar
+    blocks that no label-wide prefix can see.
+
+    Both stages are needed, and stage 2 must come second. Run stage 2 on the
+    raw contexts and its MIN_WIDTH floor is satisfied by the header alone, so
+    it also eats whatever few words a run of items happens to share after it:
+    PIQA lost "how do i", CSQA lost "where would you find", and 68% of PIQA
+    fell under the assessability floor. Applying the floor to the ADDITIONAL
+    words only confines stage 2 to genuine exemplar blocks -- MMLU stem
+    medians drop from 204-387 words to 13-34, while the other nineteen labels
+    are untouched.
+
+    :returns: (stems, label-wide preamble, extra words stripped per item).
+    """
+    after_header, preamble = strip_preamble(contexts)
+    stems, extra = strip_shared_prefixes(after_header)
+    return stems, preamble, extra
+
+
 def identities_for_label(
     contexts: list[str], golds: list[str]
 ) -> tuple[list[dict[str, str | int]], str]:

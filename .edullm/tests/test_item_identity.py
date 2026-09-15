@@ -180,3 +180,43 @@ def test_shared_prefix_stripping_preserves_input_order() -> None:
 
 def test_empty_input_is_handled() -> None:
     assert ii.strip_shared_prefixes([]) == ([], [])
+
+
+def test_two_stage_strip_leaves_short_question_openings_alone() -> None:
+    """The integration bug that cost 68% of PIQA. Running the sliding-window
+    strip on raw contexts lets the label-wide header satisfy its MIN_WIDTH
+    floor, so it also eats whatever few words a run of items shares after the
+    header -- "how do i", "where would you find". Stripping the header first
+    and applying the floor to the ADDITIONAL words only confines stage 2 to
+    genuine exemplar blocks."""
+    header = "here is the shared prompt header for every item in this label "
+    # Two families of opening, so the label-wide prefix is the header alone --
+    # which is the real situation: only some PIQA goals start "how do i".
+    contexts = [
+        header + f"how do i {verb} a thing answer"
+        for verb in ("open", "close", "paint", "clean", "move", "build", "carry")
+    ] + [
+        header + f"what is the best way to {verb} something answer"
+        for verb in ("lift", "fold", "dry", "store", "cut", "wash", "pack")
+    ]
+    stems, preamble, extra = ii.strip_exemplars(contexts)
+    assert preamble == header
+    # "how do i" (4 words) and "what is the best way to" (6) are each shared
+    # by a run of seven, but both are under the MIN_WIDTH floor.
+    assert sum(1 for x in stems if x.startswith("how do i")) == 7
+    assert sum(1 for x in stems if x.startswith("what is the best way to")) == 7
+    assert extra == [0] * 14
+
+
+def test_two_stage_strip_still_removes_per_subject_exemplar_blocks() -> None:
+    """The MMLU case must survive the fix: a long per-subject block after the
+    shared header is still stripped."""
+    header = "the following are multiple choice questions with answers about "
+    astro = "astronomy question why is mars red answer oxidized minerals question "
+    bio = "biology question what is a cell answer the basic unit of life question "
+    tails = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf"]
+    contexts = [header + astro + t for t in tails] + [header + bio + t for t in tails]
+    stems, preamble, extra = ii.strip_exemplars(contexts)
+    assert preamble.split() == header.split()
+    assert stems == tails + tails
+    assert all(count >= ii.MIN_WIDTH for count in extra)
