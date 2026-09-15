@@ -15,18 +15,30 @@ So this reads the strings out of ai2-olmo's own task objects, via the same
 `build_evaluator` path the real evaluator uses. No model weights are needed --
 `build_evaluator` takes (train_config, evaluator_config, tokenizer, device).
 
-Two independent renderings of each gold are emitted and compared:
+It turns out the ambiguity above dissolves once you look in the right place.
+Every `*_rc_5shot_bpb` label is an `OEEvalTask`, which holds pre-built oe-eval
+requests where `request["request"]["context"]` and `["continuation"]` are
+already the exact strings the model is conditioned on and scored on. There is
+nothing to assemble and nothing to guess: `doc_to_text` raises
+NotImplementedError on that class precisely because it is never used.
 
-  doc_to_continuations(doc)[doc_to_label(doc)]   the task's own string
-  tokenizer.decode(sample["continuation"])       what the model is scored on
+Two things worth knowing about the shape of that data:
 
-They should agree after normalization. Where they do not, that is the
-WinoGrande/HellaSwag ambiguity showing itself, and the disagreement is
-reported per label rather than silently resolved in favor of one.
+  - For a `*_bpb` label, `prep_examples` skips every non-target continuation
+    and forces `cont_id = 0`, so exactly one sample per doc is ever scored and
+    it is the gold. (This is also why `per_item.reduce_per_item` taking the
+    lowest `cont_id` is correct rather than merely conventional.) The full
+    request list is still on the task object, so the gold is selected here
+    explicitly by `label == idx` and the candidate count is recorded.
+  - The context carries the five shared few-shot exemplars. Indexing those
+    would make every item in a label match whenever any exemplar text appears
+    in the corpus, so the shared preamble is identified as the longest common
+    prefix across the label's contexts and stripped, leaving the item's own
+    stem.
 
 Output: gzipped JSONL, one row per (label, doc_id), with sha256 of the
-normalized context and gold so section 4b can assert the training-time
-evaluator saw the same items.
+normalized stem and gold so section 4b can assert the training-time evaluator
+saw the same items.
 """
 
 from __future__ import annotations
@@ -94,7 +106,15 @@ def build_config(tokenizer_id: str) -> TrainConfig:
     truncated, so it must match the real evaluator.
     """
     config = TrainConfig.new()
-    config.model = ModelConfig(max_sequence_length=2048)
+    config.model = ModelConfig(
+        # These must match eval_task_loss_olmo_core.make_config, or
+        # Tokenizer.from_train_config refuses with a vocab size mismatch.
+        vocab_size=100_278,
+        embedding_size=100_352,
+        eos_token_id=100_257,
+        pad_token_id=100_277,
+        max_sequence_length=2048,
+    )
     config.tokenizer = TokenizerConfig(identifier=tokenizer_id)
     config.device_eval_batch_size = 4
     config.seed = 42
@@ -102,8 +122,44 @@ def build_config(tokenizer_id: str) -> TrainConfig:
     return config
 
 
+def _common_prefix(strings: list[str]) -> str:
+    """Longest common prefix, used to strip the shared few-shot preamble.
+
+    Every item in an OLMES 5-shot label carries the same five exemplars at the
+    front of its context. Indexing that preamble would make every item in the
+    label match if any exemplar text appears in the corpus -- a false-positive
+    source the size of the whole benchmark. The exemplars are shared, so the
+    common prefix identifies them without having to parse the prompt format.
+    """
+    if not strings:
+        return ""
+    prefix = strings[0]
+    for s in strings[1:]:
+        limit = min(len(prefix), len(s))
+        i = 0
+        while i < limit and prefix[i] == s[i]:
+            i += 1
+        prefix = prefix[:i]
+        if not prefix:
+            break
+    return prefix
+
+
 def dump_label(config: TrainConfig, tokenizer: Tokenizer, label: str) -> tuple[list[dict], dict]:
-    """Return one row per doc_id for `label`, plus a per-label summary."""
+    """Return one row per doc_id for `label`, plus a per-label summary.
+
+    `OEEvalTask` holds pre-built oe-eval requests in `task.dataset`, where
+    `request["request"]["context"]` and `["continuation"]` are already the
+    strings the model is conditioned on and scored on. There is no
+    `doc_to_text` to call -- that method raises NotImplementedError on this
+    class -- and no field assembly to reverse-engineer, which is what settles
+    the WinoGrande and HellaSwag "which field is the gold" question.
+
+    For a `*_bpb` label, `prep_examples` skips every non-target continuation
+    and forces `cont_id = 0`, so exactly one sample per doc is ever scored and
+    it is the gold. Here the full request list is still available, so the gold
+    is selected explicitly by `label == idx` and the candidate count recorded.
+    """
     evaluator = build_evaluator(
         config,
         EvaluatorConfig(label=label, type=EvaluatorType.downstream, device_eval_batch_size=4),
@@ -111,73 +167,84 @@ def dump_label(config: TrainConfig, tokenizer: Tokenizer, label: str) -> tuple[l
         torch.device("cpu"),
     )
     task = evaluator.eval_loader.dataset
-    docs = task.dataset
 
-    # The gold continuation per doc, as the task itself renders it.
-    rows: list[dict] = []
-    decode_mismatch = 0
-    label_id_missing = 0
-
-    # sample["continuation"] is token ids; group samples by doc_id so the
-    # gold can be cross-checked against the tokenized form the model scores.
-    by_doc: dict[int, dict[int, list[int]]] = {}
+    # Read from task.samples rather than task.dataset. Every task type builds
+    # `samples` in prep_examples with the same schema, whereas the raw
+    # `dataset` payload differs by task (MMLU's is not a list of request
+    # dicts, and iterating it yields strings). `samples` is also the more
+    # authoritative source: `ctx` and `continuation` are the exact token
+    # sequences the model is conditioned on and scored on, already truncated
+    # from the left at model_ctx_len the way the real evaluator truncates.
+    #
+    # For a *_bpb label there is exactly one sample per doc and it is the
+    # gold, so no gold selection is needed here.
+    gold: dict[int, dict] = {}
+    duplicate_doc_ids = 0
     for sample in task.samples:
-        by_doc.setdefault(int(sample["doc_id"]), {})[int(sample["cont_id"])] = sample[
-            "continuation"
-        ]
-
-    for doc_id, doc in enumerate(docs):
-        try:
-            context = task.doc_to_text(doc)
-            conts = task.doc_to_continuations(doc)
-            gold_idx = task.doc_to_label(doc)
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"{label}: doc {doc_id} could not be rendered: {exc}") from exc
-        if not isinstance(gold_idx, int) or not 0 <= gold_idx < len(conts):
-            label_id_missing += 1
+        doc_id = int(sample["doc_id"])
+        if doc_id in gold:
+            duplicate_doc_ids += 1
             continue
-        gold = conts[gold_idx]
+        gold[doc_id] = sample
 
-        norm_ctx = normalize(str(context))
-        norm_gold = normalize(str(gold))
+    if not gold:
+        raise RuntimeError(f"{label}: task.samples is empty")
+    if duplicate_doc_ids:
+        raise RuntimeError(
+            f"{label}: {duplicate_doc_ids} docs carry more than one scored sample; "
+            f"a *_bpb label must keep only the gold continuation, so the "
+            f"one-row-per-item assumption behind the join is wrong here"
+        )
 
-        # Cross-check against the tokenized continuation actually scored.
-        decoded = None
-        cont_ids = by_doc.get(doc_id, {}).get(gold_idx)
-        if cont_ids is not None:
-            decoded = normalize(tokenizer.decode(list(cont_ids)))
-            if decoded != norm_gold:
-                decode_mismatch += 1
+    doc_ids = sorted(gold)
+    raw_contexts = [tokenizer.decode(list(gold[d]["ctx"])) for d in doc_ids]
+    n_candidates: dict[int, int] = {}
+    nonint_label = 0
+    preamble = _common_prefix(raw_contexts)
+    # Only treat it as a few-shot preamble if it is substantial; a short
+    # accidental overlap between two stems is not an exemplar block.
+    if len(preamble.split()) < 8:
+        preamble = ""
 
+    rows: list[dict] = []
+    for doc_id, raw_ctx in zip(doc_ids, raw_contexts):
+        sample = gold[doc_id]
+        raw_gold = tokenizer.decode(list(sample["continuation"]))
+        stem = raw_ctx[len(preamble) :] if preamble else raw_ctx
+
+        norm_stem = normalize(stem)
+        norm_gold = normalize(raw_gold)
         rows.append(
             {
                 "label": label,
                 "doc_id": doc_id,
-                "context": norm_ctx,
+                "stem": norm_stem,
                 "gold": norm_gold,
-                "context_sha256": sha256(norm_ctx),
+                "stem_sha256": sha256(norm_stem),
                 "gold_sha256": sha256(norm_gold),
-                "context_words": len(norm_ctx.split()),
+                "full_context_sha256": sha256(normalize(raw_ctx)),
+                "stem_words": len(norm_stem.split()),
                 "gold_words": len(norm_gold.split()),
-                "n_candidates": len(conts),
-                "gold_index": gold_idx,
-                "gold_decode_matches": decoded is None or decoded == norm_gold,
+                "n_candidates": n_candidates.get(doc_id, 0),
             }
         )
 
-    if not rows:
-        raise RuntimeError(f"{label}: produced no rows")
-
+    scored = {int(s["doc_id"]) for s in task.samples}
     summary = {
         "label": label,
         "n_docs": len(rows),
         "n_samples": len(task.samples),
-        "decode_mismatch": decode_mismatch,
-        "label_id_missing": label_id_missing,
-        "mean_context_words": sum(r["context_words"] for r in rows) / len(rows),
+        "n_scored_doc_ids": len(scored),
+        "doc_ids_match_scored": sorted(scored) == doc_ids,
+        "nonint_label": nonint_label,
+        "preamble_words": len(preamble.split()),
+        "mean_stem_words": sum(r["stem_words"] for r in rows) / len(rows),
+        "median_stem_words": sorted(r["stem_words"] for r in rows)[len(rows) // 2],
         "median_gold_words": sorted(r["gold_words"] for r in rows)[len(rows) // 2],
         "gold_under_8_words": sum(1 for r in rows if r["gold_words"] < 8),
-        "context_under_8_words": sum(1 for r in rows if r["context_words"] < 8),
+        "stem_under_8_words": sum(1 for r in rows if r["stem_words"] < 8),
+        "example_stem": rows[0]["stem"][:160],
+        "example_gold": rows[0]["gold"][:160],
     }
     return rows, summary
 
@@ -217,14 +284,14 @@ def main() -> int:
             summaries.append(summary)
             total += len(rows)
             log.info(
-                "%-46s docs=%6d samples=%7d decode_mismatch=%5d "
-                "gold<8w=%6d ctx<8w=%5d",
+                "%-46s docs=%6d samples=%7d stem_med=%4d "
+                "gold<8w=%6d stem<8w=%5d",
                 label,
                 summary["n_docs"],
                 summary["n_samples"],
-                summary["decode_mismatch"],
+                summary["median_stem_words"],
                 summary["gold_under_8_words"],
-                summary["context_under_8_words"],
+                summary["stem_under_8_words"],
             )
 
     Path(args.summary).write_text(
