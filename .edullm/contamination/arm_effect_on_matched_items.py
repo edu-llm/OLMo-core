@@ -107,20 +107,56 @@ def _mean(values: list[float]) -> float | None:
     return sum(values) / len(values) if values else None
 
 
+def _inverse_variance_macro(usable: list[tuple[str, dict]]) -> float | None:
+    """Macro over benchmarks, weighted by effective sample size.
+
+    The variance of a difference of means goes as
+    sigma^2 * (1/n_matched + 1/n_clean), so the effective sample size
+    n_eff = 1 / (1/n_matched + 1/n_clean) is the inverse-variance weight up
+    to the common sigma^2. Weighting by it is the statistically correct macro
+    and needs no minimum-count threshold: a benchmark with one matched item
+    earns a weight near 1 against another's several hundred, rather than an
+    equal vote.
+    """
+    num = 0.0
+    den = 0.0
+    for _bench, stats in usable:
+        n_m = int(stats["n_matched"])
+        n_c = int(stats["n_clean_baseline"])
+        if n_m <= 0 or n_c <= 0:
+            continue
+        weight = 1.0 / (1.0 / n_m + 1.0 / n_c)
+        num += weight * float(stats["T"])
+        den += weight
+    return num / den if den else None
+
+
 def compute_T(
     deltas: dict[tuple[str, int], float],
     rows_by_key: dict[tuple[str, int], int],
     subset: set[int],
     keys: list[tuple[str, int]],
+    clean: set[int],
 ) -> dict[str, object]:
+    """T for one subset, always against the SAME clean baseline.
+
+    `clean` is the set of items matched by nothing, and every subset is
+    compared against it. Using each subset's own complement instead puts
+    contaminated items into the comparison group: with a synthetic -0.05
+    injected on all 1,126 matched items of the real scan, the complement of
+    S_gold still held the other 942, and T came out at +0.025 -- the wrong
+    SIGN, not merely attenuated. That also destroys the nested-subset
+    monotonicity check, which cannot weaken monotonically when each
+    subset's baseline is polluted by the subsets above it.
+    """
     matched = [deltas[k] for k in keys if rows_by_key[k] in subset]
-    unmatched = [deltas[k] for k in keys if rows_by_key[k] not in subset]
-    d_m, d_u = _mean(matched), _mean(unmatched)
+    baseline = [deltas[k] for k in keys if rows_by_key[k] in clean]
+    d_m, d_u = _mean(matched), _mean(baseline)
     return {
         "n_matched": len(matched),
-        "n_unmatched": len(unmatched),
+        "n_clean_baseline": len(baseline),
         "D_matched": d_m,
-        "D_unmatched": d_u,
+        "D_clean": d_u,
         "T": None if d_m is None or d_u is None else d_m - d_u,
     }
 
@@ -130,12 +166,13 @@ def bootstrap_ci(
     rows_by_key: dict[tuple[str, int], int],
     subset: set[int],
     keys: list[tuple[str, int]],
+    clean: set[int],
     draws: int = 2000,
     seed: int = 0,
 ) -> tuple[float, float] | None:
     """Percentile CI for T, resampling items -- the unit of the statistic."""
     matched = [deltas[k] for k in keys if rows_by_key[k] in subset]
-    unmatched = [deltas[k] for k in keys if rows_by_key[k] not in subset]
+    unmatched = [deltas[k] for k in keys if rows_by_key[k] in clean]
     if not matched or not unmatched:
         return None
     rng = random.Random(seed)
@@ -202,6 +239,10 @@ def main() -> int:
         matched[int(row_str)] = {int(f) for f in fields}
 
     subsets = subset_membership(matched, n_items)
+    # Items matched by nothing. Every subset is scored against this one
+    # baseline rather than its own complement (see compute_T).
+    all_matched = subsets["S_any"]
+    clean = {rows_by_key[k] for k in deltas if rows_by_key[k] not in all_matched}
     keys = sorted(deltas)
     by_bench: dict[str, list[tuple[str, int]]] = defaultdict(list)
     for key in keys:
@@ -212,26 +253,44 @@ def main() -> int:
         subset = subsets[name]
         per_bench = {}
         for bench, bench_keys in sorted(by_bench.items()):
-            stats = compute_T(deltas, rows_by_key, subset, bench_keys)
+            stats = compute_T(deltas, rows_by_key, subset, bench_keys, clean)
             ci = bootstrap_ci(
-                deltas, rows_by_key, subset, bench_keys, args.bootstrap_draws
+                deltas, rows_by_key, subset, bench_keys, clean, args.bootstrap_draws
             )
             stats["ci95"] = list(ci) if ci else None
             per_bench[bench] = stats
-        macro = [s["T"] for s in per_bench.values() if s["T"] is not None]
+        usable = [
+            (b, s) for b, s in per_bench.items() if s["T"] is not None
+        ]
+        macro_flat = _mean([s["T"] for _b, s in usable])
+        macro_weighted = _inverse_variance_macro(usable)
         out[name] = {
             "subset_size": len(subset),
+            "clean_baseline_size": len(clean),
             "per_benchmark": per_bench,
-            "macro_T": _mean(macro),
-            "benchmarks_contributing": len(macro),
+            # PRIMARY. Weighted by effective sample size, which is
+            # inverse-variance weighting for a difference of means.
+            "macro_T": macro_weighted,
+            # Reported for comparison only. Equal weighting is right for the
+            # ENDPOINT, where every benchmark has thousands of items, and
+            # wrong for T, whose matched subset per benchmark ranges from 0
+            # to several hundred. On a synthetic -0.05 injected across the
+            # real scan's 1,126 matched items, socialiqa contributed a single
+            # item at T=+0.69 -- pure noise at full weight -- and flipped the
+            # flat macro to +0.024 while the weighted one read -0.059.
+            "macro_T_equal_weight": macro_flat,
+            "benchmarks_contributing": len(usable),
+            "smallest_matched_count": min((s["n_matched"] for _b, s in usable), default=0),
         }
         log.info(
-            "%-16s |S|=%6d  macro T=%s  over %d/%d benchmarks",
+            "%-16s |S|=%6d  macro T=%s (equal-weight %s)  over %d/%d benchmarks, min n=%d",
             name,
             len(subset),
-            "n/a" if not macro else f"{_mean(macro):+.6f}",
-            len(macro),
+            "n/a" if macro_weighted is None else f"{macro_weighted:+.6f}",
+            "n/a" if macro_flat is None else f"{macro_flat:+.6f}",
+            len(usable),
             len(per_bench),
+            min((s["n_matched"] for _b, s in usable), default=0),
         )
 
     Path(args.out).write_text(json.dumps(out, indent=1), encoding="utf-8")
