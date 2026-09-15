@@ -178,6 +178,8 @@ def main() -> int:
     docs_by_decile: dict[str, list[int]] = {m: [0] * 10 for m in METRICS}
     # per-item document counts, for the duplicate-concentration report
     docs_per_item: dict[int, int] = defaultdict(int)
+    # item row -> set of field ids it matched on, built in one pass
+    fields_by_row: dict[int, set[int]] = defaultdict(set)
 
     for domain in DOMAINS:
         path = hits_dir / f"hits_{domain}.jsonl.gz"
@@ -204,6 +206,7 @@ def main() -> int:
                 for pair in pairs:
                     found_any.add(pair)
                     docs_per_item[pair[0]] += 1
+                    fields_by_row[pair[0]].add(pair[1])
                 for metric in METRICS:
                     d0 = int(decile[f"start_decile_{metric}"][row])
                     d1 = int(decile[f"end_decile_{metric}"][row])
@@ -262,6 +265,10 @@ def main() -> int:
         },
         "margin": {},
         "cross_tab": {},
+        # The item-level matched set with field provenance. This is what
+        # section 5.3 conditions on: without it there is no way to split the
+        # endpoint into matched and unmatched items.
+        "matched_rows": {str(row): sorted(fields) for row, fields in sorted(fields_by_row.items())},
         "duplication": {
             "items_found": len({r for (r, _f) in found_any}),
             "max_documents_for_one_item": max(docs_per_item.values(), default=0),
