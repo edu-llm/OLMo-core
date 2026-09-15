@@ -101,3 +101,82 @@ def test_hashes_are_computed_on_normalized_text_not_raw() -> None:
     b = ii.item_identity("the cat sat", "on the mat")
     assert a["stem_sha256"] == b["stem_sha256"]
     assert a["gold_sha256"] == b["gold_sha256"]
+
+
+def test_subject_wise_exemplars_are_stripped() -> None:
+    """MMLU draws its five exemplars per SUBJECT, so no prefix is shared by
+    every item in the label and `strip_preamble` finds nothing -- leaving ~95%
+    of each stem as exemplar text. Sorting puts same-subject items adjacent,
+    so the prefix shared across a run of them is exactly the exemplar block.
+
+    Each subject needs more than MIN_SHARERS items, which is the realistic
+    case: MMLU subjects hold dozens.
+    """
+    astro = "astronomy question why is mars red answer oxidized minerals question "
+    bio = "biology question what is a cell answer the basic unit of life question "
+    tails = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf"]
+    contexts = [astro + t for t in tails] + [bio + t for t in tails]
+    # The label-wide prefix is empty, so the old path strips nothing.
+    unchanged, preamble = ii.strip_preamble(contexts)
+    assert preamble == ""
+    assert unchanged == contexts
+
+    stems, stripped = ii.strip_shared_prefixes(contexts)
+    assert stems == tails + tails
+    assert all(count >= ii.MIN_WIDTH for count in stripped)
+
+
+def test_an_overlap_shared_by_too_few_items_is_left_alone() -> None:
+    """Two questions opening with the same words is not an exemplar block.
+    Stripping it would shorten the stem the index is built from, and could
+    push an item under the assessability floor, for no gain."""
+    shared = "these are nine words shared by exactly two items here "
+    contexts = [shared + "one", shared + "two"] + [
+        f"wholly distinct context number {i} with no shared opening at all"
+        for i in range(8)
+    ]
+    stems, stripped = ii.strip_shared_prefixes(contexts)
+    assert stems[0] == contexts[0]
+    assert stems[1] == contexts[1]
+    assert stripped[0] == 0 and stripped[1] == 0
+
+
+def test_shared_prefix_cuts_land_on_word_boundaries() -> None:
+    """A cut inside a word would leave a fragment that matches nothing and
+    silently shorten the indexed stem."""
+    shared = "the first eight words here are common to all of these items "
+    contexts = [shared + "alpha beta", shared + "alphabet soup"] + [
+        shared + f"other tail {i}" for i in range(6)
+    ]
+    stems, _ = ii.strip_shared_prefixes(contexts)
+    # "alpha" is a prefix of "alphabet", so a naive character LCP would cut
+    # mid-word and leave "bet soup".
+    assert stems[0] == "alpha beta"
+    assert stems[1] == "alphabet soup"
+
+
+def test_a_short_shared_run_is_not_stripped() -> None:
+    contexts = ["what is the capital of France", "what is the capital of Peru"]
+    stems, stripped = ii.strip_shared_prefixes(contexts)
+    assert stems == contexts
+    assert stripped == [0, 0]
+
+
+def test_a_lone_item_keeps_its_whole_context() -> None:
+    contexts = ["a single item has no neighbour to share a prefix with"]
+    stems, stripped = ii.strip_shared_prefixes(contexts)
+    assert stems == contexts
+    assert stripped == [0]
+
+
+def test_shared_prefix_stripping_preserves_input_order() -> None:
+    shared = "these nine words are shared between the adjacent items here "
+    contexts = ["zulu unique tail"] + [shared + str(i) for i in range(7)]
+    stems, _ = ii.strip_shared_prefixes(contexts)
+    assert stems[0] == "zulu unique tail"
+    assert stems[1] == "0"
+    assert stems[7] == "6"
+
+
+def test_empty_input_is_handled() -> None:
+    assert ii.strip_shared_prefixes([]) == ([], [])

@@ -78,10 +78,10 @@ if str(_EDULLM) not in sys.path:
     sys.path.insert(0, str(_EDULLM))
 from production_contract.task_loss import TASK_LOSS_RAW_LABELS  # noqa: E402
 from task_loss.item_identity import (  # noqa: E402
-    common_prefix,
     normalize,
     normalizer_fingerprint,
     sha256,
+    strip_shared_prefixes,
 )
 
 log = logging.getLogger("dump_eval_items")
@@ -167,19 +167,20 @@ def dump_label(config: TrainConfig, tokenizer: Tokenizer, label: str) -> tuple[l
     raw_contexts = [tokenizer.decode(list(gold[d]["ctx"])) for d in doc_ids]
     n_candidates: dict[int, int] = {}
     nonint_label = 0
-    preamble = common_prefix(raw_contexts)
-    # Only treat it as a few-shot preamble if it is substantial; a short
-    # accidental overlap between two stems is not an exemplar block.
-    if len(preamble.split()) < 8:
-        preamble = ""
+    # Strip the shared few-shot exemplar block. This is per-run rather than
+    # per-label because MMLU draws its exemplars per SUBJECT: a single
+    # label-wide common prefix finds almost nothing there, and ~95% of each
+    # MMLU stem would be exemplar text indexed as if it were the item.
+    normalized_contexts = [normalize(c) for c in raw_contexts]
+    stems_list, stripped_words = strip_shared_prefixes(normalized_contexts)
 
     rows: list[dict] = []
-    for doc_id, raw_ctx in zip(doc_ids, raw_contexts):
+    for position, (doc_id, raw_ctx) in enumerate(zip(doc_ids, raw_contexts)):
         sample = gold[doc_id]
         raw_gold = tokenizer.decode(list(sample["continuation"]))
-        stem = raw_ctx[len(preamble) :] if preamble else raw_ctx
+        stem = stems_list[position]
 
-        norm_stem = normalize(stem)
+        norm_stem = stem
         norm_gold = normalize(raw_gold)
         rows.append(
             {
@@ -204,7 +205,10 @@ def dump_label(config: TrainConfig, tokenizer: Tokenizer, label: str) -> tuple[l
         "n_scored_doc_ids": len(scored),
         "doc_ids_match_scored": sorted(scored) == doc_ids,
         "nonint_label": nonint_label,
-        "preamble_words": len(preamble.split()),
+        "preamble_words_median": sorted(stripped_words)[len(stripped_words) // 2],
+        "preamble_words_min": min(stripped_words),
+        "preamble_words_max": max(stripped_words),
+        "items_with_no_preamble_stripped": sum(1 for x in stripped_words if x == 0),
         "mean_stem_words": sum(r["stem_words"] for r in rows) / len(rows),
         "median_stem_words": sorted(r["stem_words"] for r in rows)[len(rows) // 2],
         "median_gold_words": sorted(r["gold_words"] for r in rows)[len(rows) // 2],
