@@ -6,10 +6,15 @@ evaluator scores. Re-deriving them from HuggingFace fields does not work:
 ai2-olmo *assembles* what it scores. HellaSwag's context is activity label +
 ctx_a + capitalized ctx_b; MMLU's four subject groups are cut from the `all`
 config so positional order is ai2-olmo's rather than HF row order; and for
-WinoGrande it is genuinely unclear whether the scored continuation is the
+WinoGrande it was an open question whether the scored continuation is the
 option word or the sentence suffix. An index built from the wrong strings
 produces a plausible-looking contamination rate for an item set the endpoint
 does not use.
+
+Measured answer, for the record: WinoGrande's scored continuation is the
+sentence SUFFIX. "sarah was a much better surgeon than maria so maria" ->
+"always got the easier cases". BoolQ's gold really is yes/no, and its stem
+carries the 98-word passage.
 
 So this reads the strings out of ai2-olmo's own task objects, via the same
 `build_evaluator` path the real evaluator uses. No model weights are needed --
@@ -45,15 +50,11 @@ from __future__ import annotations
 
 import argparse
 import gzip
-import hashlib
 import json
 import logging
 import os
-import re
 import sys
-import unicodedata
 from pathlib import Path
-from typing import Any
 
 os.environ.setdefault("WANDB_DISABLED", "1")
 os.environ.setdefault("WANDB_MODE", "disabled")
@@ -76,25 +77,14 @@ _EDULLM = Path(__file__).resolve().parents[1]
 if str(_EDULLM) not in sys.path:
     sys.path.insert(0, str(_EDULLM))
 from production_contract.task_loss import TASK_LOSS_RAW_LABELS  # noqa: E402
+from task_loss.item_identity import (  # noqa: E402
+    common_prefix,
+    normalize,
+    normalizer_fingerprint,
+    sha256,
+)
 
 log = logging.getLogger("dump_eval_items")
-
-# Must match the scanner's normalizer exactly. Hashed into the run
-# fingerprint, per v4 section 6.2 -- a divergence here silently zeroes the
-# whole measurement, so it lives in one place.
-_PUNCT = re.compile(r"[^\w\s]", flags=re.UNICODE)
-_WS = re.compile(r"\s+")
-
-
-def normalize(text: str) -> str:
-    text = unicodedata.normalize("NFKC", text)
-    text = text.lower()
-    text = _PUNCT.sub(" ", text)
-    return _WS.sub(" ", text).strip()
-
-
-def sha256(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def build_config(tokenizer_id: str) -> TrainConfig:
@@ -120,29 +110,6 @@ def build_config(tokenizer_id: str) -> TrainConfig:
     config.seed = 42
     config.evaluators = []
     return config
-
-
-def _common_prefix(strings: list[str]) -> str:
-    """Longest common prefix, used to strip the shared few-shot preamble.
-
-    Every item in an OLMES 5-shot label carries the same five exemplars at the
-    front of its context. Indexing that preamble would make every item in the
-    label match if any exemplar text appears in the corpus -- a false-positive
-    source the size of the whole benchmark. The exemplars are shared, so the
-    common prefix identifies them without having to parse the prompt format.
-    """
-    if not strings:
-        return ""
-    prefix = strings[0]
-    for s in strings[1:]:
-        limit = min(len(prefix), len(s))
-        i = 0
-        while i < limit and prefix[i] == s[i]:
-            i += 1
-        prefix = prefix[:i]
-        if not prefix:
-            break
-    return prefix
 
 
 def dump_label(config: TrainConfig, tokenizer: Tokenizer, label: str) -> tuple[list[dict], dict]:
@@ -200,7 +167,7 @@ def dump_label(config: TrainConfig, tokenizer: Tokenizer, label: str) -> tuple[l
     raw_contexts = [tokenizer.decode(list(gold[d]["ctx"])) for d in doc_ids]
     n_candidates: dict[int, int] = {}
     nonint_label = 0
-    preamble = _common_prefix(raw_contexts)
+    preamble = common_prefix(raw_contexts)
     # Only treat it as a few-shot preamble if it is substantial; a short
     # accidental overlap between two stems is not an exemplar block.
     if len(preamble.split()) < 8:
@@ -295,7 +262,15 @@ def main() -> int:
             )
 
     Path(args.summary).write_text(
-        json.dumps({"total_rows": total, "labels": summaries}, indent=1), encoding="utf-8"
+        json.dumps(
+            {
+                "total_rows": total,
+                "normalizer_fingerprint": normalizer_fingerprint(),
+                "labels": summaries,
+            },
+            indent=1,
+        ),
+        encoding="utf-8",
     )
     log.info("")
     log.info("total rows: %d across %d labels", total, len(summaries))

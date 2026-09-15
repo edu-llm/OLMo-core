@@ -39,6 +39,8 @@ _EDULLM = Path(__file__).resolve().parents[1]
 if str(_EDULLM) not in sys.path:
     sys.path.insert(0, str(_EDULLM))
 from curriculum_model import build_model_config  # noqa: E402
+from task_loss.item_identity import normalize as normalize_item_text  # noqa: E402
+from task_loss.item_identity import normalizer_fingerprint, sha256  # noqa: E402
 from task_loss.per_item import reduce_per_item, write_per_item  # noqa: E402
 
 try:
@@ -280,6 +282,56 @@ def capture_per_item(evaluator: Any) -> list[tuple[int, int, float]]:
     return rows
 
 
+ITEM_IDENTITY_SAMPLE = 64
+
+
+def capture_item_identity(evaluator: Any, tokenizer: Tokenizer) -> dict[str, Any]:
+    """Record which items this label scored, so hits can be joined to bpb.
+
+    `doc_id` is a bare positional integer from ai2-olmo's dataset
+    construction, and nothing else in the per-item output identifies the item.
+    Without this, a contamination hit cannot be tied to a per-item bpb number,
+    and an off-by-one join produces entirely plausible numbers.
+
+    Two things are recorded:
+
+      - `n_docs` and a digest of the full sorted doc_id list, which catches a
+        different item set or a reordering.
+      - normalized-text hashes for `ITEM_IDENTITY_SAMPLE` deterministically
+        spaced doc_ids, which catches the case where the doc_ids line up but
+        the underlying oe-eval request text has changed.
+
+    Only a sample is hashed because decoding every context at every permanent
+    checkpoint would cost real time for no extra safety -- a text change that
+    spares 64 spread-out items is not a realistic failure. The hash is of the
+    FULL context rather than the preamble-stripped stem: stripping needs every
+    context in the label decoded to find the shared prefix, and the section 4a
+    dump records `full_context_sha256` for exactly this comparison.
+    """
+    task = evaluator.eval_loader.dataset
+    by_doc: dict[int, Any] = {}
+    for sample in task.samples:
+        by_doc.setdefault(int(sample["doc_id"]), sample)
+    doc_ids = sorted(by_doc)
+    stride = max(1, len(doc_ids) // ITEM_IDENTITY_SAMPLE)
+    sampled: dict[str, dict[str, str]] = {}
+    for doc_id in doc_ids[::stride][:ITEM_IDENTITY_SAMPLE]:
+        sample = by_doc[doc_id]
+        sampled[str(doc_id)] = {
+            "full_context_sha256": sha256(
+                normalize_item_text(tokenizer.decode(list(sample["ctx"])))
+            ),
+            "gold_sha256": sha256(
+                normalize_item_text(tokenizer.decode(list(sample["continuation"])))
+            ),
+        }
+    return {
+        "n_docs": len(doc_ids),
+        "doc_id_digest": sha256(",".join(str(d) for d in doc_ids)),
+        "sampled": sampled,
+    }
+
+
 def evaluate_label(
     model: torch.nn.Module,
     config: TrainConfig,
@@ -287,7 +339,7 @@ def evaluate_label(
     device: torch.device,
     label: str,
     batch_size: int,
-) -> tuple[float, list[tuple[int, int, float]]]:
+) -> tuple[float, list[tuple[int, int, float]], dict[str, Any]]:
     evaluator = build_evaluator(
         config,
         EvaluatorConfig(
@@ -310,10 +362,11 @@ def evaluate_label(
     # local shard anyway -- but reading first keeps the intent explicit and
     # avoids depending on that restore behaviour.
     per_item = capture_per_item(evaluator)
+    identity = capture_item_identity(evaluator, tokenizer)
     metrics = evaluator.compute_metrics()
     if len(metrics) != 1:
         raise RuntimeError(f"{label} returned unexpected metrics: {sorted(metrics)}")
-    return float(next(iter(metrics.values()))), per_item
+    return float(next(iter(metrics.values()))), per_item, identity
 
 
 def run_suite(
@@ -371,19 +424,32 @@ def run_suite(
         label: evaluate_label(model, config, tokenizer, device, label, batch_size)
         for label in TASK_LABELS
     }
-    gathered: list[dict[str, tuple[float, list]] | None] = [None] * world_size
+    gathered: list[dict[str, tuple[float, list, dict]] | None] = [None] * world_size
     dist.all_gather_object(gathered, local_results)
     merged: dict[str, float] = {}
     # The scalar is already synced across ranks by compute_metrics(), so
     # overwriting is fine for it -- but the per-item rows are rank-local
     # shards and must be concatenated, not overwritten.
     raw_rows: dict[str, list[tuple[int, int, float]]] = {label: [] for label in TASK_LABELS}
+    # The identity record describes the dataset, which every rank holds in
+    # full, so it is rank-invariant and overwriting is correct. Disagreement
+    # between ranks would mean the ranks built different datasets, which is
+    # asserted rather than assumed.
+    identities: dict[str, dict[str, Any]] = {}
     for result in gathered:
         if not result:
             continue
-        for label, (value, rows) in result.items():
+        for label, (value, rows, identity) in result.items():
             merged[label] = float(value)
             raw_rows[label].extend(tuple(row) for row in rows)
+            previous = identities.setdefault(label, identity)
+            if previous != identity:
+                raise RuntimeError(
+                    f"{label}: ranks disagree about the scored item set "
+                    f"(doc_id digest {previous['doc_id_digest'][:12]} vs "
+                    f"{identity['doc_id_digest'][:12]}); per-item rows from "
+                    f"different ranks would describe different items"
+                )
     missing = [label for label in TASK_LABELS if label not in merged]
     if missing:
         raise RuntimeError(f"incomplete 20-label suite; first missing label: {missing[0]}")
@@ -403,6 +469,9 @@ def run_suite(
         "per_item_file": per_item_path.name,
         "per_item_rows": sum(len(values) for values in per_item.values()),
         "sampler_padding_duplicates": padding_duplicates,
+        # Section 4b: what makes a contamination hit joinable to a bpb number.
+        "item_identity": identities,
+        "normalizer_fingerprint": normalizer_fingerprint(),
     }
     if rank == 0:
         output.parent.mkdir(parents=True, exist_ok=True)

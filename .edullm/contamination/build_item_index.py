@@ -37,7 +37,6 @@ import gzip
 import json
 import logging
 import pickle
-import sys
 from collections import defaultdict
 from pathlib import Path
 

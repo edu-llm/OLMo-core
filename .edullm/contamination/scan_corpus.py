@@ -44,34 +44,32 @@ import hashlib
 import json
 import logging
 import pickle
-import re
 import sys
 import time
-import unicodedata
 from pathlib import Path
 
-log = logging.getLogger("scan_corpus")
+_EDULLM = Path(__file__).resolve().parents[1]
+if str(_EDULLM) not in sys.path:
+    sys.path.insert(0, str(_EDULLM))
+from task_loss.item_identity import normalize, normalizer_fingerprint  # noqa: E402
 
-_PUNCT = re.compile(r"[^\w\s]", flags=re.UNICODE)
-_WS = re.compile(r"\s+")
+log = logging.getLogger("scan_corpus")
 
 MOD = (1 << 61) - 1
 BASE = 1_000_003
 
-# A fixed raw document and the normalized 8-word keys it must produce. If the
-# normalizer changes, this fails loudly instead of the scan quietly finding
-# nothing.
+# A fixed RAW document and the normalized form it must produce. Raw on purpose:
+# a canary made of already-normalized text is normalizer-independent, so a
+# normalizer change between index build and scan yields zero hits and a
+# passing canary.
 CANARY_RAW = "The Quick--Brown FOX, jumps over  the lazy dog's back; again and AGAIN!"
-CANARY_EXPECTED_NORM = (
-    "the quick brown fox jumps over the lazy dog s back again and again"
-)
+CANARY_EXPECTED_NORM = "the quick brown fox jumps over the lazy dog s back again and again"
 
-
-def normalize(text: str) -> str:
-    text = unicodedata.normalize("NFKC", text)
-    text = text.lower()
-    text = _PUNCT.sub(" ", text)
-    return _WS.sub(" ", text).strip()
+# Pinned behavioral fingerprint of the shared normalizer. Any change to
+# normalization invalidates the index and every hash recorded by the
+# evaluator, so it is asserted rather than discovered as a mysteriously clean
+# result.
+NORMALIZER_FINGERPRINT = "5a2a82f60fdadc20eeeb4283df1aae8b87fee422ab655e66815870feec48f6f5"
 
 
 def word_hash(word: str) -> int:
@@ -170,6 +168,13 @@ def main() -> int:
     parser.add_argument("--limit-docs", type=int, default=0, help="debug: stop early")
     args = parser.parse_args()
 
+    if normalizer_fingerprint() != NORMALIZER_FINGERPRINT:
+        raise RuntimeError(
+            "normalizer fingerprint mismatch: "
+            f"{normalizer_fingerprint()} != {NORMALIZER_FINGERPRINT}. The "
+            "index was built under a different normalizer, so the scan would "
+            "find nothing and look clean."
+        )
     if normalize(CANARY_RAW) != CANARY_EXPECTED_NORM:
         raise RuntimeError(
             "canary failed: the normalizer does not produce the expected "
