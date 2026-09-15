@@ -722,6 +722,12 @@ def run_worker(args: argparse.Namespace) -> None:
         work_dir=cache_dir / "loader",
         parent_identity=parent.identity,
         order_identity=None if arm.pacing == "control" else {"kind": "identity_permutation"},
+        # Only a run that explicitly asked to be short is allowed to be short.
+        # The pre-campaign smoke does this on purpose: it stays in production
+        # mode so the real W&B and task-loss paths are exercised, and shortens
+        # itself with --length-tokens. Its reduced total_steps is recorded in
+        # the run fingerprint, so it can never be pooled with a full arm.
+        allow_short_run=args.length_tokens is not None,
         pad_token_id=100_277,
         vocab_size=100_352,
         dp_world_size=world_size,

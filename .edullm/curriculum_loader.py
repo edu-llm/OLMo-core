@@ -22,6 +22,7 @@ from __future__ import annotations
 import bisect
 import hashlib
 import json
+import logging
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -32,8 +33,17 @@ import torch
 from olmo_core.data import TextDataLoaderBase
 from olmo_core.data.collator import DataCollator
 
-from curriculum_pacing import DIFFICULTY_METRICS, PACING_NAMES, TOTAL_STEPS, pool_for_step
+from curriculum_pacing import (
+    CURRICULUM_STEPS,
+    DIFFICULTY_METRICS,
+    N_BUCKETS,
+    PACING_NAMES,
+    TOTAL_STEPS,
+    pool_for_step,
+)
 from curriculum_sampling import PoolSampler
+
+log = logging.getLogger(__name__)
 
 STATE_SCHEMA = 3
 
@@ -143,6 +153,7 @@ class CurriculumDataLoader(TextDataLoaderBase):
         dp_world_size: int = 1,
         dp_rank: int = 0,
         fs_local_rank: int | None = None,
+        allow_short_run: bool = False,
     ) -> None:
         if pacing not in PACING_NAMES:
             raise ValueError(f"unknown pacing {pacing!r}")
@@ -154,10 +165,36 @@ class CurriculumDataLoader(TextDataLoaderBase):
                 raise ValueError(f"unknown difficulty metric {difficulty_metric!r}")
             if ranked_chunk_indices is None or order_identity is None:
                 raise CurriculumDataError("curriculum pacing requires an order and identity")
+        # The freeze contract's point is that a production arm cannot silently
+        # differ in length, so an undeclared mismatch is refused. A run that
+        # declares itself short (the pre-campaign smoke, via --length-tokens)
+        # is allowed: its shortened `total_steps` is recorded in the run
+        # fingerprint, so it is already distinguishable from a full-length arm
+        # and can never be pooled with one.
+        #
+        # Note what a short run does NOT do: the pacing schedules are defined
+        # against TOTAL_STEPS, so stopping early TRUNCATES the curriculum
+        # rather than compressing it. A 250-step run reaches decile 2 and no
+        # further. That is fine for exercising the plumbing and meaningless as
+        # an arm, which is exactly why it must stay unpoolable.
         if int(total_steps) != TOTAL_STEPS:
-            raise CurriculumDataError(
-                f"total_steps must equal curriculum_pacing.TOTAL_STEPS ({TOTAL_STEPS}), "
-                f"got {total_steps}"
+            if not allow_short_run:
+                raise CurriculumDataError(
+                    f"total_steps must equal curriculum_pacing.TOTAL_STEPS ({TOTAL_STEPS}), "
+                    f"got {total_steps}"
+                )
+            if not 0 < int(total_steps) < TOTAL_STEPS:
+                raise CurriculumDataError(
+                    f"a short run must satisfy 0 < total_steps < {TOTAL_STEPS}, "
+                    f"got {total_steps}"
+                )
+            log.warning(
+                "SHORT RUN: %d of %d steps. The curriculum is truncated, not "
+                "compressed -- this run reaches decile %d and is not poolable "
+                "with a full-length arm.",
+                int(total_steps),
+                TOTAL_STEPS,
+                min(N_BUCKETS, 1 + (int(total_steps) * N_BUCKETS) // CURRICULUM_STEPS),
             )
         if global_batch_size % dataset.sequence_length:
             raise CurriculumDataError("global batch must be divisible by sequence length")
