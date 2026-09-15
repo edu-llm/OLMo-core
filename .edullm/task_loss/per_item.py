@@ -14,6 +14,37 @@ import gzip
 import json
 from pathlib import Path
 
+# Relative tolerance when checking the recomputed mean against the harness's
+# own scalar. These two numbers are computed in DIFFERENT PRECISIONS and can
+# never agree exactly: `ICLMetric` accumulates in float32 torch tensors, while
+# this module sums Python floats in float64.
+#
+# Calibrated against a real run rather than guessed. The first execution of
+# this code (smoke 1725050, step 0) produced
+# 3.6052631578947367 against 3.6052494049072266 on arc_easy_val -- a relative
+# difference of 3.8e-6 over 570 items, which the previous 1e-6 tolerance
+# rejected. float32 has eps ~1.19e-7, so pairwise summation over n items
+# drifts on the order of log2(n) * eps, i.e. ~1e-6 at n=570 and ~1.7e-6 at
+# n=15,573 (MMLU) -- with the constant factor easily pushing that an order of
+# magnitude higher.
+#
+# Note which side is the less accurate one. The per-item values are exact --
+# each is a float32 read out of the metric and widened -- so the drift lives
+# entirely in the harness's float32 SUMMATION, and this module's float64 mean
+# is the better estimate of the two. The guard is therefore checking
+# agreement, not correcting toward the harness.
+#
+# The size of the discrepancy is itself diagnostic: one missing or extra item
+# would move a 570-item mean by ~5e-3, three orders of magnitude above what
+# was seen, so the observed drift cannot be a capture error.
+#
+# 1e-4 leaves one to two orders of magnitude of headroom above float noise
+# while still catching every failure this guard exists for. Those are all
+# gross: reading the wrong label's rows, keeping distractors instead of the
+# gold continuation, or a truncated capture each move the mean by percent,
+# not by parts per million.
+AGGREGATE_REL_TOL = 1e-4
+
 
 def reduce_per_item(
     raw_rows: dict[str, list[tuple[int, int, float]]],
@@ -55,11 +86,14 @@ def reduce_per_item(
             raise RuntimeError(f"{label}: captured no per-item rows")
         recomputed = sum(gold.values()) / len(gold)
         expected = float(labels[label])
-        if abs(recomputed - expected) > 1e-6 * max(1.0, abs(expected)):
+        if abs(recomputed - expected) > AGGREGATE_REL_TOL * max(1.0, abs(expected)):
             raise RuntimeError(
                 f"{label}: per-item capture does not reproduce the reported "
-                f"aggregate ({recomputed!r} vs {expected!r}); the captured values "
-                f"do not correspond to the endpoint and must not be used"
+                f"aggregate ({recomputed!r} vs {expected!r}, relative difference "
+                f"{abs(recomputed - expected) / max(1.0, abs(expected)):.2e} "
+                f"exceeds {AGGREGATE_REL_TOL:.0e} over {len(gold)} items); the "
+                f"captured values do not correspond to the endpoint and must "
+                f"not be used"
             )
         per_item[label] = gold
     return per_item, padding_duplicates

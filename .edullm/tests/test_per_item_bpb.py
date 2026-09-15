@@ -93,10 +93,60 @@ def test_round_trip_through_the_written_file(tmp_path: Path) -> None:
     assert recovered == per_item
 
 
-def test_float_tolerance_is_relative_not_absolute() -> None:
-    """Accumulating ~40k floats reorders differently across ranks, so the
-    guard must tolerate float noise while still catching a real mismatch."""
-    rows = {"lbl": [(i, 0, 1.0) for i in range(1000)]}
-    pi.reduce_per_item(rows, {"lbl": 1.0 + 1e-9})
-    with pytest.raises(RuntimeError):
-        pi.reduce_per_item(rows, {"lbl": 1.01})
+def test_tolerance_accommodates_the_harness_float32_mean() -> None:
+    """The exact case that failed on this code's first real execution.
+
+    `ICLMetric` accumulates in float32 while this module sums in float64, so
+    the two means cannot agree exactly. Smoke 1725050 step 0 produced
+    3.6052631578947367 against the harness's 3.6052494049072266 on
+    arc_easy_val -- a relative difference of 3.8e-6 over 570 items, which the
+    original 1e-6 tolerance rejected and which was pure summation precision.
+
+    The original version of this test used 1e-9 noise, four orders of
+    magnitude below float32 reality, so it asserted the right property at a
+    magnitude that could never catch the real failure.
+    """
+    mean = 3.6052631578947367
+    harness = 3.6052494049072266
+    rows = {"lbl": [(i, 0, mean) for i in range(570)]}
+    captured, _ = pi.reduce_per_item(rows, {"lbl": harness})
+    assert len(captured["lbl"]) == 570
+    assert abs(mean - harness) / mean == pytest.approx(3.8e-6, rel=0.1)
+
+
+@pytest.mark.parametrize("rel", [1e-7, 1e-6, 1e-5, 5e-5])
+def test_float32_scale_noise_is_tolerated(rel: float) -> None:
+    """Anything up to the documented tolerance must pass, at MMLU's item
+    count as well as a small benchmark's."""
+    rows = {"lbl": [(i, 0, 2.0) for i in range(15_573)]}
+    pi.reduce_per_item(rows, {"lbl": 2.0 * (1 + rel)})
+
+
+def test_a_real_capture_defect_still_fails() -> None:
+    """The tolerance must stay far below every failure mode it guards. Each
+    of these is a defect the guard exists to catch, and each moves the mean
+    by percent rather than parts per million."""
+    # A truncated capture: half the items missing, and the survivors skewed.
+    rows = {"lbl": [(i, 0, 1.0) for i in range(500)]}
+    with pytest.raises(RuntimeError, match="does not reproduce"):
+        pi.reduce_per_item(rows, {"lbl": 1.5})
+    # Distractors kept instead of the gold continuation.
+    rows = {"lbl": [(i, 0, 9.0) for i in range(500)]}
+    with pytest.raises(RuntimeError, match="does not reproduce"):
+        pi.reduce_per_item(rows, {"lbl": 1.0})
+    # Just above the tolerance: 1e-3 relative is still refused.
+    rows = {"lbl": [(i, 0, 2.0) for i in range(1000)]}
+    with pytest.raises(RuntimeError, match="does not reproduce"):
+        pi.reduce_per_item(rows, {"lbl": 2.0 * (1 + 1e-3)})
+
+
+def test_the_error_names_the_relative_difference_and_item_count() -> None:
+    """Diagnosing the first failure took reading four log files. The message
+    should carry what is needed to tell precision drift from a real defect."""
+    rows = {"lbl": [(i, 0, 2.0) for i in range(42)]}
+    with pytest.raises(RuntimeError) as excinfo:
+        pi.reduce_per_item(rows, {"lbl": 3.0})
+    message = str(excinfo.value)
+    assert "relative difference" in message
+    assert "over 42 items" in message
+    assert "1e-04" in message
