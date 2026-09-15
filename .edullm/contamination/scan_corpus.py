@@ -233,7 +233,22 @@ def main() -> int:
     )
     parser.add_argument("--spikes", type=int, default=64)
     parser.add_argument("--limit-docs", type=int, default=0, help="debug: stop early")
+    parser.add_argument(
+        "--stride",
+        type=int,
+        default=1,
+        help="scan every Nth document; with --offset, splits one huge file "
+        "across array tasks without needing byte ranges into a compressed "
+        "stream. Every task still decompresses the whole file, which is "
+        "cheap next to the scan, and coverage is exact because the strides "
+        "partition the documents.",
+    )
+    parser.add_argument("--offset", type=int, default=0, help="stride offset, 0..stride-1")
     args = parser.parse_args()
+    if args.stride < 1:
+        raise SystemExit("--stride must be >= 1")
+    if not 0 <= args.offset < args.stride:
+        raise SystemExit(f"--offset must be in 0..{args.stride - 1}")
 
     if normalizer_fingerprint() != NORMALIZER_FINGERPRINT:
         raise RuntimeError(
@@ -335,6 +350,8 @@ def main() -> int:
                     stop = True
                     break
                 source_doc += 1
+                if args.stride > 1 and source_doc % args.stride != args.offset:
+                    continue
                 rec = json.loads(line)
                 words = normalize(rec.get("text", "")).split()
                 docs += 1
@@ -378,6 +395,8 @@ def main() -> int:
     sentinel = {
         "domain": args.domain,
         "shard": args.shard,
+        "stride": args.stride,
+        "offset": args.offset,
         "docs_scanned": docs,
         "words_scanned": words_total,
         "hit_rows": hit_rows,
