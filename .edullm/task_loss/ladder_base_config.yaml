@@ -29,7 +29,15 @@ model:
   n_heads: 16
   n_layers: 16
   mlp_ratio: 4
-  vocab_size: 100352
+  # vocab_size is the TOKENIZER's real token count; embedding_size is that
+  # padded to a multiple of 128 for the embedding matrix. They are not the
+  # same number, and setting vocab_size to the padded value made
+  # Tokenizer.from_train_config refuse with "vocab size mismatch between
+  # config and tokenizer" -- which is checked as an exact equality against
+  # the loaded tokenizer. That killed the first task-loss evaluation the
+  # smoke ever reached (job 1724845). It affects startup only: nothing in
+  # this eval path slices logits by vocab_size, so no bpb was ever wrong.
+  vocab_size: 100278
   embedding_size: 100352
   eos_token_id: 100257
   pad_token_id: 100277
