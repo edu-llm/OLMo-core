@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -167,28 +166,46 @@ def main() -> int:
             )
 
     # --- $HOME containment (plan 10b) ----------------------------------
-    cache_root = arm / "cache"
-    home = Path(os.path.expanduser("~"))
-    leaked = [
-        candidate
-        for candidate in (
-            home / ".cache" / "huggingface",
-            home / ".cache" / "wandb",
-            home / ".triton",
-            home / ".nv" / "ComputeCache",
-            home / ".config" / "wandb",
-        )
-        if candidate.exists()
-    ]
+    # This used to assert that none of ~/.cache/huggingface, ~/.cache/wandb,
+    # ~/.triton, ~/.nv/ComputeCache or ~/.config/wandb exists. That check was
+    # not run-attributable and could never pass here: all five already exist
+    # from earlier campaigns (17G in $HOME), and the account runs other jobs
+    # concurrently, so neither existence nor mtime says anything about what
+    # THIS run did. It would have reported a failure the run could not cause
+    # and could not fix.
+    #
+    # The authoritative guard is in common.sh, and it is attributable: it
+    # readlink -f's every redirected variable and exits 1 if any resolves
+    # under $HOME, so a leak kills the job before it trains. What is left to
+    # verify here is the positive half -- that the redirects actually took
+    # effect rather than merely being exported -- which shows up as the
+    # targets existing and being populated on scratch.
+    # Note the two distinct cache locations, which are easy to conflate:
+    # launch.sh sources common.sh ONCE at the top, so every redirected
+    # variable (HF_HOME, TRITON_CACHE_DIR, WANDB_DIR, ...) is scoped to the
+    # RUN directory, while the entrypoint is separately handed
+    # `--cache-dir <arm>/cache` for its own resolved-metric and loader state.
     check(
-        not leaked,
-        "nothing leaked into $HOME",
-        f"present: {[str(p) for p in leaked]} -- the redirects in common.sh did not take",
+        (arm / "cache").is_dir(),
+        "the arm wrote its own cache on scratch",
+        f"{arm / 'cache'} missing; --cache-dir was not honoured",
+    )
+
+    # Existence alone proves little here: common.sh mkdir -p's all fourteen
+    # redirect targets before anything runs. What proves the redirect took
+    # EFFECT is content appearing in them, and the tokenizer is the one
+    # download every run must make.
+    hub = run_dir / "cache" / "huggingface" / "hub"
+    models = sorted(p.name for p in hub.glob("models--*")) if hub.is_dir() else []
+    check(
+        bool(models),
+        "the eval's HF downloads landed on scratch, not in $HOME",
+        f"no models--* under {hub}; HF_HOME was exported but not used",
     )
     check(
-        cache_root.is_dir(),
-        "the run wrote its caches on scratch",
-        f"{cache_root} missing; redirection may not have been sourced",
+        (run_dir / "wandb").is_dir(),
+        "wandb wrote its run directory on scratch",
+        f"{run_dir / 'wandb'} missing; WANDB_DIR did not take effect",
     )
 
     # --- the hard-stop/resume cycle actually ran (plan 6a machinery) ---
