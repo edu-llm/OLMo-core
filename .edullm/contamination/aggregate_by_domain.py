@@ -67,20 +67,44 @@ def main() -> int:
     domains = [d.strip() for d in args.domains.split(",") if d.strip()]
     hits_dir = Path(args.hits)
 
+    # A domain may be split across array tasks, one per text shard, so its
+    # sentinels are DONE_<domain>.json or DONE_<domain>__<shard>.json. Every
+    # shard is summed; a domain with no sentinel at all is refused, because
+    # aggregating then would move its matches into the unmatched group.
     sentinels: dict[str, dict] = {}
+    shard_files: dict[str, list[Path]] = {}
     for domain in domains:
-        path = hits_dir / f"DONE_{domain}.json"
-        if not path.exists():
+        found_paths = sorted(hits_dir.glob(f"DONE_{domain}.json")) + sorted(
+            hits_dir.glob(f"DONE_{domain}__*.json")
+        )
+        if not found_paths:
             raise RuntimeError(
                 f"missing DONE sentinel for {domain}: the scan did not complete, "
                 f"and aggregating now would under-report every rate"
             )
-        s = json.loads(path.read_text(encoding="utf-8"))
-        if not s.get("canary_ok"):
-            raise RuntimeError(f"{domain}: canary did not pass")
-        if s["spikes_recovered"] != s["spikes_injected"]:
-            raise RuntimeError(f"{domain}: positive controls not fully recovered")
-        sentinels[domain] = s
+        docs = words = hits = spikes_in = spikes_out = 0
+        for path in found_paths:
+            one = json.loads(path.read_text(encoding="utf-8"))
+            if not one.get("canary_ok"):
+                raise RuntimeError(f"{path.name}: canary did not pass")
+            if one["spikes_recovered"] != one["spikes_injected"]:
+                raise RuntimeError(f"{path.name}: positive controls not fully recovered")
+            docs += one["docs_scanned"]
+            words += one["words_scanned"]
+            hits += one["hit_rows"]
+            spikes_in += one["spikes_injected"]
+            spikes_out += one["spikes_recovered"]
+        sentinels[domain] = {
+            "n_shards": len(found_paths),
+            "docs_scanned": docs,
+            "words_scanned": words,
+            "hit_rows": hits,
+            "spikes_injected": spikes_in,
+            "spikes_recovered": spikes_out,
+            "canary_ok": True,
+        }
+        stems = [p.name[len("DONE_") : -len(".json")] for p in found_paths]
+        shard_files[domain] = [hits_dir / f"hits_{stem}.jsonl.gz" for stem in stems]
 
     benches, stem_ok, gold_ok = load_items(Path(args.items))
     bench_rows: dict[str, list[int]] = defaultdict(list)
@@ -102,17 +126,20 @@ def main() -> int:
     spikes = 0
 
     for domain in domains:
-        with gzip.open(hits_dir / f"hits_{domain}.jsonl.gz", "rt", encoding="utf-8") as fh:
-            for line in fh:
-                rec = json.loads(line)
-                if rec["domain"] == "__spike__":
-                    spikes += 1
-                    continue
-                matched_docs[domain] += 1
-                span_words[domain] += int(rec["matched_words"])
-                doc_words[domain] += int(rec["n_words"])
-                for item_row, field in rec["items"]:
-                    found[domain][int(field)].add(int(item_row))
+        for path in shard_files[domain]:
+            if not path.exists():
+                raise RuntimeError(f"{path.name}: sentinel present but hits file missing")
+            with gzip.open(path, "rt", encoding="utf-8") as fh:
+                for line in fh:
+                    rec = json.loads(line)
+                    if rec["domain"] == "__spike__":
+                        spikes += 1
+                        continue
+                    matched_docs[domain] += 1
+                    span_words[domain] += int(rec["matched_words"])
+                    doc_words[domain] += int(rec["n_words"])
+                    for item_row, field in rec["items"]:
+                        found[domain][int(field)].add(int(item_row))
 
     expected_spikes = sum(s["spikes_injected"] for s in sentinels.values())
     if spikes != expected_spikes:

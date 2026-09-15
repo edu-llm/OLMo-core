@@ -168,6 +168,12 @@ def main() -> int:
     )
     parser.add_argument("--domain", required=True)
     parser.add_argument("--out-dir", required=True)
+    parser.add_argument(
+        "--shard",
+        default="",
+        help="suffix for the output filenames when one domain is split "
+        "across array tasks; --domain stays the true domain",
+    )
     parser.add_argument("--spikes", type=int, default=64)
     parser.add_argument("--limit-docs", type=int, default=0, help="debug: stop early")
     args = parser.parse_args()
@@ -204,7 +210,8 @@ def main() -> int:
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    hits_path = out_dir / f"hits_{args.domain}.jsonl.gz"
+    suffix = f"__{args.shard}" if args.shard else ""
+    hits_path = out_dir / f"hits_{args.domain}{suffix}.jsonl.gz"
 
     docs = 0
     words_total = 0
@@ -309,6 +316,7 @@ def main() -> int:
 
     sentinel = {
         "domain": args.domain,
+        "shard": args.shard,
         "docs_scanned": docs,
         "words_scanned": words_total,
         "hit_rows": hit_rows,
@@ -317,7 +325,7 @@ def main() -> int:
         "elapsed_s": round(time.time() - started, 1),
         "canary_ok": True,
     }
-    (out_dir / f"DONE_{args.domain}.json").write_text(
+    (out_dir / f"DONE_{args.domain}{suffix}.json").write_text(
         json.dumps(sentinel, indent=1), encoding="utf-8"
     )
     log.info("%s DONE %s", args.domain, json.dumps(sentinel))
