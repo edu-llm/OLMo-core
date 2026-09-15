@@ -161,7 +161,11 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser()
     parser.add_argument("--index", required=True)
-    parser.add_argument("--trim", required=True, help="<domain>-trimmed.json.gz")
+    parser.add_argument(
+        "--trim",
+        required=True,
+        help="one .json.gz file, or a directory of them read in sorted order",
+    )
     parser.add_argument("--domain", required=True)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--spikes", type=int, default=64)
@@ -238,49 +242,70 @@ def main() -> int:
             )
         log.info("%s: all %d positive controls recovered", args.domain, len(spikes))
 
-        with gzip.open(args.trim, "rt", encoding="utf-8") as fh:
-            for source_doc, line in enumerate(fh):
-                if args.limit_docs and docs >= args.limit_docs:
-                    break
-                rec = json.loads(line)
-                words = normalize(rec.get("text", "")).split()
-                docs += 1
-                words_total += len(words)
-                hits = scanner.scan_words(words)
-                if hits:
-                    # One record per matched document. (item, field) pairs are
-                    # collapsed -- a document either contains an item's text or
-                    # it does not, and counting a mirrored phrase twice would
-                    # inflate the rate. Matched word spans are unioned so the
-                    # aggregator can compute a matched-span rate rather than
-                    # only the length-biased whole-document upper bound.
-                    pairs: set[tuple[int, int]] = set()
-                    covered: set[int] = set()
-                    for row, field, width, pos in hits:
-                        pairs.add((row, field))
-                        covered.update(range(pos, pos + width))
-                    out.write(
-                        json.dumps(
-                            {
-                                "domain": args.domain,
-                                "source_doc": source_doc,
-                                "n_words": len(words),
-                                "matched_words": len(covered),
-                                "items": sorted(pairs),
-                            }
+        # --trim may be one file or a directory. A directory is read as every
+        # *.json*.gz inside it, in sorted order, with `source_doc` running
+        # continuously across files: the curriculum corpus keeps one file per
+        # domain, but the reference datasets split a domain over up to 38, and
+        # a per-file counter would collide across them.
+        trim = Path(args.trim)
+        if trim.is_dir():
+            files = sorted(p for p in trim.iterdir() if p.name.endswith((".json.gz", ".jsonl.gz")))
+            if not files:
+                raise RuntimeError(f"{trim}: no .json.gz or .jsonl.gz files")
+        else:
+            files = [trim]
+        log.info("%s: %d input file(s)", args.domain, len(files))
+
+        source_doc = -1
+        stop = False
+        for path in files:
+            if stop:
+                break
+            with gzip.open(path, "rt", encoding="utf-8") as fh:
+                for line in fh:
+                    if args.limit_docs and docs >= args.limit_docs:
+                        stop = True
+                        break
+                    source_doc += 1
+                    rec = json.loads(line)
+                    words = normalize(rec.get("text", "")).split()
+                    docs += 1
+                    words_total += len(words)
+                    hits = scanner.scan_words(words)
+                    if hits:
+                        # One record per matched document. (item, field) pairs are
+                        # collapsed -- a document either contains an item's text or
+                        # it does not, and counting a mirrored phrase twice would
+                        # inflate the rate. Matched word spans are unioned so the
+                        # aggregator can compute a matched-span rate rather than
+                        # only the length-biased whole-document upper bound.
+                        pairs: set[tuple[int, int]] = set()
+                        covered: set[int] = set()
+                        for row, field, width, pos in hits:
+                            pairs.add((row, field))
+                            covered.update(range(pos, pos + width))
+                        out.write(
+                            json.dumps(
+                                {
+                                    "domain": args.domain,
+                                    "source_doc": source_doc,
+                                    "n_words": len(words),
+                                    "matched_words": len(covered),
+                                    "items": sorted(pairs),
+                                }
+                            )
+                            + "\n"
                         )
-                        + "\n"
-                    )
-                    hit_rows += 1
-                if docs % 200_000 == 0:
-                    log.info(
-                        "%s: %d docs, %.2fB words, %d hits, %.0fs",
-                        args.domain,
-                        docs,
-                        words_total / 1e9,
-                        hit_rows,
-                        time.time() - started,
-                    )
+                        hit_rows += 1
+                    if docs % 200_000 == 0:
+                        log.info(
+                            "%s: %d docs, %.2fB words, %d hits, %.0fs",
+                            args.domain,
+                            docs,
+                            words_total / 1e9,
+                            hit_rows,
+                            time.time() - started,
+                        )
 
     sentinel = {
         "domain": args.domain,
