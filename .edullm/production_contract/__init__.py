@@ -7,6 +7,7 @@ from .checkpoint import (
     finalize_permanent_checkpoint,
     is_permanent_checkpoint_step,
     permanent_checkpoint_steps,
+    prune_superseded_checkpoints,
     read_last_durable_step,
     write_run_fingerprint,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "is_permanent_checkpoint_step",
     "pause_eval_reload_distributed",
     "permanent_checkpoint_steps",
+    "prune_superseded_checkpoints",
     "production_online",
     "read_last_durable_step",
     "require_wandb_for_production",

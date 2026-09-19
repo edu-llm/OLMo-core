@@ -14,8 +14,10 @@
     "attention": {"dataset_release": "pretrain/regmix-10b", "wandb_project": "token-selection"},
     "blade": {
       "dataset_release": "pretrain/regmix-10b",
-      "secondary_dataset_release": "pretrain/refhq-regmix-5p5b",
+      "secondary_dataset_release": "pretrain/refhq-instruct",
+      "secondary_dataset_version": "v3",
       "wandb_project": "token-selection"
-    }
+    },
+    "random-control": {"dataset_release": "pretrain/regmix-10b", "wandb_project": "token-selection"}
   }
 }

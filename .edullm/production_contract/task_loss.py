@@ -16,8 +16,11 @@ from typing import Any, Callable, Mapping, Optional, Protocol, TypeVar
 from .checkpoint import (
     DEFAULT_CHECKPOINT_INTERVAL,
     CheckpointContractError,
+    assert_checkpoint_materialized,
     finalize_permanent_checkpoint,
     is_permanent_checkpoint_step,
+    prune_superseded_checkpoints,
+    read_last_durable_step,
 )
 
 log = logging.getLogger(__name__)
@@ -368,7 +371,32 @@ class TaskLossEvalCallback(Callback if _HAS_OLMO_CORE else object):  # type: ign
         if durable_step < int(step):
             return False
         validate_task_loss_result(self.results_dir / f"step{int(step)}_task_loss.json")
+        prune_superseded_checkpoints(self.save_folder, self.progress_dir)
         return True
+
+    def _latest_pending_checkpoint_step(self) -> Optional[int]:
+        durable = (
+            read_last_durable_step(self.progress_dir)
+            if self.progress_dir is not None
+            else None
+        )
+        durable_step = -1 if durable is None else int(durable["last_durable_step"])
+        pending: list[int] = []
+        for candidate in self.save_folder.glob("step*"):
+            suffix = candidate.name.removeprefix("step")
+            if not suffix.isdigit():
+                continue
+            step = int(suffix)
+            if step <= durable_step or not is_permanent_checkpoint_step(
+                step, self.total_steps, self.interval
+            ):
+                continue
+            try:
+                assert_checkpoint_materialized(candidate)
+            except CheckpointContractError:
+                continue
+            pending.append(step)
+        return max(pending) if pending else None
 
     def _maybe_finalize(self, step: int) -> None:
         step = int(step)
@@ -419,7 +447,11 @@ class TaskLossEvalCallback(Callback if _HAS_OLMO_CORE else object):  # type: ign
             dist.barrier()
 
     def pre_train(self) -> None:  # pragma: no cover - requires an OLMo trainer.
-        self._maybe_finalize(0)
+        pending_step = self._latest_pending_checkpoint_step()
+        if pending_step is not None:
+            self._maybe_finalize(pending_step)
+        else:
+            self._maybe_finalize(int(self.step))
 
     def post_step(self) -> None:  # pragma: no cover
         self._maybe_finalize(int(self.step))

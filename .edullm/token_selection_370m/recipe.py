@@ -18,7 +18,14 @@ from .arms import ArmSpec
 
 SEQUENCE_LENGTH = 2048
 GLOBAL_BATCH_TOKENS = 4_194_304
-RANK_MICROBATCH_TOKENS = 32_768
+# 32,768 (16 sequences/microbatch) was sized for flash-attention on A100/H100.
+# FarmShare has no working flash-attn build, so training runs on the much
+# heavier `torch` SDPA backend (materializes full attention score matrices),
+# which OOMs an L40S (44GB) at this microbatch size. The override only
+# changes how many gradient-accumulation chunks make up the same global
+# batch -- not batch size, LR, seeds, or anything else scientific -- so it's
+# safe to shrink per-hardware without touching the AWS/flash-attention path.
+RANK_MICROBATCH_TOKENS = int(os.environ.get("EDULLM_RANK_MICROBATCH_TOKENS", 32_768))
 PEAK_LR = 4e-4
 WARMUP_STEPS = 24
 ALPHA_F = 0.1
@@ -150,7 +157,9 @@ def _loader(
     return NumpyDataLoaderConfig(
         global_batch_size=GLOBAL_BATCH_TOKENS,
         seed=seed,
-        num_workers=int(os.environ.get("EDULLM_NUM_WORKERS", "4")),
+        num_workers=int(os.environ.get("EDULLM_NUM_WORKERS", "8")),
+        num_threads=int(os.environ.get("EDULLM_NUM_THREADS", "8")),
+        prefetch_factor=int(os.environ.get("EDULLM_PREFETCH_FACTOR", "4")),
     ).build(dataset, dp_process_group=process_group)
 
 
@@ -312,6 +321,14 @@ def build_trainer(
     trainer_config = (
         TrainerConfig(
             save_folder=str(save_folder),
+            # TrainerConfig.work_dir defaults to save_folder itself when left
+            # unset, which lands WandBCallback's local run dir
+            # (work_dir/"wandb") inside the checkpoint tree. W&B's local
+            # file-watcher then sweeps up the actual optimizer-state shard
+            # files as run files to sync/cache, ballooning local disk usage
+            # by tens of GB per checkpoint. Keep it in the separate work_dir
+            # this recipe already threads through to the data loader.
+            work_dir=str(work_dir),
             load_strategy=LoadStrategy.if_available if resume else LoadStrategy.never,
             load_trainer_state=resume,
             load_optim_state=resume,

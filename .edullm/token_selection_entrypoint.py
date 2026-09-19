@@ -122,6 +122,15 @@ def assert_production_runtime(expected_world_size: int = PRODUCTION_WORLD_SIZE) 
 
 def main() -> None:
     args = parser().parse_args()
+    # torchrun's own argparse (parse_args, not parse_known_args) scans the
+    # entire argv for abbreviation matches against its own flags regardless of
+    # position, and "--local" ambiguously matches its --local-addr /
+    # --local-ranks-filter, so torchrun refuses to start if it's passed on the
+    # launcher command line. Callers that need --local under torchrun (e.g.
+    # FarmShare launches at a GPU count other than the locked production
+    # topology) should set EDULLM_LOCAL=1 instead.
+    if os.environ.get("EDULLM_LOCAL") == "1":
+        args.local = True
     arm = get_arm(args.arm)
     save_folder = args.save_folder or Path(
         os.environ.get("EDULLM_CHECKPOINT_DIR", f"/tmp/checkpoints/{arm.run_id}")

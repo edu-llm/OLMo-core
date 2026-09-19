@@ -5,6 +5,7 @@ set -Eeuo pipefail
 REPO_DIR="${REPO_DIR:-/workspace/OLMo-core}"
 RUN_ROOT="${RUN_ROOT:-/workspace/edullm-runs/token-selection}"
 INPUT_MANIFEST="${EDULLM_RUNPOD_INPUT_MANIFEST:-/workspace/edullm-inputs/token-selection/ready.json}"
+MIDDLE_PPL_MASK_MANIFEST="${EDULLM_MIDDLE_PPL_MASK_MANIFEST:-/workspace/edullm-inputs/token-selection/middle-ppl-masks/manifest.json}"
 WANDB_ENV_FILE="${WANDB_ENV_FILE:-/workspace/wandb-session.env}"
 ARM="${ARM:-attention}"
 RECOVERY_MODE="${RECOVERY_MODE:-fresh}"
@@ -28,9 +29,32 @@ fi
 [[ -n "${WANDB_API_KEY:-}" ]] || { echo "WANDB_API_KEY is required" >&2; exit 2; }
 
 export PYTHONPATH="${REPO_DIR}/src:${REPO_DIR}/.edullm"
+export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-lo}"
+export TORCH_GLOO_LAZY_INIT="${TORCH_GLOO_LAZY_INIT:-1}"
+# Keep batches prefetched on high-CPU RunPod hosts. These remain overridable
+# for smaller machines and are consumed by token_selection_370m.recipe._loader.
+export EDULLM_NUM_WORKERS="${EDULLM_NUM_WORKERS:-8}"
+export EDULLM_NUM_THREADS="${EDULLM_NUM_THREADS:-8}"
+export EDULLM_PREFETCH_FACTOR="${EDULLM_PREFETCH_FACTOR:-4}"
+# RunPod's FUSE-backed /workspace can return EIO from fdatasync after a
+# successful write. Preserve flush/close/atomic rename and checkpoint validation.
+export OLMO_CORE_CHECKPOINT_SKIP_FDATASYNC="${OLMO_CORE_CHECKPOINT_SKIP_FDATASYNC:-1}"
 ARM="${ARM}" python3 -c \
   'import os; from token_selection_370m.arms import get_arm; get_arm(os.environ["ARM"])' \
   >/dev/null
+if [[ "${ARM}" == "middle-ppl-token" && ! -f "${MIDDLE_PPL_MASK_MANIFEST}" ]]; then
+  echo "precomputing static middle-PPL masks before training" >&2
+  python3 -m torch.distributed.run --standalone --nproc-per-node=8 \
+    "${REPO_DIR}/.edullm/runpod/precompute_middle_ppl_masks.py" \
+    --input-manifest "${INPUT_MANIFEST}"
+fi
+if [[ "${ARM}" == "middle-ppl-token" ]]; then
+  [[ -f "${MIDDLE_PPL_MASK_MANIFEST}" ]] || {
+    echo "middle-PPL precompute did not publish ${MIDDLE_PPL_MASK_MANIFEST}" >&2
+    exit 2
+  }
+  export EDULLM_MIDDLE_PPL_MASK_MANIFEST="${MIDDLE_PPL_MASK_MANIFEST}"
+fi
 arm_root="${RUN_ROOT}/${ARM}"
 mkdir -p "${arm_root}"/{checkpoints,work,progress}
 identity_file="${arm_root}/run.env"
@@ -77,7 +101,10 @@ esac
 source "${identity_file}"
 
 export EDULLM_RUNPOD_INPUT_MANIFEST="${INPUT_MANIFEST}"
-export EDULLM_WANDB_PROJECT="token-selection-${ARM}"
+export EDULLM_WANDB_PROJECT="$(
+  ARM="${ARM}" python3 -c \
+    'import os; from token_selection_370m.arms import get_arm; print(get_arm(os.environ["ARM"]).wandb_project)'
+)"
 export WANDB_PROJECT="${EDULLM_WANDB_PROJECT}"
 export WANDB_MODE=online
 

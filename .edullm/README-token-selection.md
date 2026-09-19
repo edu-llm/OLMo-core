@@ -1,6 +1,6 @@
 # Token-selection 370M branch
 
-This branch contains the five approved RegMix token-selection arms outside
+This branch contains the six approved RegMix token-selection arms outside
 `src/olmo_core`. Every arm uses the same `TransformerConfig.olmo2_370M` recipe:
 `d_model=1024`, 16 layers/heads, reordered norm, gated-SiLU 4096 MLP, full
 attention, QK-RMSNorm, RoPE theta 500,000, Dolma2 vocabulary 100,352, sequence
@@ -14,28 +14,48 @@ Production launches use `.edullm/platform/entrypoint.sh`, which runs the selecte
 arm under one-node `torch.distributed.run --nproc_per_node=8`. The Python
 entrypoint independently refuses a production topology other than eight local
 CUDA ranks before constructing the model. The accepted arms are `rho-1`,
-`rel-ema-exp`, `middle-ppl-token`, `attention`, and `blade`.
+`rel-ema-exp`, `rel-ema-refhq`, `middle-ppl-token`, `attention`, `blade`, and
+`random-control`.
+
+`random-control` is a non-scientific baseline: it masks a uniformly random 60%
+of tokens per row from the loss (`selection_weights(method="random", ...)` in
+`token_selection_370m/selection.py`) instead of selecting by any score, using
+the same keep rate, model, hyperparameters, dataset, and checkpoint/eval
+contract as every other arm. It needs no reference checkpoints and does not
+appear in the immutable submission-order table below because it isn't part of
+the AWS platform matrix; see `.edullm/farmshare/README.md` for its FarmShare
+launch (4 × L40S rather than the shared 8-GPU profile).
 
 The immutable handoff/submission order is:
 
 | index | exact arm ID | method and experimental delta | train input |
 |---:|---|---|---|
 | 0 | `rho-1` | top 60% `L_curr-L_ref` | `pretrain/regmix-10b` |
-| 1 | `rel-ema-exp` | top 60% `L_hist-L_curr`; zero-seeded bias-corrected EMA, alpha `1-exp(-t/300)` | `pretrain/regmix-10b` |
-| 2 | `middle-ppl-token` | middle 60% tokens by late RefHQ loss | `pretrain/regmix-10b` |
-| 3 | `attention` | top 60% causal attention-received tokens | `pretrain/regmix-10b` |
-| 4 | `blade` | top 60% dynamic excess after proxy warmup | `pretrain/regmix-10b` plus RefHQ stream |
+| 1 | `rel-ema-exp` | top 60% `L_curr-L_hist`; zero-seeded bias-corrected EMA, alpha `1-exp(-t/300)` | `pretrain/regmix-10b` |
+| 2 | `rel-ema-refhq` | top 60% `L_curr-L_hist`; EMA seeded from Instruct-v3 step 940, constant alpha `0.9985` | `pretrain/regmix-10b` |
+| 3 | `middle-ppl-token` | middle 60% tokens by late RefHQ loss | `pretrain/regmix-10b` |
+| 4 | `attention` | top 60% causal attention-received tokens | `pretrain/regmix-10b` |
+| 5 | `blade` | top 60% `L_proxy-L_ref` after proxy warmup | `pretrain/regmix-10b` plus pinned `pretrain/refhq-instruct/v3` stream |
+
+The two REL arms use the same model/data seeds, corpus order, batching, native
+per-token CE/Z-loss path, HSDP policy, optimizer, checkpoint/eval callbacks, and
+selection implementation. Their only scientific differences are EMA initialization
+and alpha: `rel-ema-exp` starts bias-corrected from zero with
+`alpha(t)=1-exp(-t/300)`, while `rel-ema-refhq` initializes history from
+`s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-instruct-v3/checkpoints/step940/`
+and uses constant `alpha=0.9985`. Distinct arm/run IDs and reference hashes are
+provenance fields only.
 
 These indices are the matrix and sequential-submission mapping; the production
 CLI takes the exact string with `--arm`, not a numeric index. Every arm routes
-to W&B project `token-selection-<arm ID>`.
+to W&B project `token-selection`.
 
 Inputs are resolved by pinned dataset version through the seal-verifying
 `edullm_data.read` path. Checkpoint identity binds the resolved version, dtype,
-row count, and SHA-256 of the ordered object list; BLADE binds its RefHQ stream
+row count, and SHA-256 of the ordered object list; BLADE binds its Instruct stream
 independently. Outputs stay on runtime scratch and synchronously upload to W&B.
 The image packages the exact 20-label task-loss evaluator and production runs
-evaluate it on eight ranks in project `token-selection-<arm>`.
+evaluate it on eight ranks in project `token-selection`.
 
 Bootstrap files are local, immutable exports:
 
@@ -46,19 +66,20 @@ Bootstrap files are local, immutable exports:
   never changes token weights.
 
 The methodology source is
-`edu-llm/edullm@b435cbe9c352399fc4ab54b310f36d28f6c9746f`,
+`edu-llm/edullm-p1@b435cbe9c352399fc4ab54b310f36d28f6c9746f`,
 `experiments/token-selection/README.md`. Main RegMix production uses platform
 release `regmix-10b-v1` and requires the resolved `EDULLM_DATASET_VERSION`, not
 `latest`. RefHQ contracts are immutable: step1315 for RHO-1 and the
 materialized average of steps1000/1125/1315 for middle-PPL token. Each
 materialized reference file is SHA-256
-hashed into the run identity. The BLADE RefHQ corpus must likewise resolve a
-sealed, pinned version. Resume rejects a changed
+hashed into the run identity. BLADE's reference-update corpus is the sealed,
+pinned `pretrain/refhq-instruct/v3`. Resume rejects a changed
 dataset object order, dtype, row count, reference hash, BLADE secondary stream,
 arm, or hyperparameter. There are no pilot outputs in this family.
 
-BLADE uses RegMix for the proxy and penalty stream plus a separately resolved
-RefHQ stream. It locks warmup 500, syncs 500/875/1250/1625/2000, `tau=375`,
+BLADE uses RegMix for the proxy and penalty stream plus the separately resolved
+Instruct-v3 stream for HQ/reference updates. It locks warmup 500, syncs
+500/875/1250/1625/2000, `tau=375`,
 `K=75`, gamma 0.6, and lambda 1.0. OLMo checkpoints carry proxy/optimizer state;
 the callback checkpoint state carries the post-K dynamic reference and optimizer,
 both secondary stream cursors, last sync, and completed step. Resume therefore
@@ -74,7 +95,7 @@ or publish data/models.
 ## Checkpoints, evaluator, resume, and artifacts
 
 The permanent ladder is step 0, every 125 steps, and true final, omitting the
-last grid point when it is less than 125 steps before final. All five arms use
+last grid point when it is less than 125 steps before final. All six arms use
 9.9B RegMix tokens / 2,360 steps.
 Every save is permanent. The branch-local evaluator is self-contained:
 `.edullm/eval_task_loss_olmo_core.py` carries the exact 20

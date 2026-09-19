@@ -316,7 +316,10 @@ class RemoteFileSystemWriter(dist_cp.StorageWriter):
 
             # Ensure all data is written to disk.
             tmp_file.flush()
-            if hasattr(os, "fdatasync"):  # only available on linux
+            skip_fdatasync = os.environ.get(
+                "OLMO_CORE_CHECKPOINT_SKIP_FDATASYNC", ""
+            ).lower() in {"1", "true", "yes"}
+            if hasattr(os, "fdatasync") and not skip_fdatasync:  # only available on linux
                 os.fdatasync(tmp_file)  # type: ignore
             tmp_file.close()
 

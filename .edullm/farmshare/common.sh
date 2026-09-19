@@ -21,6 +21,31 @@ export TOKENIZERS_PARALLELISM=false
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
 
+# recipe.py's RANK_MICROBATCH_TOKENS=32768 (16 sequences/microbatch) was
+# sized for flash-attention on A100/H100. It OOMs an L40S (44GB) running the
+# `torch` SDPA backend forced above (materializes full attention score
+# matrices), independent of how many GPUs/ranks are used -- each rank still
+# handles a full 32768-token microbatch on its own. 16384 (8 sequences) is
+# verified to fit with headroom to spare; override if a run needs otherwise.
+export EDULLM_RANK_MICROBATCH_TOKENS="${EDULLM_RANK_MICROBATCH_TOKENS:-16384}"
+
+# $HOME is quota-limited and can already be at/over quota independent of
+# anything this run does -- torch.compile's Triton/Inductor caches, W&B's
+# artifact staging (~/.local/share/wandb), and HuggingFace's dataset cache
+# (~/.cache/huggingface) have each separately hit this mid-run. Scratch has
+# effectively no quota, so redirect every XDG-respecting tool's base dirs
+# there wholesale rather than chasing each tool's own env var one at a time.
+mkdir -p "${RUN_DIR}/.cache/triton" "${RUN_DIR}/.cache/inductor" \
+  "${RUN_DIR}/.xdg/cache" "${RUN_DIR}/.xdg/data" "${RUN_DIR}/.xdg/config"
+export TRITON_CACHE_DIR="${RUN_DIR}/.cache/triton"
+export TORCHINDUCTOR_CACHE_DIR="${RUN_DIR}/.cache/inductor"
+export XDG_CACHE_HOME="${RUN_DIR}/.xdg/cache"
+export XDG_DATA_HOME="${RUN_DIR}/.xdg/data"
+export XDG_CONFIG_HOME="${RUN_DIR}/.xdg/config"
+# HuggingFace's XDG_CACHE_HOME support has been inconsistent across versions;
+# set HF_HOME explicitly too rather than relying on it alone.
+export HF_HOME="${RUN_DIR}/.xdg/cache/huggingface"
+
 REPO_DIR="${REPO_DIR:-${RUN_DIR}/OLMo-core}"
 VENV="${VENV:-${RUN_DIR}/venv}"
 RUN_ROOT="${RUN_ROOT:-${RUN_DIR}/runs}"

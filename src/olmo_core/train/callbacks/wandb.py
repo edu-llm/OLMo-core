@@ -114,7 +114,13 @@ class WandBCallback(Callback):
                 log.warning("Finalizing failed W&B run...")
             else:
                 log.info("Finalizing successful W&B run...")
-            self.wandb.finish(exit_code=exit_code, quiet=True)
+            try:
+                self.wandb.finish(exit_code=exit_code, quiet=True)
+            except TypeError:
+                # Newer wandb SDK releases dropped the "quiet" kwarg from
+                # finish(). Fall back so a version mismatch here can't mask
+                # the actual error this is being called from on_error() for.
+                self.wandb.finish(exit_code=exit_code)
             self._finalized = True
 
     def pre_train(self):

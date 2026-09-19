@@ -11,10 +11,13 @@ Method = Literal[
     "middle_ppl",
     "attention_topk",
     "blade",
+    "random",
+    "full",
 ]
 
 REGMIX = "pretrain/regmix-10b"
-REFHQ = "pretrain/refhq-regmix-5p5b"
+# BLADE's HQ/reference-update stream. Pin the immutable version at launch.
+REFHQ = "pretrain/refhq-instruct"
 RHO_REFERENCE_CHECKPOINT = (
     "s3://edullm-checkpoints/olmo-370m/"
     "edullm-370M-refhq-instruct-v3/checkpoints/step940/"
@@ -49,6 +52,19 @@ class ArmSpec:
 
 
 ARM_SPECS: dict[str, ArmSpec] = {
+    # Full cross-entropy baseline on the identical corpus, step budget, seeds,
+    # and 125-step task-loss ladder as every selection arm. method="full" keeps
+    # every valid token in the loss, so recipe.py routes this to the stock
+    # TransformerTrainModule (no selection callback, no scoring forward pass).
+    # Replaces the hpo-ladder clone that the first draft used as its control.
+    "full-loss-control": ArmSpec(
+        "full-loss-control",
+        "full",
+        REGMIX,
+        "full-loss-control-regmix10b-v3",
+        keep_fraction=1.0,
+        wandb_project_override="token-selection",
+    ),
     "rho-1": ArmSpec(
         "rho-1",
         "rho_excess",
@@ -89,10 +105,18 @@ ARM_SPECS: dict[str, ArmSpec] = {
         "blade",
         "blade",
         REGMIX,
-        "blade-regmix10b-v2",
+        "blade-regmix10b-refhq-instruct-v3-v1",
         keep_fraction=0.6,
         wandb_project_override="token-selection",
         requires_refhq_stream=True,
+    ),
+    "random-control": ArmSpec(
+        "random-control",
+        "random",
+        REGMIX,
+        "random-control-regmix10b-v1",
+        keep_fraction=0.6,
+        wandb_project_override="token-selection",
     ),
 }
 

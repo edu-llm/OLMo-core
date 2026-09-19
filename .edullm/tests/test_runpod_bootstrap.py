@@ -68,7 +68,14 @@ def test_cli_error_still_deletes_session(tmp_path, monkeypatch) -> None:
 
 def test_runpod_stager_accepts_only_kept_token_arms(monkeypatch) -> None:
     module = load_stager()
-    kept = ("rho-1", "rel-ema-exp", "middle-ppl-token", "attention", "blade")
+    kept = (
+        "rho-1",
+        "rel-ema-exp",
+        "middle-ppl-token",
+        "attention",
+        "blade",
+        "random-control",
+    )
     for arm in kept:
         monkeypatch.setattr(
             sys,
@@ -87,9 +94,11 @@ def test_runpod_stager_accepts_only_kept_token_arms(monkeypatch) -> None:
 
     launch = (STAGER.parent / "launch.sh").read_text(encoding="utf-8")
     assert 'ARM="${ARM:-attention}"' in launch
+    assert 'EDULLM_NUM_WORKERS="${EDULLM_NUM_WORKERS:-8}"' in launch
+    assert 'EDULLM_NUM_THREADS="${EDULLM_NUM_THREADS:-8}"' in launch
+    assert 'EDULLM_PREFETCH_FACTOR="${EDULLM_PREFETCH_FACTOR:-4}"' in launch
     for removed in (
         "control",
-        "rel-ema-refhq",
         "middle-ppl-doc",
         "learnability-token",
         "learnability-doc",

@@ -16,6 +16,8 @@ if str(EDULLM_DIR) not in sys.path:
 
 import token_selection_entrypoint as training  # noqa: E402
 from token_selection_370m.arms import REFHQ, get_arm  # noqa: E402
+from token_selection_370m.precomputed import file_sha256, load_mask_manifest  # noqa: E402
+from token_selection_370m.recipe import SEQUENCE_LENGTH  # noqa: E402
 from train_on_corpus import Corpus  # noqa: E402
 
 MANIFEST_PATH = Path(
@@ -24,6 +26,14 @@ MANIFEST_PATH = Path(
         "/workspace/edullm-inputs/token-selection/ready.json",
     )
 )
+MASK_MANIFEST_PATH = Path(
+    os.environ.get(
+        "EDULLM_MIDDLE_PPL_MASK_MANIFEST",
+        "/workspace/edullm-inputs/token-selection/middle-ppl-masks/manifest.json",
+    )
+)
+PRECOMPUTED_LABEL_MASK_PATHS: list[str] | None = None
+PRECOMPUTED_SELECTION_BINDING: dict | None = None
 
 
 def manifest() -> dict:
@@ -56,7 +66,7 @@ def resolve_local_corpus(*, dataset_id: str, version: str, tokenizer_id: str) ->
         if not path.is_file() or path.stat().st_size != int(obj["size"]):
             raise RuntimeError(f"staged object is missing or changed: {path}")
         paths.append(str(path))
-    return Corpus(
+    corpus = Corpus(
         dataset_id=dataset_id,
         version=str(record["version"]),
         paths=paths,
@@ -64,15 +74,40 @@ def resolve_local_corpus(*, dataset_id: str, version: str, tokenizer_id: str) ->
         tokenizer=TokenizerConfig.dolma2(),
         rows=int(record["rows"]) if record.get("rows") is not None else None,
     )
+    arm = get_arm(str(manifest()["arm"]))
+    if dataset_id == arm.dataset_id:
+        global PRECOMPUTED_LABEL_MASK_PATHS, PRECOMPUTED_SELECTION_BINDING
+        reference_path = os.environ.get(
+            "EDULLM_LATE_REFERENCE_PATH"
+            if arm.method == "middle_ppl"
+            else "EDULLM_REFERENCE_PATH"
+        )
+        PRECOMPUTED_LABEL_MASK_PATHS, PRECOMPUTED_SELECTION_BINDING = (
+            configure_precomputed_masks(arm, corpus, reference_path)
+        )
+    return corpus
 
 
 ORIGINAL_BINDING = training.immutable_corpus_binding
+ORIGINAL_SCIENTIFIC_IDENTITY = training.scientific_identity
+ORIGINAL_BUILD_TRAINER = training.build_trainer
 
 
 def logical_corpus_binding(dataset_id: str, corpus: Corpus) -> dict:
     record = corpus_record(dataset_id)
     logical = replace(corpus, paths=list(record["logical_paths"]))
     return ORIGINAL_BINDING(dataset_id, logical)
+
+
+def scientific_identity_with_precomputed(*args, **kwargs):
+    kwargs["precomputed_selection_binding"] = PRECOMPUTED_SELECTION_BINDING
+    return ORIGINAL_SCIENTIFIC_IDENTITY(*args, **kwargs)
+
+
+def build_trainer_with_precomputed(*args, **kwargs):
+    kwargs["precomputed_label_mask_paths"] = PRECOMPUTED_LABEL_MASK_PATHS
+    kwargs["precomputed_selection_binding"] = PRECOMPUTED_SELECTION_BINDING
+    return ORIGINAL_BUILD_TRAINER(*args, **kwargs)
 
 
 def configure_references(payload: dict) -> None:
@@ -85,6 +120,23 @@ def configure_references(payload: dict) -> None:
         if name not in names or not path.is_file():
             raise RuntimeError(f"invalid staged {name!r} reference: {path}")
         os.environ[names[name]] = str(path)
+
+
+def configure_precomputed_masks(arm, corpus, reference_path: str | None):
+    if arm.method != "middle_ppl" or not MASK_MANIFEST_PATH.is_file():
+        return None, None
+    if reference_path is None:
+        raise RuntimeError("precomputed middle-PPL masks require their materialized reference")
+    record = corpus_record(arm.dataset_id)
+    return load_mask_manifest(
+        MASK_MANIFEST_PATH,
+        corpus_paths=[str(path) for path in corpus.paths],
+        source_ids=[str(path) for path in record["logical_paths"]],
+        source_itemsize=corpus.dtype.as_np_dtype()(0).itemsize,
+        sequence_length=SEQUENCE_LENGTH,
+        keep_fraction=arm.keep_fraction,
+        reference_sha256=file_sha256(reference_path),
+    )
 
 
 def requested_arm(argv: list[str]) -> str:
@@ -125,6 +177,8 @@ def main() -> None:
     configure_references(payload)
     training.resolve_corpus = resolve_local_corpus
     training.immutable_corpus_binding = logical_corpus_binding
+    training.scientific_identity = scientific_identity_with_precomputed
+    training.build_trainer = build_trainer_with_precomputed
     training.main()
 
 

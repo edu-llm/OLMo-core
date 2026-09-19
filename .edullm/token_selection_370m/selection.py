@@ -16,6 +16,7 @@ def _local(tensor: Tensor) -> Tensor:
     return to_local() if callable(to_local) else tensor
 
 
+@torch.no_grad()
 def _write(parameter: Tensor, value: Tensor) -> None:
     destination = _local(parameter)
     source = _local(value).detach()
@@ -119,7 +120,7 @@ def selection_weights(
     elif method == "rel_ema":
         if current is None or history is None:
             raise ValueError("relative EMA requires current and history losses")
-        mask = per_row_topk(history - current, keep_fraction, valid)
+        mask = per_row_topk(current - history, keep_fraction, valid)
     elif method == "middle_ppl":
         if reference is None:
             raise ValueError("middle-PPL requires frozen reference losses")

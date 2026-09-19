@@ -10,12 +10,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
-log = logging.getLogger(__name__)
-
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from torch import Tensor, nn
+
+log = logging.getLogger(__name__)
 
 try:  # OLMo's optional runtime dependencies are not available in pure unit-test hosts.
     from olmo_core.data.utils import get_labels, split_batch

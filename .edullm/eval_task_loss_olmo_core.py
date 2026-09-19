@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import shutil
+import socket
 import tempfile
 import time
 from datetime import timedelta
@@ -309,13 +310,40 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--run-name", required=True)
     parser.add_argument("--format", choices=("auto", "distcp", "state_pt"), default="auto")
-    parser.add_argument("--device-eval-batch-size", type=int, default=4)
+    # BLADE keeps both proxy and dynamic-reference state resident while the
+    # synchronous evaluator runs. A batch of four can exhaust an 80 GiB A100
+    # after a sync boundary, so production defaults to the memory-safe size.
+    parser.add_argument("--device-eval-batch-size", type=int, default=1)
     return parser.parse_args()
+
+
+def _default_single_rank_env() -> None:
+    """Fill in env:// rendezvous vars for a trivial world_size=1 process group.
+
+    trigger_task_loss_eval() (production_contract/task_loss.py) strips the
+    parent training job's distributed env vars before invoking this script
+    directly (not under torch.distributed.run) whenever nproc<=1 -- which is
+    the default for any non-production (--local) run that doesn't explicitly
+    set TASK_LOSS_NPROC/NPROC. dist.init_process_group's env:// rendezvous
+    otherwise has no defaults and raises on the missing RANK/WORLD_SIZE/etc.
+    """
+    if "RANK" in os.environ:
+        return
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    os.environ["RANK"] = "0"
+    os.environ["WORLD_SIZE"] = "1"
+    os.environ["LOCAL_RANK"] = "0"
+    os.environ["LOCAL_WORLD_SIZE"] = "1"
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = str(port)
 
 
 def main() -> None:
     args = parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    _default_single_rank_env()
     local_rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", "0")))
     evaluator_state = args.checkpoint / "model_eval.pt"
     if not evaluator_state.is_file():

@@ -30,10 +30,12 @@ if [[ -n "${OLMO_CORE_COMMIT_SHA:-}" && "${resolved}" != "${OLMO_CORE_COMMIT_SHA
 fi
 git -C "${REPO_DIR}" checkout --detach "${resolved}"
 
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq --no-install-recommends gcc g++ git ca-certificates
-rm -rf /var/lib/apt/lists/*
+if [[ "${SKIP_SYSTEM_PACKAGES:-0}" != "1" ]]; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq
+  apt-get install -y -qq --no-install-recommends gcc g++ git ca-certificates
+  rm -rf /var/lib/apt/lists/*
+fi
 export PIP_BREAK_SYSTEM_PACKAGES=1
 "${PYTHON}" -m pip install --quiet --upgrade pip wheel
 "${PYTHON}" -m pip uninstall --quiet --yes torch torchvision torchaudio
@@ -42,8 +44,8 @@ export PIP_BREAK_SYSTEM_PACKAGES=1
   --extra-index-url https://pypi.org/simple \
   "torch==2.9.0" "torchvision==0.24.0" "torchaudio==2.9.0"
 "${PYTHON}" -m pip install --quiet --no-cache-dir -e "${REPO_DIR}[wandb]" boto3
-"${PYTHON}" -m pip install --quiet --no-cache-dir \
-  "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"
+"${PYTHON}" -m pip install --quiet --no-cache-dir --upgrade \
+  "edullm-data @ git+https://github.com/edu-llm/edullm-data@main"
 "${PYTHON}" -m pip install --quiet --no-cache-dir \
   -r "${REPO_DIR}/.edullm/requirements-token-selection-eval.txt"
 
@@ -64,6 +66,7 @@ assert "arc_easy_val_rc_5shot_bpb" in label_to_task_map
 assert tuple(ARM_SPECS) == (
     "rho-1",
     "rel-ema-exp",
+    "rel-ema-refhq",
     "middle-ppl-token",
     "attention",
     "blade",

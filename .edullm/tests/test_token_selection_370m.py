@@ -22,6 +22,7 @@ from token_selection_370m.arms import (  # noqa: E402
     ARM_SPECS,
     REFHQ,
     REFHQ_LATE_STEPS,
+    RHO_REFERENCE_CHECKPOINT,
 )
 from token_selection_370m.blade import (  # noqa: E402
     BLADE_CHECKPOINT_FORMAT,
@@ -72,10 +73,18 @@ def test_exact_approved_arm_family_and_wandb_routing() -> None:
         ("middle-ppl-token", "middle_ppl", "pretrain/regmix-10b", 0.6),
         ("attention", "attention_topk", "pretrain/regmix-10b", 0.6),
         ("blade", "blade", "pretrain/regmix-10b", 0.6),
+        ("random-control", "random", "pretrain/regmix-10b", 0.6),
     )
     assert all(
         ARM_SPECS[name].wandb_project == "token-selection"
-        for name in ("rho-1", "rel-ema-exp", "middle-ppl-token", "attention", "blade")
+        for name in (
+            "rho-1",
+            "rel-ema-exp",
+            "middle-ppl-token",
+            "attention",
+            "blade",
+            "random-control",
+        )
     )
     assert ARM_SPECS["middle-ppl-token"].late_reference_contract.endswith(str(REFHQ_LATE_STEPS))
 
@@ -401,6 +410,12 @@ def test_weight_shadow_restores_local_fsdp_parameter_after_forward(tmp_path: Pat
         assert torch.equal(training.weight.to_local(), original_shard)
         assert shadow.weights["weight"].device == training.weight.to_local().device
         assert shadow.weights["weight"].shape == training.weight.to_local().shape
+
+        ema = EMAHistory(training, seed=reference_state)
+        with torch.no_grad(), ema.swap_to(training):
+            actual_ema = training(inputs)
+        assert torch.equal(actual_ema, expected)
+        assert torch.equal(training.weight.to_local(), original_shard)
     finally:
         dist.destroy_process_group()
 
@@ -863,6 +878,9 @@ def test_production_recipe_statically_assembles_public_olmo_apis() -> None:
     assert "_custom_module(model, module_config, selection_config)" in source
     assert 'checkpoint_kwargs["fixed_steps"]' in source
     assert "task_loss_nproc=PRODUCTION_WORLD_SIZE if production else None" in source
+    assert 'os.environ.get("EDULLM_NUM_WORKERS", "8")' in source
+    assert 'os.environ.get("EDULLM_NUM_THREADS", "8")' in source
+    assert 'os.environ.get("EDULLM_PREFETCH_FACTOR", "4")' in source
     assert PRODUCTION_WORLD_SIZE == 8
     assert {spec.method for spec in ARM_SPECS.values()} - CUSTOM_LOSS_METHODS == {"blade"}
     assert CUSTOM_LOSS_METHODS >= {
@@ -925,7 +943,8 @@ def test_platform_entrypoint_is_locked_to_eight_gpu_torchrun() -> None:
 
 def test_packaged_evaluator_and_image_are_complete() -> None:
     evaluator = EDULLM_ROOT / "eval_task_loss_olmo_core.py"
-    tree = ast.parse(evaluator.read_text(encoding="utf-8"))
+    evaluator_source = evaluator.read_text(encoding="utf-8")
+    tree = ast.parse(evaluator_source)
     labels = None
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(
@@ -936,6 +955,7 @@ def test_packaged_evaluator_and_image_are_complete() -> None:
     from production_contract.task_loss import TASK_LOSS_RAW_LABELS
 
     assert labels == TASK_LOSS_RAW_LABELS
+    assert '"--device-eval-batch-size", type=int, default=1' in evaluator_source
     docker = (EDULLM_ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert "requirements-token-selection-eval.txt" in docker
     assert "py_compile .edullm/eval_task_loss_olmo_core.py" in docker

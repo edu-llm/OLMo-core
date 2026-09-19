@@ -11,6 +11,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
@@ -19,6 +21,8 @@ DEFAULT_CHECKPOINT_INTERVAL = 125
 RUN_FINGERPRINT_FILENAME = "run_fingerprint.json"
 LAST_DURABLE_STEP_FILENAME = "last_durable_step.json"
 FINGERPRINT_SCHEMA_VERSION = 2
+_PERMANENT_CHECKPOINT_RE = re.compile(r"^step(?P<step>\d+)$")
+_SYNC_CHECKPOINT_RE = re.compile(r"^step(?P<step>\d+)-(?:pre|post)$")
 
 
 class CheckpointContractError(RuntimeError):
@@ -229,6 +233,41 @@ def assert_checkpoint_materialized(checkpoint_dir: str | Path) -> Path:
     return checkpoint
 
 
+def prune_superseded_checkpoints(
+    save_folder: str | Path,
+    durable_metadata_dir: str | Path,
+) -> list[Path]:
+    """Delete checkpoints superseded by the newest durable checkpoint.
+
+    The durable marker is the authority. Its checkpoint must be fully
+    materialized before anything is removed. Newer, not-yet-durable checkpoint
+    candidates are preserved so a failed finalization can still be retried.
+    """
+    marker = read_last_durable_step(durable_metadata_dir)
+    if marker is None:
+        return []
+
+    root = Path(save_folder)
+    durable_step = int(marker["last_durable_step"])
+    assert_checkpoint_materialized(root / f"step{durable_step}")
+
+    removed: list[Path] = []
+    for candidate in root.iterdir():
+        match = _PERMANENT_CHECKPOINT_RE.fullmatch(candidate.name)
+        if candidate.is_dir() and match and int(match.group("step")) < durable_step:
+            shutil.rmtree(candidate)
+            removed.append(candidate)
+
+    sync_root = root / "sync_checkpoints"
+    if sync_root.is_dir():
+        for candidate in sync_root.iterdir():
+            match = _SYNC_CHECKPOINT_RE.fullmatch(candidate.name)
+            if candidate.is_dir() and match and int(match.group("step")) <= durable_step:
+                shutil.rmtree(candidate)
+                removed.append(candidate)
+    return removed
+
+
 def finalize_permanent_checkpoint(
     *,
     arm: str,
@@ -330,4 +369,5 @@ def finalize_permanent_checkpoint(
             "fingerprint_schema_version": FINGERPRINT_SCHEMA_VERSION,
         },
     )
+    prune_superseded_checkpoints(checkpoint.parent, marker_dir)
     return payload

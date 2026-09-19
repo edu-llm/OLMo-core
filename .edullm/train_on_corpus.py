@@ -398,7 +398,10 @@ def resolve_corpus(*, dataset_id: str, version: str, tokenizer_id: str) -> Corpu
     # and a role without that grant and a registry entry pointing at an unpublished prefix
     # both arrive here as a failed read. read_failure separates them.
     try:
-        read = dataset_paths(dataset_id, version, s3=s3)
+        # RefHQ Instruct v3 publishes both trainable token shards and retained
+        # vendor-source bytes. BLADE must bind only the token group.
+        group = "tokens" if dataset_id == "pretrain/refhq-instruct" else None
+        read = dataset_paths(dataset_id, version, s3=s3, group=group)
     except Refusal:
         raise
     except BaseException as exc:

@@ -81,6 +81,9 @@ def test_task_loss_callback_skips_already_durable_result_on_resume(
         json.dumps({"last_durable_step": 250, "task_loss_complete": True}),
         encoding="utf-8",
     )
+    durable_checkpoint = tmp_path / "checkpoints" / "step250"
+    durable_checkpoint.mkdir(parents=True)
+    (durable_checkpoint / "state.pt").write_bytes(b"state")
     finalized: list[int] = []
     monkeypatch.setattr(
         task_loss,
@@ -103,6 +106,38 @@ def test_task_loss_callback_skips_already_durable_result_on_resume(
 
     assert finalized == []
     assert callback._completed == {0}
+
+
+def test_task_loss_callback_retries_latest_nondurable_checkpoint_on_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    progress_dir = tmp_path / "progress"
+    checkpoint.write_last_durable_step(progress_dir, 750)
+    save_folder = tmp_path / "checkpoints"
+    for step in (750, 875):
+        path = save_folder / f"step{step}"
+        path.mkdir(parents=True)
+        (path / "state.pt").write_bytes(b"state")
+    incomplete = save_folder / "step1000"
+    incomplete.mkdir()
+
+    monkeypatch.setattr(task_loss, "_HAS_OLMO_CORE", True)
+    callback = task_loss.TaskLossEvalCallback(
+        total_steps=2361,
+        save_folder=save_folder,
+        run_name="unit",
+        results_dir=progress_dir / "task_loss",
+        eval_script=tmp_path / "eval.py",
+        interval=125,
+        progress_dir=progress_dir,
+    )
+    callback.trainer = type("Trainer", (), {"callbacks": {}, "global_step": 875})()
+    finalized: list[int] = []
+    monkeypatch.setattr(callback, "_maybe_finalize", finalized.append)
+
+    callback.pre_train()
+
+    assert finalized == [875]
 
 
 def test_finalize_skips_nonfinal_checkpoint_artifact(
@@ -165,6 +200,49 @@ def test_finalize_skips_nonfinal_checkpoint_artifact(
 
     assert artifact_types[:3] == ["eval", "metrics", "eval"]
     assert artifact_types[3:] == ["model", "eval", "metrics", "eval"]
+    assert not (tmp_path / "checkpoints" / "step125").exists()
+    assert (tmp_path / "checkpoints" / "step250").is_dir()
+
+
+def test_prune_keeps_latest_durable_and_newer_retry_candidate(tmp_path: Path) -> None:
+    checkpoints = tmp_path / "checkpoints"
+    progress = tmp_path / "progress"
+    for step in (125, 250, 375):
+        path = checkpoints / f"step{step}"
+        path.mkdir(parents=True)
+        (path / "state.pt").write_bytes(b"state")
+    for name in ("step125-post", "step250-pre", "step250-post", "step375-pre"):
+        path = checkpoints / "sync_checkpoints" / name
+        path.mkdir(parents=True)
+        (path / "state.pt").write_bytes(b"state")
+    checkpoint.write_last_durable_step(progress, 250)
+
+    removed = checkpoint.prune_superseded_checkpoints(checkpoints, progress)
+
+    assert {path.name for path in removed} == {
+        "step125",
+        "step125-post",
+        "step250-pre",
+        "step250-post",
+    }
+    assert (checkpoints / "step250").is_dir()
+    assert (checkpoints / "step375").is_dir()
+    assert (checkpoints / "sync_checkpoints" / "step375-pre").is_dir()
+
+
+def test_prune_refuses_to_delete_without_materialized_durable_checkpoint(
+    tmp_path: Path,
+) -> None:
+    checkpoints = tmp_path / "checkpoints"
+    old = checkpoints / "step125"
+    old.mkdir(parents=True)
+    (old / "state.pt").write_bytes(b"state")
+    progress = tmp_path / "progress"
+    checkpoint.write_last_durable_step(progress, 250)
+
+    with pytest.raises(checkpoint.CheckpointContractError, match="not fully materialized"):
+        checkpoint.prune_superseded_checkpoints(checkpoints, progress)
+    assert old.is_dir()
 
 
 def test_fingerprint_refuses_changed_scientific_identity(tmp_path: Path) -> None:

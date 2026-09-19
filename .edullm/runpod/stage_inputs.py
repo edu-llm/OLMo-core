@@ -37,6 +37,10 @@ REFHQ_BASE = (
     "s3://edullm-checkpoints/olmo-370m/"
     "edullm-370M-refhq-5p5b/checkpoints"
 )
+RHO_REFERENCE_CHECKPOINT = (
+    "s3://edullm-checkpoints/olmo-370m/"
+    "edullm-370M-refhq-instruct-v3/checkpoints/step940/"
+)
 LATE_STEPS = (1000, 1125, 1315)
 
 
@@ -71,7 +75,11 @@ def destroy_credentials(path: Path) -> None:
 
 
 def allowed_uri(uri: str) -> bool:
-    return uri.startswith("s3://edullm-data/") or uri.startswith(f"{REFHQ_BASE}/step")
+    return (
+        uri.startswith("s3://edullm-data/")
+        or uri.startswith(f"{REFHQ_BASE}/step")
+        or uri.startswith(RHO_REFERENCE_CHECKPOINT)
+    )
 
 
 def stage_one(client, transfer, root: Path, uri: str) -> dict[str, object]:
@@ -233,18 +241,24 @@ def main() -> None:
                 max_pool_connections=max(16, args.workers),
             ),
         )
-        reference_steps: set[int] = set()
+        checkpoint_prefixes: dict[str, str] = {}
         if arm.reference_contract:
-            reference_steps.add(1315)
+            if arm.reference_contract != RHO_REFERENCE_CHECKPOINT:
+                raise RuntimeError(
+                    "RHO reference contract is not the approved RunPod checkpoint"
+                )
+            checkpoint_prefixes["reference"] = arm.reference_contract
         if arm.late_reference_contract:
-            reference_steps.update(LATE_STEPS)
+            checkpoint_prefixes.update(
+                {f"late-{step}": f"{REFHQ_BASE}/step{step}/" for step in LATE_STEPS}
+            )
         corpus_uris = [uri for corpus in corpora.values() for uri in corpus.paths]
         checkpoint_uris = {
-            step: prefix_uris(client, f"{REFHQ_BASE}/step{step}/")
-            for step in sorted(reference_steps)
+            name: prefix_uris(client, prefix)
+            for name, prefix in sorted(checkpoint_prefixes.items())
         }
         ordered_uris = corpus_uris + [
-            uri for step in sorted(checkpoint_uris) for uri in checkpoint_uris[step]
+            uri for name in sorted(checkpoint_uris) for uri in checkpoint_uris[name]
         ]
         transfer = TransferConfig(
             multipart_threshold=64 * 1024 * 1024,
@@ -261,21 +275,24 @@ def main() -> None:
             )
         by_uri = {str(record["uri"]): record for record in records}
         references: dict[str, str] = {}
-        materialized: dict[int, Path] = {}
-        for step, uris in checkpoint_uris.items():
-            prefix = urlparse(f"{REFHQ_BASE}/step{step}/")
+        materialized: dict[str, Path] = {}
+        for name, uris in checkpoint_uris.items():
+            prefix = urlparse(checkpoint_prefixes[name])
             checkpoint = (
                 args.stage_root
                 / "objects"
                 / prefix.netloc
                 / prefix.path.lstrip("/").rstrip("/")
             )
-            materialized[step] = materialize_model_eval(checkpoint)
+            materialized[name] = materialize_model_eval(checkpoint)
         if arm.reference_contract:
-            references["reference"] = str(materialized[1315])
+            references["reference"] = str(materialized["reference"])
         if arm.late_reference_contract:
             late = args.stage_root / "references" / "refhq_late_avg_1000_1125_1315.pt"
-            average_references([materialized[step] for step in LATE_STEPS], late)
+            average_references(
+                [materialized[f"late-{step}"] for step in LATE_STEPS],
+                late,
+            )
             references["late"] = str(late)
         payload = {
             "schema_version": 1,
