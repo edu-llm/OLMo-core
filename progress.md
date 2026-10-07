@@ -1,0 +1,243 @@
+# Progress log: P4 papers
+
+Goal: turn P4's work into rigorous, publishable journal/conference paper(s). Three studies are in scope:
+- **spaced review**: [P4_whitepaper_writeup.md](paper/source/P4_whitepaper_writeup.md);
+- **blocked vs. interleaved training**: [P4_final_report.md](paper/source/P4_final_report.md), Test 02;
+- **mastery-gated curricula**: [P4_final_report.md](paper/source/P4_final_report.md), Test 03.
+
+Synthetic-student material is out of scope. **No paper text has been edited yet; we are waiting for the go-ahead.**
+
+## TL;DR
+
+- **Spacing.** The experiment is real and its headline numbers match the code. The paper misdescribes several parts of the method, 3 citations are misused, and the design has gaps reviewers will find.
+  - **Decision needed:** write it up as an honest pilot, or rerun at 300M with per-fact schedules and controls first.
+  - **Blocking:** the `runs/` outputs and the CI script from Anshul.
+- **Interleaving.** The report describes a 195M study that was never run. The only run (162M, digit skills, n = 1, one order) is unmentioned, and the "toy pilot" numbers have no code.
+  - Cheap fix: counterbalanced orders × seeds plus recency and spacing controls, using the existing code.
+- **Mastery gating.** Two preliminary experiments, no code on any branch, no seeds. Reviewers will require real experiments.
+  - Plan: [PRD_mastery_gated_curriculum.md](plans/PRD_mastery_gated_curriculum.md) (Phase 1 ≈ 20–50 GPU-hours).
+- **Cross-cutting.** Every reported number must trace to committed code. Fix the one-pager, which mislabels the mastery panel and repeats the untraceable numbers.
+
+Key files:
+- [research.md](research/research.md): literature synthesis for all three studies, with the top-10 papers to add per study and the bibliographies.
+- [methods_verification.md](research/methods_verification.md): the papers checked against the code (Parts I–IV).
+- [PRD_mastery_gated_curriculum.md](plans/PRD_mastery_gated_curriculum.md): the experiment plan for mastery gating.
+- [PRD_spacing_interleaving_reruns.md](plans/PRD_spacing_interleaving_reruns.md): the experiment plan for the spacing rerun (Priority 1) and interleaving rerun (Priority 2).
+- [P4_spacing_paper_sections.md](paper/drafts/P4_spacing_paper_sections.md): the section collage for the spacing paper ([PILOT] / [BOTH] / [RERUN] versions of each section).
+- [research/notes/](research/notes/): detailed notes 00–11 (11 covers the compute pipelines).
+- [README.md](README.md): map of the project folders.
+- Papers, unchanged: [P4_whitepaper_writeup.md](paper/source/P4_whitepaper_writeup.md) and [P4_final_report.md](paper/source/P4_final_report.md) (the synthetic-student section is omitted from the md copy).
+
+---
+
+## Checklist: open tasks and issues
+
+## Part I: Spacing whitepaper
+
+Section numbers like "§2.4" refer to the whitepaper unless marked otherwise.
+
+### A. Citations (details: [research/notes/01_citation_verification.md](research/notes/01_citation_verification.md))
+- [ ] **Intro: "expanding schedules … greatly improve memory (Landauer & Bjork 1978; Cepeda et al. 2006)".**
+  - Cepeda found **no** reliable expanding-vs-fixed difference (62.0% vs 58.6%, p = .61) and calls L&B's claim one with "little apparent empirical backing".
+  - L&B found about +10 points at 30 minutes, for test-type practice only. For restudy, uniform was slightly better.
+  - Fix: rewrite the sentence and cite Latimier et al. 2021.
+- [ ] **Intro: mechanisms "consolidation, retrieval difficulty, encoding variability (Cepeda)".**
+  - Cepeda's candidate theories are consolidation, *study-phase retrieval* and encoding variability. "Retrieval difficulty" comes from Bjork and from Karpicke & Roediger.
+  - Fix: rename them and call them "candidate accounts".
+- [ ] **Conclusion: our null "reproduces" Karpicke & Roediger 2007.**
+  - Their equal > expanding result was caused by delaying the first retrieval. With the first retrieval matched (Exp. 3, which is our design), there was no difference.
+  - Their task was retrieval practice; ours is restudy.
+  - Fix: say "consistent with" and cite Exp. 3, Latimier 2021 and Kang 2014.
+- [ ] Use archival versions: LoRA → ICLR 2022; OLMo → ACL 2024; DataDecide → ICML 2025; FictionalQA → ICLR 2026. Fix names: Hwang, J. D.; Mongkolsupawan, N.; Roediger, H. L., III; Walsh, E. Add the editor and DOI for McCloskey & Cohen.
+- [ ] Soften "one of the most robust results in cognitive psychology" (not Cepeda's wording), or cite Dempster 1988.
+- [ ] Add a related-work section covering the 10 papers in research.md §0. Address FOREVER head-on, since it contradicts our null.
+
+### B. Paper text that doesn't match the code or is misleading (details: [methods_verification.md](research/methods_verification.md))
+- [ ] **What a review is.** In the code, each review event is one update of 16 statements drawn randomly from **one document style**, with styles rotated. About half the 80 evaluated facts are never reviewed. Describe this exactly. It also undercuts "same reviews, only timing differs" at the level of individual facts.
+- [ ] **Evaluation set (§2.4).** It is described as "held-out paraphrased questions … rather than memorized training text". In fact it is the question form of *trained* statements, and the answer appears verbatim 93% of the time. There are 80 items, fixed across seeds; EOS is included in the loss; and losses are averaged over the 5 styles.
+- [ ] **"Trajectory change" (§2.4, §3.5).** It is described as a Stage-2 average, but it averages 9 checkpoints, 3 of which are in the buffer. Fix the definition and re-check the §3.5 interpretation.
+- [ ] **Model.** Base model is 371.5M parameters; "377M" includes LoRA. Give the exact ID and checkpoint: `allenai/DataDecide-dolma1_7-300M`, `step45787-seed-default`.
+- [ ] **Training details missing:**
+  - AdamW β = (0.9, 0.95), weight decay 0.1, gradient clipping 1.0, fp16, LoRA dropout 0.05;
+  - **the optimizer and 10-step warmup restart at Stage 2**, so the first review (step 8) falls in warmup.
+- [ ] **Schedules.** List both arms' review steps and the 1.35 ratio. State that first and last reviews are matched only globally, and that per-style last-review times differ by up to 57 updates.
+- [ ] **Data.** 20 old and 40 new events (386 and 689 facts); split by event; the seeds don't change the split or the evaluated items.
+- [ ] **Statistics.** State the CI method (paired t, df = 2) and add per-seed values.
+- [ ] Delete the stray drafting note in §3.2 ("This is the natural place for it…").
+
+### C. Claims to tone down or reframe
+- [ ] Use "expanding vs. uniform review", not "the spacing effect" (there is no massed arm), including in the title.
+- [ ] §3.5: the expanding "trajectory" advantage is a known human pattern (Kang et al. 2014), not merely an artifact.
+- [ ] §3.3: "starting point, not forgetting rate". The CI is about half the size of the effect, and the conclusion flips on a probability scale (Loftus 1985). Add the caveat, or present a horizontal comparison (review is worth more than 180 updates of delay).
+- [ ] "Statistically and practically indistinguishable" needs an equivalence test (TOST) with a pre-set margin.
+- [ ] Conclusion: drop "how you space it does not [matter]" and the production-default advice. Call it a pilot, as the team's own `REVIEW_LAB.md` does.
+- [ ] Report effects in nats or probability ratios rather than "% loss".
+- [ ] Old-fact loss falls during new-fact training in every arm, which is format/domain adaptation. Don't claim old facts became "better learned".
+
+### D. Information needed from the team
+- [ ] `runs/review_lab/olmo370m-fictionalqa-3seeds-buffer180/` (REPORT.md, per-seed and aggregate CSVs, metrics.jsonl).
+- [ ] The script or notebook that computed the paired 95% CIs.
+- [ ] Were any settings (Stage-1 length, LR, ratio 1.35, buffer length, 12 events) chosen after seeing results?
+- [ ] Code for the Pythia 20-seed spacing pilot (in the one-pager), if we want to cite it.
+
+### E. Reanalyses that need no retraining (once we have `runs/`)
+- [ ] Report exact match (already logged).
+- [ ] Item-level mixed-effects model: reviewed vs. never-reviewed facts, dose–response on the number of reviews, and facts never seen in Stage 1.
+- [ ] TOST for expanding vs. uniform.
+- [ ] Condition × time over all buffer checkpoints, on two scales (loss and probability or accuracy).
+
+### F. New runs at 300M (cheap; do before scaling up)
+- [ ] Per-fact schedules: every old fact gets *k* reviews at its own expanding or uniform positions, with first and last exposure matched per fact.
+- [ ] Never-trained control set (the 40 unused FictionalQA events).
+- [ ] A massed arm, a generic-data arm at the review positions, and an arm where review is *added* rather than replacing new-fact updates.
+- [ ] Full fine-tuning, or a LoRA rank sweep.
+- [ ] ≥10 seeds; a different event split per replicate; evaluate all 386 old facts; a pre-Stage-1 baseline; a multiple-choice or likelihood-margin metric.
+- [ ] FOREVER's schedule and an adaptive per-item arm (SRT-like).
+
+### G. Scaling (after F; research.md §7)
+- [ ] Ladder: DataDecide 150M → 1B → Pythia 410M → 2.8B → OLMo 1B/7B. Use ≥5 seeds, a fixed Stage-1 loss criterion, and report absolute and relative forgetting.
+
+### H. Decisions and writing
+- [x] Draft the spacing paper as a section collage (pilot-accurate, timeless and rerun versions): [P4_spacing_paper_sections.md](paper/drafts/P4_spacing_paper_sections.md). It has 25 open placeholders, listed at the end of the file.
+- [ ] When compute arrives, run PRD Part 1 (spacing), then Part 2 (interleaving), then the mastery PRD.
+- [ ] **Decide where P4 runs.** The AWS platform is retired; the options are ORCD Engaging, FarmShare or a new AWS path. Also confirm the W&B project under `eduLLM`. See PRD Part 3.5.
+- [ ] **Start building the pipeline-independent core now:** data and schedule generators with tests, per-arm configs, the analysis scripts, and a `--dry-run` smoke mode (PRD Part 3.4). The launcher adapter waits for the pipeline decision.
+- [ ] Decide: (a) pilot paper now, or (b) reruns first.
+- [ ] Pick a target venue. TMLR is the best fit; CogSci/CCN 2027 are options if the human comparison is made rigorous.
+- [ ] Draft the paper in research-paper format.
+
+
+## Part II: Blocked vs. interleaved (Final Report, Test 02)
+
+### II-A. Citations (details: [research/notes/09_final_report_citation_verification.md](research/notes/09_final_report_citation_verification.md))
+- [ ] Brunmair & Richter (2019): g = 0.42 is correct, but add the moderators (math g = 0.34; words g = −0.39; similarity decides the direction). Our dissimilar, rule-like skills are the case where humans may *not* benefit.
+- [ ] Rolnick et al. (2019): accurate as written, but it studies RL agents. Add LM evidence (Dong et al., 2024; Russin et al., 2025) and update to the NeurIPS 2019 version.
+- [ ] Add the missing key work: Flesch et al. (2018), Russin et al. (2025), Lee, Cho & Yoo (2024), Foster et al. (2019), Carvalho & Goldstone (2014a). See research.md §II.2.
+- [ ] Add a reference list. The report currently has none.
+
+### II-B. Text vs. code (details: [methods_verification.md](research/methods_verification.md) Part II)
+- [ ] The report describes a *proposed* 195M pretrained-checkpoint study (4 school subjects, sessions, interference phase, 12 paired runs). What was run: a **random-init 162M model, 4 digit-manipulation skills, 512 updates, one order (A→B→C→D), one run**. Describe the actual run, or label the 195M design as proposed.
+- [ ] Remove or substantiate the "toy pilot" numbers (52.8% → 79.2%). No code exists for them on any branch. They also appear in the one-pager.
+- [ ] Report the actual result honestly: 27.4% vs. 61.6%, but blocked = recency (D 94.5%, others 0–15%) and interleaved not converged (loss 0.21 vs. 0.02).
+- [ ] Don't call the digit transformations "subjects".
+
+### II-C. Experiments needed (details: research/notes/10 §B1 and research/notes/07 synthesis)
+- [ ] All 4 counterbalanced orders (already generated by the code) × ≥5 seeds, with evaluation after each block (recency control).
+- [ ] Train to convergence, or report learning curves.
+- [ ] A blocked-but-spaced control (separates interleaving from spacing), a block-length sweep, and a skill-similarity manipulation.
+- [ ] A size sweep (e.g., 160M / 410M / 1B), since order effects emerge between 160M and 410M.
+
+## Part III: Mastery gating (Final Report, Test 03)
+
+### III-A. Citations (details: [research/notes/09_final_report_citation_verification.md](research/notes/09_final_report_citation_verification.md))
+- [ ] **Anthropic "biology" link.** It points at the wrong section (`#dives-tracing`), and the source never claims CE loss produces a cheap heuristic that "collapses" out of distribution. Cite Nikankin et al. (2025) and Lee et al. (2024) instead.
+- [ ] **Robins (1995)** did not "introduce" replay. He replicated Ratcliff (1990) and introduced *pseudo*rehearsal. Replace the Stanford proxy link with the DOI.
+- [ ] **Reversed-digit paper (arXiv 2403.05845)** is a 13B fine-tune with step-by-step reasoning and no OOD tests. Use Lee et al. (ICLR 2024) for reversed output and McLeish et al. (2024) for place-value tags.
+- [ ] **CAMPUS "about 7%"** is against static-curriculum baselines. Over shuffle it is +1.67 points (≈4.6%).
+- [ ] **RLAAR:** cite the ACL 2026 version. 62.6→75.1 compares the full method with the base model; the curriculum-only ablation is 63.2→71.9.
+- [ ] **Zaremba & Sutskever:** "combined" is best for program evaluation only, and it mixes in *harder* examples. That supports look-ahead mixing, not replay.
+- [ ] **LR-decay paper (Luo et al., ICLR 2026):** it concerns data *quality*. "Identical schedule across arms" doesn't fix the confound, and WSD still decays. Use constant LR, moderate decay or checkpoint averaging.
+- [ ] Cite the chain task's origins: LEGO (Zhang et al., 2022), variable binding, Yao et al. (2025). Cite Nanda et al. (2023) for the clock algorithm.
+- [ ] Add the human counter-evidence: Slavin (1987), about 0 effect when time is equalized. State Kulik et al. (1990) precisely (0.52 SD on end-of-unit exams; 0.29 on standardized tests).
+- [ ] Add a reference list. The report currently has none.
+
+### III-B. Text vs. evidence (details: [methods_verification.md](research/methods_verification.md) Part III)
+- [ ] **No code on any branch** for Preliminary Experiments I and II. Recover and commit it, or don't report the numbers.
+- [ ] Preliminary Experiment II text "(0.59, 0.67)" doesn't match the table (0.67, **0.55**).
+- [ ] The one-pager mastery panel is labelled "Prerequisite-chain task" but shows Preliminary Experiment II numbers. The real chain-task OOD values are 0.37 / 0.33 / 0.75, where the gate without replay is *worse* than shuffle.
+- [ ] Report model size, seeds, token budget, gate threshold, probe and exam construction, and replay fraction.
+- [ ] "Depth 5 not unlocked" → "unlocked late" (0.18).
+- [ ] Remove the informal sentence in Limitations. Move cost analysis, competitive programming and attribution graphs to future work.
+- [ ] "Preregistered" (mission statement): link a timestamped registration or remove the word.
+
+### III-C. Experiments needed
+- [ ] Run Phase 0–1 of [PRD_mastery_gated_curriculum.md](plans/PRD_mastery_gated_curriculum.md):
+  - a 2 × 2 of gate × replay, plus yoked clock, tuned clock, mixture-matched shuffle, pacing-only and mixed-difficulty arms;
+  - ≥10 paired seeds and matched tokens;
+  - disjoint gate-probe and exam families;
+  - a preregistered primary contrast.
+- [ ] Phase 2: a size ladder and continued training of open 0.4–1.4B models.
+
+## Cross-cutting
+- [ ] Decide on paper structure: a combined "learning science in LM training" paper (submit only when all three studies meet the bar), or separate papers. See research/notes/10 Part C for venues.
+- [ ] Fix the one-pager ([P4_onepager.md](original/onepager/P4_onepager.md) / .html / figure): mislabelled mastery panel, untraceable interleaving and Pythia numbers.
+- [ ] Get from the team: the spacing `runs/` folder and CI script, the toy-interleaving-pilot code, the mastery Preliminary Experiments I/II code, and the Pythia spacing-pilot code.
+
+---
+
+## History (completed work)
+
+### 2026-10-02: Conversion
+- Converted `P4 Whitepaper Writeup.docx` to [P4_whitepaper_writeup.md](paper/source/P4_whitepaper_writeup.md), verbatim. The figure is in [figures/](paper/figures/).
+
+### 2026-10-02: Deep research, citation check and code audit
+- **Research.** Six areas: human spacing, ML replay/spacing, LLM fact learning and forgetting, statistics and mock review, model scale, and citation verification. The synthesis, with 141 sources each formatted with a URL, is in [research.md](research/research.md). The detailed notes are in [research/](research/notes/).
+- **Citations.** All 9 references are real; 3 are misused and 4 need their archival versions (now checklist A).
+- **Code audit.** Reconstructed the exact data split, schedules and per-fact exposures, which surfaced the per-fact review problem (now checklist B and F).
+- **Coverage.** No related-work section; the 10 papers to add are listed in research.md §0.
+- **Scale.** Most comparable work is at ≤3B. Some popular claims come only from 7B+ models or vision networks, so they need caveats. Order effects emerge between 160M and 410M.
+
+### 2026-10-02: Methods and results checked against GitHub
+- Checked against `edu-llm/OLMo-core`, branches `anshulm/fictionalqa-review`, `p4/blocked-vs-interleaved` and `andrew/peer-distillation`. Everything was read remotely. Report: [methods_verification.md](research/methods_verification.md).
+- **Verdict: real experiment, real headline numbers.** The inaccurate descriptions are now checklist B; the missing data is checklist D.
+- The other two branches are not part of the paper. The interleaving branch's result (27.4% → 61.6%, one run) differs from the old Final Report (52.8% → 79.2%).
+
+### 2026-10-02: Readability pass
+- Added TL;DR sections to every markdown file, a "10 papers to add" section to research.md, and this checklist.
+
+### 2026-10-04: Final Report (interleaving and mastery gating)
+- Converted `P4 Validating Learning Science - Final Report.docx` to [P4_final_report.md](paper/source/P4_final_report.md), with 3 figures and the synthetic-student section omitted.
+- Research: interleaving (research/notes/07), mastery and curricula (research/notes/08), citation check of Tests 02–03 (research/notes/09), and statistics, mock reviews and venues (research/notes/10). Synthesised in research.md Parts II–III, each with its top-10 papers to add.
+- Code check:
+  - Read `p4/blocked-vs-interleaved` remotely and scanned all 152 branches.
+  - Found that the report's interleaving design was never run, and that the toy pilot, both mastery experiments and the Pythia spacing pilot have no code. Report: [methods_verification.md](research/methods_verification.md) Parts II–IV.
+- Verified the close precedents ourselves: Kohli et al. (2026) gate + replay (full text), Yao et al. (2025), Russin et al. (2025), Lee et al. (2024). Corrected a mislabelled verification tag in research/notes/10.
+- Wrote [PRD_mastery_gated_curriculum.md](plans/PRD_mastery_gated_curriculum.md).
+
+### 2026-10-04: Writing skill
+- Added the project skill `.claude/skills/scientific-writing/`. It contains:
+  - `SKILL.md`, which loads automatically whenever paper prose is written or edited;
+  - a banned-phrase list;
+  - a section guide;
+  - project conventions;
+  - `check_prose.py`, a mechanical self-check.
+- Added a pointer to it in `CLAUDE.md`.
+- Baseline check of the whitepaper: 27 em-dashes, "spacing effect" misuse, and several "Note that" / "Notably" openers. Fix these when editing begins.
+- **Update (same day):**
+  - **Em-dashes are now banned outright** in paper prose (including `--` and spaced hyphens or en-dashes used as dashes); the checker reports each one as an error.
+  - "note that" and sentence-initial "Notably / Interestingly / Importantly" are **soft warnings**: keep them only if they pass the test in banned_phrases.md.
+
+### 2026-10-04: Rerun PRD and spacing draft
+- Wrote [PRD_spacing_interleaving_reruns.md](plans/PRD_spacing_interleaving_reruns.md).
+  - **Spacing rerun:** per-fact review schedules with first and last review matched per fact; massed and generic-data arms; never-trained control events; QA-format teaching events; balanced Stage-1 exposure; 10 seeds with resampled splits; LoRA plus full fine-tuning; a 1B check; TOST and mixed models. About 20 GPU-hours.
+  - **Interleaving rerun:** a Williams-square order design × 5 seeds; a block-length sweep; a replay arm; a low-similarity skill set; a size sweep. About 15 GPU-hours.
+- Wrote [P4_spacing_paper_sections.md](paper/drafts/P4_spacing_paper_sections.md) using the scientific-writing skill.
+  - **Content:** an abstract, introduction, related work, methods, results, discussion, limitations and conclusion that are accurate to the pilot as run; reusable background sections; and methods written for the reruns, with [TODO] slots.
+  - **Marking:** unverified whitepaper numbers are marked †, and reconstructed exposure counts ‡.
+  - **Checks:** it passes the prose check apart from intentional exceptions.
+- Re-verified against full texts: Tirumala et al. (2022), the spacing quote; Kang et al. (2014), .49 vs .41 average and .49 vs .46 final; FOREVER Table 3, 42.5 vs 40.9; Landauer & Bjork (1978), .62 vs .58 for restudy.
+
+### 2026-10-04: Project reorganised
+- Moved files into four folders:
+  - `original/`: the team's files, untouched;
+  - `paper/`: Markdown paper sources, drafts and figures;
+  - `plans/`: the PRDs;
+  - `research/`: the synthesis, the code verification and `notes/`.
+- `progress.md`, `README.md` and `CLAUDE.md` stay at the top level.
+- Rewrote all 103 relative links, and the paths in the writing skill. A link check found none broken.
+- A full pre-move backup is at `/tmp/p4/edu-llm-backup-20261004`. It is temporary, so delete it once the new layout is confirmed.
+
+### 2026-10-04: Compute pipeline survey
+- Deleted the temporary pre-move backup.
+- Surveyed all 24 edu-llm repositories remotely ([research/notes/11_compute_pipeline_survey.md](research/notes/11_compute_pipeline_survey.md)).
+  - The AWS `platform` has been frozen since 2026-08-18 and was retired in practice; edullm-p1's 2026-09-22 to 09-27 commits remove its AWS, S3 and RunPod paths.
+  - The org has also used ORCD Engaging, FarmShare, RunPod and hand-launched EC2. W&B (entity `eduLLM`) is the one constant.
+  - The P4 spacing and interleaving code never used the platform.
+- Added PRD Part 3: a pipeline-independent design (science core + launcher adapter) and what can start now.
+
+### 2026-10-06: Pushed to GitHub
+- Pushed this workspace to `edu-llm/OLMo-core` as the standalone branch `p4-publication`. It shares no history with `main`.
+- Added `.gitignore` (excludes the local writing skill, `CLAUDE.md`, the synthetic-student documents, OS/editor/Python junk and run artifacts).
+- Added [HANDOFF.md](HANDOFF.md) for the next agent: where everything is, and to ignore the synthetic-student content left in the unmodified originals.
+
+**Note:** the team's GitHub code must not be stored on this computer. Two clones and three copied code files made during the research were deleted on 2026-10-02.

@@ -1,0 +1,30 @@
+# Local AI-assistant configuration (kept on each person's machine, not shared)
+.claude/
+CLAUDE.md
+
+# Out of scope: the synthetic-student work is not part of this project
+original/out_of_scope_synthetic_student/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Office lock files
+~$*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Experiment outputs and local data (never commit run artifacts or downloaded datasets)
+runs/
+data/
+wandb/
+*.parquet
+*.safetensors
+*.pt

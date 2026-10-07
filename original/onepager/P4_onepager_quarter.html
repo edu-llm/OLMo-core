@@ -1,0 +1,29 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@page{size:letter;margin:1in}
+body{margin:0;font-family:"Times New Roman",Times,serif;color:#111}
+.sheet{width:6.5in}
+h1{font-size:13.5pt;margin:0 0 5pt 0;line-height:1.1}
+.row{display:flex;gap:14pt;align-items:flex-start}
+.txt{flex:1 1 54%;font-size:11pt;line-height:1.14;text-align:left}
+.txt p{margin:0 0 4pt 0}
+.lead{font-weight:bold}
+.figwrap{flex:0 0 44%}
+.figwrap img{width:100%;display:block}
+.cap{font-size:8pt;font-style:italic;color:#555;line-height:1.15;margin-top:2pt}
+</style></head><body>
+<div class="sheet">
+<h1>P4 — Validating Learning Science for Machine Pretraining</h1>
+<div class="row">
+<div class="txt">
+<p><span class="lead">Spacing.</span> Expanding-interval review beat uniform review on knowledge retention (AUC 0.33 vs. 0.22; 95% CI 0.01–0.19; Pythia-162M, 20 seeds); both beat no review.</p>
+<p><span class="lead">Interleaving.</span> Mixing subjects rather than teaching in blocks lifted accuracy 52.8% → 79.2% (controlled pilot; single-subject controls showed no order effect).</p>
+<p><span class="lead">Mastery gating.</span> A mastery gate + replay was strongest (multi-step OOD 0.97 vs. 0.67 for shuffle); replay prevented catastrophic forgetting and reached hard skills using fewer tokens.</p>
+<p><span class="lead">Bottom line.</span> Under matched compute, all three learning-science principles show early positive transfer to pretraining; confirmatory preregistered runs are scoped and low-cost (hundreds to ~$10k each).</p>
+</div>
+<div class="figwrap">
+<img src="P4_onepager_figure_compact.png">
+<div class="cap"><b>Fig. 1.</b> Headline result per experiment (preliminary pilots; distinct metric per panel). Learning-science arm (blue) vs. baseline (gray), matched compute/exposure.</div>
+</div>
+</div>
+</div>
+</body></html>

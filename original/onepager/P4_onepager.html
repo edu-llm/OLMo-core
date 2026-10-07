@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @page { margin: 0.5in; }
+  body { font-family: "Times New Roman", Times, serif; color:#111; margin:0.5in; }
+  .sheet { width: 7.3in; }
+  h1 { font-size: 15pt; margin:0 0 2pt 0; }
+  .mission { font-size: 10.5pt; font-style: italic; color:#333; margin:0 0 8pt 0; }
+  .cols { column-count: 2; column-gap: 0.32in; font-size: 11pt; line-height: 1.16; text-align: justify; }
+  .cols p { margin: 0 0 6pt 0; }
+  .lead { font-variant: small-caps; font-weight: bold; letter-spacing:.2px; }
+  .fig { margin: 8pt 0 2pt 0; }
+  .fig img { width: 100%; display:block; }
+  .cap { font-size: 9pt; font-style: italic; color:#444; line-height:1.2; margin-top:3pt; }
+  .rule { border:0; border-top:1px solid #000; margin:6pt 0; }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <h1>P4 — Validating Learning Science for Machine Pretraining</h1>
+  <div class="mission">Do spacing, interleaving, and mastery gates — proven in human learning — transfer to how we train models? Preregistered, compute-matched tests; early pilots show positive signal on all three.</div>
+
+  <div class="cols">
+    <p><span class="lead">Spacing (spaced vs. uniform review).</span> Holding exposures, token budget, and first/last timing fixed, expanding-interval review beat uniform review on knowledge retention through training (normalized retention AUC 0.33 vs. 0.22; 95% CI on the gap 0.01–0.19; Pythia-162M, 20 paired seeds); both far exceeded no review. The gain concentrates mid-training and narrows by the final checkpoint — motivating the controlled synthetic-fact study now designed.</p>
+
+    <p><span class="lead">Interleaving (blocked vs. interleaved subjects).</span> Mixing arithmetic, logic, geometry, and statistics rather than teaching them in blocks lifted terminal accuracy from 52.8% to 79.2% in a controlled pilot; single-subject models showed zero order effect, ruling out artifacts. A ~195M OLMo-core, compute-matched confirmatory run is specified.</p>
+
+    <p><span class="lead">Mastery gating (advance only when competence is proven).</span> On a task with genuine prerequisite structure, a mastery gate + replay was the strongest schedule — multi-step out-of-distribution accuracy 0.97 vs. 0.67 for shuffle — and replay prevented the catastrophic forgetting that collapsed a naive gate. It also reached advanced skills using fewer tokens.</p>
+
+    <p><span class="lead">Synthetic student (evaluating curricula).</span> We can build a small “student” model to score curricula by measured learning gains; we recommend a bounded validation phase first, and are explicit about where LLM learning diverges from human learning.</p>
+
+    <p><span class="lead">Bottom line.</span> Under matched compute, early evidence indicates that core learning-science principles transfer to pretraining, with spacing and mastery-gating + replay the most promising. Confirmatory, preregistered runs are scoped and low-cost (hundreds to ~$10k each).</p>
+  </div>
+
+  <div class="fig">
+    <img src="P4_onepager_figure.png" alt="Preliminary results across three experiments">
+    <div class="cap"><b>Figure 1.</b> Headline result from each experiment (preliminary pilots; distinct metric per panel). All three learning-science arms beat their baselines under matched compute/exposure. Effects are small-scale and motivate larger preregistered runs — e.g., spacing schedules were statistically tied at the final delayed checkpoint.</div>
+  </div>
+</div>
+</body>
+</html>
