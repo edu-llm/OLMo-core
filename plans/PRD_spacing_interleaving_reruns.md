@@ -1,6 +1,6 @@
 # PRD: Reruns for the spacing study (Priority 1) and the interleaving study (Priority 2)
 
-*Owner: P4 · Drafted 2026-10-04 · Status: proposal for team review; to be preregistered before main runs*
+*Owner: P4 · Drafted 2026-10-04 · Spacing reviewed 2026-10-07 · Status: staged proposal; calibration and preregistration required before confirmation*
 *Builds on:*
 - *[methods_verification.md](../research/methods_verification.md): what the existing code did;*
 - *[research.md](../research/research.md) Parts I–II: the literature;*
@@ -13,147 +13,209 @@
   - **Spacing:** the pilot's review schedule was applied to *document-style batches*, not to individual facts. Only about half of the evaluated facts were ever reviewed, so the expanding-vs-uniform comparison wasn't really tested. The metric also mixes fact memory with format adaptation, and three seeds over one fixed set of 80 items is too thin.
   - **Interleaving:** there is one run with one order, the blocked arm's result is mostly recency, and the interleaved arm hadn't converged.
 - **What we run.**
-  - **Spacing (S-series):** a 300M rerun with **per-fact review schedules** (first and last review matched per fact), plus massed and generic-data control arms, a **never-trained control set**, behavioural metrics, 10 seeds with resampled event splits, LoRA and full fine-tuning, and a 1B check.
+  - **Spacing (S-series):** one 300M-class model with full fine-tuning, five arms, exact per-fact schedules and exposure accounting, independent paired replicates, and several retention delays from each trajectory. Choose replication once from meaningful precision and measured cost. LoRA, another span and 1B are targeted extensions, not a compulsory factorial grid.
   - **Interleaving (I-series):** all four counterbalanced orders × seeds, evaluation after every block, training to convergence, a block-length sweep, a replay arm, a skill-similarity manipulation and a size sweep.
-- **Cost.** Both studies use small models and short runs. Estimated **≤20 GPU-hours (spacing) + ≤15 GPU-hours (interleaving)**, dominated by evaluation. Phase 0 needs no GPUs.
-- **Code location.** The team implements this on `edu-llm/OLMo-core` (branches `anshulm/fictionalqa-review` and `p4/blocked-vs-interleaved`). No team code is stored on this machine.
+- **Cost.** The original GPU-hour promises were not benchmarked and must not be used as a budget. Measure complete-run training, evaluation and checkpoint costs before confirmation. Spacing uses 5n continuations plus n shared Stage-1 runs, rather than 100 main continuations and an automatic 20-run scale check. CPU validation comes first; every later stage has a measured cost forecast and a scientific reason to proceed. The user prefers a dynamic budget with no hard total cap; avoid unbenchmarked estimates and unjustified grids.
+- **Code location.** The team implements this on `edu-llm/OLMo-core` (branches `anshulm/fictionalqa-review` and `p4/blocked-vs-interleaved`). The publication checkout keeps the paper workspace separate from experiment implementation; experiment code can also be inspected in local remote-tracking git objects.
 - **Pipeline.** The AWS platform is retired, and the P4 code never depended on it. Everything except a thin launcher adapter can be built now; see **Part 3**.
-- **Paper text.** The matching methods sections are already drafted in [P4_spacing_paper_sections.md](../paper/drafts/P4_spacing_paper_sections.md) (sections tagged [RERUN]).
+- **Paper text.** The [RERUN] sections in [P4_spacing_paper_sections.md](../paper/drafts/P4_spacing_paper_sections.md) were drafted for the October 4 plan. Reconcile them with this reviewed protocol before assembling a manuscript.
 
 ---
 
 # Part 1: Spacing rerun (Priority 1)
 
-## 1.1 Problems this rerun fixes
+*Reviewed 2026-10-07 for scientific validity and cost. This section supersedes the October 4 spacing design and the matching [RERUN] manuscript placeholders. No experiments have been launched.*
 
-| Pilot problem (evidence in methods_verification.md Part I, research/notes/00, research/notes/05) | Fix |
+## 1.1 Question, contribution and scope
+
+**Question:** at a fixed replay budget, how much does the timing of repeated exposure change delayed factual retention, and what does it cost in new learning?
+
+The main experiment tests **fixed schedule shape**, with exposure count, reviewed content and per-fact endpoint timing controlled. It also tests spaced versus massed review. It does not establish that all replay schedulers are equivalent, that adaptive replay is unnecessary, or that a human retrieval mechanism explains gradient-based restudy.
+
+This distinction matters for prior work. FOREVER uses optimizer-update magnitude as its clock and includes replay regularization; its schedule ablation also compares increasing, uniform and decreasing intervals. SRT adapts per-example review and selection using perplexity. Neither is the same estimand as a fixed-count, endpoint-matched comparison. A null here would bound the benefit of these particular fixed shapes; it would not contradict all gains from adaptive replay. See [FOREVER, §2 and §3.4](https://arxiv.org/html/2601.03938v2) and [SRT, §3–4](https://arxiv.org/html/2608.17530v1).
+
+The smallest defensible main study uses **one 300M-class model, full fine-tuning, five arms, one prespecified span, and several delays measured along each run**. Spend replication on this comparison before adding adaptation methods, models or schedule grids. Generality extensions have separate decisions in §1.8.
+
+| Pilot or previous-plan weakness | Required correction |
 |---|---|
-| A review event was one 16-statement batch from one style; about 31–40 of 80 evaluated facts were ever reviewed; per-style last-review times differed by up to 57 updates | **Per-fact schedules** with first and last review matched per fact (§1.4) |
-| Old-fact loss fell during new-fact training in every arm (format/domain adaptation) | **Never-trained control events**, evaluated at every checkpoint; QA-format teaching events shared by all arms (§1.3) |
-| Facts were weakly learned (about 3.8 nats per answer token; about 3.5 Stage-1 exposures per fact; uneven across styles) | **Balanced Stage-1 exposure**, calibrated to a target exact-match band (§1.5) |
-| No massed arm, so the "spacing effect" was untestable | **Massed arm** (§1.4) |
-| Review replaced new-fact updates; no control for "a break from new facts" | **Generic-data arm** at the same insertion positions (§1.4) |
-| 3 seeds, 80 fixed items, one event split; no equivalence test; scale-dependent rate claim | **10 seeds with resampled splits**, all old facts evaluated, TOST, item-level mixed models, two outcome scales (§1.7) |
-| Cross-entropy only; exact match unreported | **Exact match, 4-choice MCQ accuracy, likelihood margin** (§1.6) |
-| Optimizer and warmup reset at Stage 2; LoRA only | **Optimizer state carried across stages**; LoRA *and* full fine-tuning (§1.5) |
-| One 300M model | A **1B** confirmation (§1.8) |
+| Style-level review left many evaluated facts unreviewed | Every old fact receives the declared exposures; compile and verify schedules before training |
+| Review counts and last exposure were not controlled per fact | Match counts, content and first/last review for `UNI`/`EXP`; match count, content and last review for `MASS` |
+| Three seeds on one event split | Independent replicate bundles with paired arms and fresh event-role assignments; choose sample size from precision and cost |
+| Old-fact loss mixes factual retention and general adaptation | Raw paired retention is primary; show never-trained controls and a generic-insertion comparator; qualify drift correction |
+| Weak initial learning and incomplete behavioral measurement | Development calibration, free generation with a stopping rule, and multiple-choice scoring |
+| The proposed 100-cell adaptation factorial and 20-cell scale check had no measured cost basis | One adaptation method in the core; measured complete-run costs; optional contrasts only after a decision gate |
+| A nonsignificant result could become an equivalence claim | Freeze a meaningful margin and fixed sample size; distinguish equivalence, useful differences and unresolved uncertainty |
 
-## 1.2 Hypotheses (preregister before main runs)
+## 1.2 Estimands and decision rules
 
-| ID | Hypothesis | Primary test |
+Let `L(a, i, d)` be replicate `i`'s event-macro old-fact answer loss for arm `a` at the common checkpoint `d` updates after the final scheduled review anywhere in that replicate. Loss excludes EOS. Average tokens within each answer, facts within each event, and events within the replicate. Lower is better. Retain the fact-micro average as a sensitivity analysis.
+
+| ID | Contrast at the prespecified primary delay `D*` | Interpretation |
 |---|---|---|
-| **S-H1** | Review improves *fact-specific* delayed retention: uniform review lowers drift-corrected old-fact loss relative to no review. | Paired contrast, 95% CI |
-| **S-H2** (primary) | Schedule shape: expanding and uniform review are equivalent in drift-corrected delayed retention within ±Δ. | TOST, Δ = 0.02 nats [TODO: confirm Δ from the Phase 0 reanalysis, e.g. 10% of the S-H1 effect] |
-| S-H3 | Spaced vs. massed: uniform review beats massed review at the long delay. | Paired contrast |
-| S-H4 | During training, expanding gives lower average old-fact loss than uniform (the pattern Kang et al., 2014, report in humans). | Paired contrast on the Stage-2 average |
-| S-H5 | Review changes the *level*, not the *rate*, of forgetting during the buffer. | Condition × time interaction on two scales (loss, accuracy) with an equivalence bound |
+| **S-H2, primary** | `EXP − UNI` | Fixed schedule shape at matched per-fact first/last exposure and dose |
+| S-H3 | `UNI − MASS` | Distributed versus consecutive review, with last review and dose matched |
+| S-H1 | `UNI − NONE` | Practical effect of spending part of a fixed training budget on review, including displaced new data |
+| S-HG | `UNI − GEN` | Old-fact review versus a specified generic-text insertion at the same positions and new-data budget |
 
-**Decision rules:**
-- **S-H2:**
-  - TOST significant → report equivalence within ±Δ.
-  - A one-sided test significant in either direction with |difference| ≥ Δ → report the difference.
-  - Otherwise → report "inconclusive".
-- **No post hoc search** for secondary contrasts that clear significance.
+`UNI − GEN` is evidence about the value of the reviewed content relative to that control. Generic web text is not a perfect match for old facts' domain, difficulty or gradient magnitude, so do not describe this as complete identification of a memory mechanism. Report old- and new-fact outcomes together for every contrast.
 
-## 1.3 Data
+For S-H2, propose **ΔL = 0.02 nats per answer token** as the smallest loss difference worth acting on. This corresponds to about a 2% ratio in geometric-mean gold-token probability; it is not a 2% change in answer accuracy. Explain this choice in the preregistration and freeze it before confirmation. Do not define ΔL as a fraction of the review gain observed in the main data, or widen it after seeing uncertainty. A proposed behavioral equivalence margin is **2 percentage points of generated exact match**; justify and freeze that separately if a behavioral-equivalence claim is planned. These are design choices, not validated universal thresholds.
 
-- **Source:** FictionalQA (Kirchenbauer et al., 2026), configs `fict_qa`, `gend_mcq_w_grades_03-01-26` and `blind_answer_attempts`, pinned revision `131cb74fdc3e601b5e896ed768ad9852ea35a8f9`. There are 7,500 QA rows over 100 events.
-- **Split per replicate:** each seed draws a fresh event-level split from the 100 events:
+- Report the paired estimate, its 95% CI and its 90% CI for S-H2. A 90% CI strictly inside `[-ΔL, +ΔL]` establishes loss equivalence by TOST at α = .05.
+- A 95% CI wholly below `−ΔL` or above `+ΔL` supports a practically meaningful directional difference. A point estimate beyond ΔL with a CI spanning it does not.
+- Otherwise, report the precision actually achieved. A small statistically detectable effect can still be practically equivalent. Failure to reject zero does not establish equivalence.
+- A loss-equivalence conclusion remains a loss-equivalence conclusion unless the prespecified behavioral equivalence test also passes. Report discordant loss, exact-match and MCQ results.
+- Test S-H1, S-H3 and S-HG as one prespecified secondary family with Holm correction. Report raw estimates and 95% CIs as well as adjusted p-values. All other contrasts and delays are descriptive unless assigned a separate correction in the preregistration.
 
-  | Split | Events | Use |
-  |---|---|---|
-  | Old | 20 | Stage 1, then reviewed |
-  | New | 40 | Stage 2 and buffer |
-  | Never-trained control | 20 | Evaluated only |
-  | QA-format teaching | 10 | Trained in every stage and arm, never evaluated |
+The former S-H4, the during-review advantage, and S-H5, the forgetting-rate claim, become secondary trajectory analyses. Do not make "same forgetting rate" a required success condition. Rate depends on outcome scale and initial performance; an insignificant arm-by-time interaction proves little.
 
-  The remaining 10 events are held in reserve.
-- **Facts:** one canonical question per duplicate cluster (`question_id == duplicate_root`), as in the pilot.
-- **Guessability filter:** drop questions with `blind_grade_avg` ≥ [TODO: threshold, e.g. 0.5]. Log the retained counts per split.
-- **Training text:** the fact's declarative statement (`fict`), as in the pilot. Optionally, where a "similar" duplicate exists, also train on its statement as a paraphrase. [TODO: decide; if used, apply in every arm.]
-- **QA-format teaching events:** question–answer pairs from these 10 events are mixed into every arm at a fixed rate. The model learns the answer format without seeing any evaluated fact in QA form. This removes most of the train/test format mismatch (Allen-Zhu & Li, 2024).
-- **Evaluation items:** **all** retained old facts, plus all new and control facts. Formats:
-  - the `fict_qa` question with `natural_answer`;
-  - the 4-choice MCQ item from `gend_mcq_w_grades`.
+## 1.3 Data, development and evaluation separation
 
-## 1.4 Arms and per-fact schedules
+- Pin FictionalQA and every used configuration to revision `131cb74fdc3e601b5e896ed768ad9852ea35a8f9`; validate the joins among `fict_qa`, MCQ and blind-answer metadata. The audited source contains 100 events and 7,500 QA rows before canonicalization and filtering.
+- **Reserve 20 events for development once**, before any new calibration. Use the remaining 80 only for confirmation. Hash and publish this outer partition. Development outcomes may set training lengths, formatting, LR, spans and test budgets; confirmation outcomes may not.
+- In each confirmatory replicate, independently assign the 80 confirmation events to **20 old, 30 new, 20 never-trained controls and 10 QA-format teaching events**, balanced by the available style metadata. Every arm in that replicate uses the same assignment. Separate RNG seeds cover split assignment, ordering, adapter initialization if applicable, and evaluation. This is replication conditional on the available corpus and pretrained checkpoint, not independent pretraining or evidence about arbitrary factual domains.
+- Development runs use a smaller disjoint event pool. Keep their data geometry and differences from confirmation explicit. Their variance is a planning estimate, not proof of the precision of a larger confirmatory split. Supplement it with a conservative variance sensitivity analysis rather than treating the old three-seed pilot as a reliable power estimate.
+- Deduplicate at the complete duplicate-cluster level before splitting. Keep every version of an event, fact, answer and supporting statement in one role. Audit cross-event entity aliases, duplicated facts and supporting text. Exclude or group genuinely linked events by a rule fixed before inspecting confirmation outcomes. If grouping changes the available counts, publish a corrected manifest before training.
+- Default to one canonical fact statement per duplicate cluster and **no blind-guessability filter**. Pretraining and QA-format effects are measured with baselines and never-trained controls. If a filter is needed, choose it on development data and apply the frozen metadata rule to all roles; keep an unfiltered sensitivity set. Never filter confirmation facts because the trained model learned or forgot them poorly.
+- Stage 1 and review use declarative statements. QA-format teaching uses distinct events in every arm at the same prespecified rate and positions. It may improve format transfer; do not assume that it removes all format effects.
+- Evaluate all eligible facts in each old/new/control role. One canonical QA form is the primary loss probe. Add one verified, meaning-preserving question paraphrase per old fact for behavioral transfer, created and checked before training. Training sees neither evaluation question form for those facts. Hold variants within their fact; they are not independent samples.
+- Audit every training statement and question/answer span against the tokenizer and context limit. No truncated gold answers or supporting facts. Freeze answer aliases, normalization, MCQ distractors and exclusions before confirmation; retain an audit sample of raw predictions.
 
-Each old fact *f* is assigned a start step *s_f* in Stage 2 (staggered evenly across facts) and receives exactly **k** review exposures. In every spaced arm, the first exposure is at *s_f* and the last at *s_f* + *L*, so first and last review times are matched **per fact**. All arms train for the same number of updates and process the same number of tokens.
+"Held out" means held-out question wording or never-trained events, as applicable. The answers and supporting statements for old facts are deliberately trained. Do not describe these as unseen facts.
 
-| Arm | Review offsets for fact *f* (relative to *s_f*) | Role |
+## 1.4 Arms, schedule construction and exposure accounting
+
+Use **k = 4** reviews per old fact in the core. Use one `L` selected for assay sensitivity during development, with **expanding gaps in the ratio 1:2:4**. At k = 4, r = 1.35 is a weak shape manipulation. Retain it only as a later pilot-recipe bridge, not another compulsory grid axis.
+
+Choose `L` as a multiple of 21 updates so both `UNI` and `EXP` have exact integer offsets. For fact `f`, let its first spaced review be `s_f` and its last be `e_f = s_f + L`.
+
+| Arm | Review offsets from `s_f` | What occupies review positions |
 |---|---|---|
-| `NONE` | none; slots filled with new-fact statements | baseline |
-| `UNI` | 0, *L*/(k−1), 2*L*/(k−1), …, *L* | uniform |
-| `EXP` | 0, …, *L* with gaps growing by ratio *r* (default *r* = 1.35, as in the pilot; sensitivity *r* = 2) | expanding |
-| `MASS` | *L*−k+1, …, *L* (k consecutive updates ending at the shared last review) | massed; recency matched |
-| `GEN` | `UNI` positions, filled with generic web text (a fixed Dolma sample) instead of old facts | "break from new facts" control |
-| `CON` (optional) | time-reversed `EXP` | contracting |
-| `ADD-UNI` (optional) | `UNI`, but review statements are *added* to the batch instead of replacing new-fact statements | displacement control |
+| `NONE` | No old-fact review | Additional new-fact training at the matched total budget |
+| `UNI` | `0, L/3, 2L/3, L` | The same canonical statement for that fact at every exposure |
+| `EXP` | `0, L/7, 3L/7, L` | Identical old statements and per-fact counts to `UNI` |
+| `MASS` | `L−3, L−2, L−1, L` | Identical old statements and counts; four consecutive optimizer updates |
+| `GEN` | The complete `UNI` insertion manifest | A pinned generic-text sample, length matched to the displaced review material |
 
-- **Insertion:** at each Stage-2 update, the review statements scheduled for that step replace an equal number of new-fact statements in the 16-sequence batch (`ADD-UNI` excepted). The schedule generator caps the review load per step and logs the realised per-fact exposure times.
-- **Defaults** [TODO: set in Phase 0]: k = 4; *L* = [TODO]; Stage-2 length = [TODO]; buffer length = [TODO, at least as long as the pilot's 180 updates]. Choose these so that the per-step review share stays below 50% of the batch in every arm.
-- **Review content:** the fact's training statement (restudy). Optional secondary arm: review in QA format (retrieval-like), to relate to the testing-effect literature (Roediger & Karpicke, 2006).
+For illustration only, `L = 84` gives `UNI = [0,28,56,84]`, `EXP = [0,12,36,84]`, and `MASS = [81,82,83,84]`. This example is not a selected training duration. Massing cannot match both endpoints of a spaced schedule; match the last exposure and state the remaining difference.
 
-## 1.5 Model and training
+**Compile all schedules on CPU before reserving a GPU.** Starts are assigned independently of fact difficulty, stratified by event and statement length where feasible, and paired across arms. Reject an infeasible manifest. Never defer, drop, duplicate or shift reviews at runtime to satisfy a batch cap.
 
-- **Model:** `allenai/DataDecide-dolma1_7-300M`, revision `4b1b42ff` (`step45787-seed-default`); 371.5M parameters (Magnusson et al., 2025).
-- **Adaptation:**
-  - LoRA r = 16, α = 32, dropout 0.05, all linear layers (as in the pilot);
-  - **plus full fine-tuning** at a learning rate chosen in Phase 0 (Biderman et al., 2024).
-- **Optimizer:** AdamW (β = 0.9, 0.95), weight decay 0.1, clip 1.0. Constant LR after a single 10-step warmup at the start of Stage 1 (Luo et al., 2026). **One optimizer state across all stages**; the pilot re-initialized it at Stage 2.
-- **Stage 1:** each old fact appears exactly *E* times in shuffled order, with style-balanced, fact-level sampling. Calibrate *E* in Phase 0 so that mean old-fact exact match after Stage 1 is in [TODO: target band, e.g. 40–70%].
-- **Stage 2 and buffer:** new facts as in the pilot; QA-format teaching events at a fixed share in all stages.
-- **Precision:** bf16 if supported (the pilot used fp16 autocast).
-- **Seeds:** 10 per arm. A seed fixes the event split, LoRA initialization and data order, and is shared across arms (paired design). All arms in a seed start from that seed's shared Stage-1 checkpoint.
+A simple capacity-safe starting construction is to assign small cohorts to successive start steps. With k distinct offsets, at most k cohorts can be due at one step. If each cohort has at most q facts and the review cap is Bᵣ sequences, `kq ≤ Bᵣ` bounds occupancy in every arm. For batch size 16 and a cap of 8 review sequences, q = 2 is feasible before token-length checks. Use the same cohorts across arms and log their membership. A more efficient solver is acceptable if it satisfies the same invariants.
 
-## 1.6 Measurement
+The compiler must also show that `number_of_old_facts × k` fits the available review slots. Record the width of staggered start times relative to L, and avoid letting that width dominate the intended spacing manipulation. A short 180-update phase may not fit all facts. Choose the duration from the actual manifest and the desired old/new token allocation; do not inherit the pilot's duration or replay percentage.
 
-- **Checkpoints:**
-  - every [TODO] updates in Stage 2;
-  - buffer delays of 1, 15, 60, 180 and [TODO: final] updates.
-- **Metrics, per fact:**
-  - answer-token cross-entropy (nats), reported with and without EOS;
-  - greedy exact match;
-  - 4-choice MCQ accuracy;
-  - likelihood margin: log p(correct) − logsumexp over the distractors.
-- **Primary outcome:** **drift-corrected delayed retention**, the mean old-fact answer loss minus the mean never-trained-control answer loss at the final delay (O'Neill, 2026, uses a similar drift control).
-- **Secondary outcomes:**
-  - exact match and MCQ accuracy at the final delay;
-  - the Stage-2 average (S-H4);
-  - forgetting during the buffer (S-H5);
-  - new-fact loss and accuracy (plasticity).
-- **Exposure log:** per fact, the number and times of every Stage-1 and review exposure. This makes the item-level dose–response analysis possible.
+Required invariants:
 
-## 1.7 Analysis
+1. **`UNI`, `EXP` and `MASS` have the same complete training-example multiset**, including old, new and QA-format material, with the same tokenization and loss masks. Only the permitted schedule/order changes. Preserve the within-stream order of new facts and QA teaching; document any changed placement imposed by review timing.
+2. Match global optimizer updates, batch shapes and total non-padding loss-bearing tokens among arms. Padding tokens are a separate compute count. Use deterministic length-aware packing and a fixed generic token source to make the `GEN` replacement budget exact without truncating facts. If equalization needs fillers, declare and include their counts; do not silently add extra factual exposure.
+3. `UNI` and `GEN` have the same new-fact examples, counts, placement and token budget. `NONE` intentionally has more new-fact exposure under the fixed total budget. Its contrast cannot identify review independently of displacement.
+4. First/last old review steps match per fact in `UNI`/`EXP`; last steps match in `MASS`; every reviewed old fact has exactly k exposures. Common Stage-1 exposure histories are identical across all five arms.
+5. The no-review buffer contains identical new/QA material in the same order in every arm, with no old facts or their duplicates. Log updates and cumulative new/QA tokens since each fact's last review. A step is not a biological time unit, and constant LR does not make optimizer update norms equal.
+6. Log the entire planned and realized exposure manifests, including per-fact times, content hashes, source role, tokens, loss weights and per-step occupancy. Abort on a mismatch. Assert optimizer-state and sampler-state restoration when forking or resuming.
 
-- **Unit:** item-level linear mixed-effects models with crossed random effects for fact (nested in event) and seed (Baayen et al., 2008; Barr et al., 2013). Arm is a fixed effect, with random slopes where supported. As a check, also report seed-level paired differences with 95% CIs and all per-seed values.
-- **Equivalence:** TOST for S-H2 at the preregistered Δ (Lakens, 2017).
-- **Multiplicity:** Holm correction across S-H1, S-H3, S-H4 and S-H5.
-- **Forgetting:** model loss and accuracy over all buffer checkpoints. Report the condition × time interaction on both scales (Loftus, 1985). Add a horizontal comparison: the delay at which a review arm reaches the no-review arm's buffer-onset level.
-- **Power:** use the Phase 0 reanalysis variance to confirm that 10 seeds give ≥80% power for S-H1 and a TOST bound of Δ. Increase seeds if they don't.
+Do not randomize schedules among facts inside a single model as a substitute for independent arm runs. Facts interact through shared parameters; that cheaper design estimates a different treatment and can hide interference between arms.
 
-## 1.8 Scale and generality (after the 300M grid)
+## 1.5 Model, training and calibration
 
-- **1B confirmation:** `NONE`, `UNI`, `EXP` and `MASS` at the DataDecide 1B size on the same Dolma 1.7 recipe [TODO: confirm repository and revision], LoRA only, 5 seeds.
-- **Optional:** Pythia-410M/1B for a second model family (Biderman et al., 2023). Yang et al. (2024) report order effects emerging between 160M and 410M.
+- **Core model:** `allenai/DataDecide-dolma1_7-300M`, audited checkpoint `step45787-seed-default`, revision prefix `4b1b42ff`, with 371.5M base parameters. Resolve and record the full immutable revision and tokenizer hash before execution.
+- **Core adaptation:** full fine-tuning. This avoids making the main retention finding conditional on one LoRA rank. It is not automatically cheaper or more expensive in elapsed time; profile it. If available hardware makes full FT impractical, choose LoRA before confirmation and narrow the claim, rather than changing method after seeing schedule results.
+- AdamW β = 0.9/0.95, weight decay 0.1 and clip 1.0 are starting settings. Select the LR from at most three development candidates using stable acquisition and new-fact learning, not the `EXP − UNI` contrast. Freeze one LR and one constant-after-warmup schedule for every arm. Record global loss normalization and effective batch size.
+- Warm up once before schedule comparisons begin. Carry optimizer moments, global step, LR state and RNG/data state across stages. A shared Stage-1 checkpoint includes all this state, not just weights. Each replicate has its own Stage-1 run; branch it into the five arms only when their manifests first diverge.
+- Stage 1 gives every old fact exactly E complete exposures with shuffled, balanced ordering. Use a bounded, increasing development schedule to find the smallest E with usable behavioral acquisition. A suggested calibration target is 40–70% old-fact generated exact match, away from floor and ceiling. If this is unattainable within the calibration cap, diagnose format transfer or data construction before spending on confirmation.
+- Freeze E after calibration. Do not stop each confirmatory replicate or arm on its own test score, and do not discard poorly learned confirmation facts. Show the whole Stage-1 acquisition distribution.
+- Choose the shortest `L`, Stage-2 duration and primary buffer delay `D*` that produce measurable interference without collapsing all arms to chance on development data. Verify that `NONE` changes over the buffer and that review can affect the measurements. Require both acquisition and assay sensitivity; selecting settings because expanding wins is prohibited.
+- Use bf16 if supported and preserve the same numerical settings across arms. Verify that microbatch accumulation, padding and reduction implement the declared loss. An A/A restart check should reproduce the same exposure sequence and agree within a recorded numerical tolerance.
 
-## 1.9 Phases and compute
+Budget calibration itself. Start with one bounded LR/acquisition screen, then at most four independent development replicate bundles for the final recipe, completing the five-arm diagnostic on at least one bundle and enough paired `UNI`/`EXP` continuations to estimate variance. Timestamp that limit before running. If it cannot establish a usable assay or a credible cost forecast, revise the assay rather than launching a wide grid. Development results are reported separately and are not pooled into confirmation.
 
-| Phase | Work | Compute |
+## 1.6 Measurement with bounded evaluation cost
+
+Use one training trajectory per arm through the longest prespecified buffer. Multiple delays require extra evaluation, not fresh retraining. Suggested checkpoints are pre-Stage-1, end of Stage 1, a small fixed grid during Stage 2, global buffer onset, `D*/4`, `D*`, and `2D*`, rounded once in the manifest. Confirm the longest delay is affordable before freezing it; never pick the primary delay after reading confirmation curves.
+
+Because facts have staggered final reviews, "buffer onset" is not an immediate post-review measurement for every fact. Report each checkpoint's range and distribution of per-fact review-to-test delays. `UNI`, `EXP` and `MASS` have identical delay distributions within each replicate. A delay curve is indexed by the global buffer clock unless explicitly computed per fact.
+
+- **Primary:** raw answer-token cross-entropy excluding EOS, with the event-macro aggregation in §1.2. Include EOS loss separately for comparison with the pilot. Report exact masks and denominators.
+- **Behavioral checks:** actual greedy generation, maximum answer length, stop sequence/EOS rule, normalization and accepted aliases fixed on development. Save unnormalized outputs. A teacher-forced all-token argmax match is at most an answer-prefix check and does not test free-generation termination.
+- **MCQ:** score full candidate answers by the sum of conditional answer-token log probabilities, excluding EOS, with a frozen prompt, fixed option text and paired, balanced option orders. Report length-normalized scoring as a sensitivity if candidate lengths differ. Report accuracy and correct-versus-distractor log-likelihood margin. MCQ recognition and free recall support different claims.
+- **Transfer:** report canonical and held-out paraphrase questions separately, with fact-level aggregation. Do not multiply the effective sample size by the number of variants.
+- **Plasticity and general performance:** report new-fact loss and accuracy beside retention. Run a small frozen generic-language loss set at Stage 1 end and the final checkpoint as a diagnostic of broad degradation.
+- **Drift:** show old and never-trained control trajectories separately. As a secondary sensitivity, report the difference of their changes from the shared Stage-1 baseline. That correction assumes control and old items share the same nuisance drift. Differences in difficulty and cross-fact transfer can violate the assumption; disagreement with raw outcomes must be visible.
+- **Curves:** compute a time-weighted trapezoidal AUC over Stage 2 only. Report the no-review buffer separately. Use discrete interval changes or a prespecified log-time curve for forgetting; do not assume one linear slope or infer equal rates from nonsignificance.
+
+Batch and cache teacher-forced scoring. Run full old-fact loss at the prespecified checkpoints; run expensive full generation/MCQ at Stage-1 end, buffer onset, `D*` and the longest delay. During-training generation may use one frozen stratified panel for debugging, never as a replacement for the full primary evaluation. Score new and never-trained facts on a sparser fixed grid if profiling shows a worthwhile saving. Pin every evaluation subset before confirmation and share it across arms.
+
+## 1.7 Replication, power and inference
+
+**The training replicate is the primary uncertainty unit.** Facts within a run share parameters and event content. Hundreds of questions cannot substitute for independently repeated arm comparisons.
+
+- For each contrast, first reduce each replicate to its paired difference. Primary intervals and tests use those paired values. Publish every replicate, its split seed and initialization/order seeds. The n count is the number of complete independently assigned replicate bundles.
+- Analyze item heterogeneity secondarily with event/fact and replicate structure. If events recur across replicate assignments, keep their stable IDs and account for recurrence. Use event-level resampling or mixed models as sensitivity analyses; do not bootstrap individual tokens or question variants as independent observations. With a small n, complex mixed-model fits should not replace the paired result.
+- Fix n before confirmation. Use development paired standard deviations, their uncertainty and plausible larger-variance scenarios to calculate power for the prespecified directional claim and TOST at ΔL. For TOST, show scenarios with true contrasts of zero and ±ΔL/2; for a CI wholly beyond ΔL, plan against a true contrast larger than ΔL, not exactly on its boundary. A rough precision forecast is `t_(.975,n−1) × s_difference / sqrt(n)`; use finite-sample power calculations or simulation for the final design. Target at least 80% power under the prespecified effect scenario and report the scenario. For behavioral equivalence, plan its precision too.
+- Planning candidates are n = 8, 12 and 16, rather than an automatic ten. They correspond to 40, 60 and 80 continuations on one adaptation method, plus n shared Stage-1 runs. Select the smallest candidate that meets the precision goal at a reasonable measured cost. These counts are planning choices, not assurances that 16 is enough or a maximum permitted sample size.
+- If the required n is substantially larger or costlier than these candidates, compare the scientific value of that precision with a narrower estimation claim before confirmation. More replication is justified when it answers the main question; do not inflate the margin to make an underpowered design look conclusive. There is no preset total spending ceiling.
+- Do not inspect the main effect after each few runs and stop when a p-value or CI becomes attractive. If unexpectedly high costs force an operational stop, record the reason and report the resulting uncertainty and incomplete design. Any valid sequential alternative needs its stopping boundaries and error control specified before data collection.
+- Infrastructure failures may be rerun under the original seed/config with a logged reason and capped attempts. A divergent or poorly performing valid run is a result, not an infrastructure failure. Report missing arm pairs and use a preregistered rule for the primary analysis; do not quietly replace them with new seeds.
+
+The primary inference is conditional on this benchmark, pretrained model, adaptation method, k, span and interference regime. Even well-powered equivalence at one setting cannot establish that scheduling generally does not matter.
+
+## 1.8 Extensions chosen for a stated question
+
+Do not launch a factorial expansion. Freeze each extension's arms, sample size, endpoint and budget before its new runs. A setting chosen after seeing the core is a follow-up; use new replicate bundles for confirmatory evidence and do not pool it with the core as if selected in advance.
+
+| Priority | Extension and minimum useful arms | Launch condition and claim it supports |
 |---|---|---|
-| **S0** (now, no GPUs) | Collect the pilot `runs/` folder and CI script. Reanalyse: exact match; reviewed vs. never-reviewed facts; TOST; buffer slopes. Implement the schedule generator and exposure logging. Write and timestamp the preregistration. | none |
-| **S1** calibration | Choose *E*, k, *L*, the Stage-2 and buffer lengths, and the full-FT LR. 2 seeds; small grid. | ~2 GPU-h |
-| **S2** main grid | 5 core arms × 10 seeds × {LoRA, full FT} = 100 runs (+ optional arms) | ~8–12 GPU-h |
-| **S3** scale | 1B: 4 arms × 5 seeds | ~4–6 GPU-h |
+| 1 | A second, prespecified spacing span with `UNI`, `EXP`, `MASS`; keep dose and per-fact final review matched within that span | The core is a usable assay and a claim about span sensitivity is worth the measured cost, whether the core shows a difference, equivalence or a boundary condition. This is preferable to testing many ratios at one span. Cross-span comparisons must state which endpoints moved. |
+| 2 | Same-model LoRA bridge, initially `UNI`/`EXP`; include `MASS` or `NONE` only for the corresponding claim | Needed to connect to the old pilot or test adaptation sensitivity. Use r = 16, α = 32, dropout 0.05 and all linear layers for the pilot bridge; recalibrate acquisition fairly on development data. Do not repeat every control by default. |
+| 3 | A 1B model in the same family and **the same adaptation method**, with the contrasts supporting the core finding | Broader scale is needed, memory/throughput are measured, and the comparison can reach useful precision. A 300M full-FT versus 1B LoRA comparison cannot identify a scale effect. Pin the checkpoint first. |
+| 4 | A second factual task or model family | Needed for claims beyond FictionalQA or this family. Choose one orthogonal generality check rather than a large model ladder. |
+| Claim-dependent | One adaptive scheduler plus uniform-random replay and, if needed, a difficulty-prioritized control | Required before recommending fixed uniform review over adaptive policies. Equalize total replay/new tokens, document per-item dose differences and charge scoring/scheduling overhead. This changes the estimand from fixed-count timing to allocation policy. |
 
-A pilot run trains for about 0.4M tokens, so evaluation dominates the cost. Replace these estimates with measured throughput after S1.
+If the intended paper is specifically about adaptive replay, move the last row ahead of scale rather than adding it on top. A practical scheduler comparison needs measured cost versus retention/new-learning quality, and sensitivity to tuning effort. A timing-only ablation cannot stand in for the full FOREVER method; teacher-forced QA review is not a model retrieval attempt.
+
+`CON`, added-budget review, more expansion ratios, an LR-decay interaction and a large LoRA-rank sweep are deferred. Added-budget review can address displacement, but it answers a different compute question and must show its extra tokens and cost. Do it only if that question becomes central.
+
+## 1.9 Stages, measured cost and stop decisions
+
+| Stage | Deliverable | Decision before spending more |
+|---|---|---|
+| **S0, CPU work** | Source-data audit; immutable event partitions; schedule compiler and invariants; metric checks; tiny-model A/A/resume smoke; draft preregistration and cost ledger | Every proposed arm is feasible. Recover the pilot logs in parallel; missing pilot logs do not block a well-specified new experiment. Old retrospective TOST remains exploratory. |
+| **S1, bounded development** | Acquisition and interference calibration; complete-run benchmark on intended hardware; paired variance scenarios; chosen endpoint, margin, n and manifest | Freeze all choices and timestamp the final preregistration **after calibration and before confirmation**. The assay is usable and the measured core cost forecast is proportionate to the scientific question. |
+| **S2, confirmation** | One model, full FT, five arms × fixed n; shared Stage-1 state per replicate; frozen delayed evaluations | Complete the declared experiment and analyze it once. No silent extensions to obtain a preferred result. |
+| **S3, targeted follow-up** | At most the extension that answers the next unresolved question | A written scientific reason, sample-size rationale and measured incremental cost forecast exist. No preset total cap is required. Scale is optional. |
+
+**The old ≤20 GPU-hour spacing estimate is withdrawn.** The pilot's token count does not price stronger initial acquisition, all-fact evaluation, free generation, full FT or the new schedules. The interleaving estimate elsewhere in this document is also unbenchmarked and is not a combined-project budget.
+
+Measure separately on the intended hardware: initialization/download, Stage 1, Stage-2 plus buffer training, each evaluation mode, checkpoint writes/restores, and teardown. Include billed idle allocation. Record peak memory and effective tokens per second with the actual sequence lengths and evaluation set. Prefer one GPU if it fits; choose hardware by complete-run cost, not its hourly rate alone. Free academic compute still has a GPU-hour and elapsed-time cost.
+
+For n replicates and five arms, the total allocated time is approximately:
+
+`H_core = sum_i [H_stage1_i + sum_a(H_load_ia + H_train_ia + H_eval_ia + H_io_ia)] + H_shared_setup`
+
+`C_total = C_development + sum_jobs(rate_per_allocated_job × billed_hours × attempts) + C_storage_and_transfer + C_extensions`
+
+Use the rate for the whole allocated job, not a per-GPU rate accidentally applied to a multi-GPU node. GPU-hours are the sum of GPU count × allocated wall-hours. Account for Stage 1 once per replicate, never once per arm. A LoRA bridge needs its own Stage 1; adapters cannot be forked from the full-FT Stage-1 state and called the same experiment.
+
+Cost controls:
+
+- Cache tokenized data, prompts, candidate answers and model weights; reuse the shared Stage-1 state and any later prefix that is byte-identical before the first differing update.
+- Evaluate frozen delays in memory where possible. Keep restart checkpoints and the few checkpoints needed for audit or later rescoring, not full optimizer snapshots at every metric tick.
+- Use a cheap frozen panel for development diagnostics and full declared sets for confirmation. Never claim savings by reducing independent replication while counting more correlated questions.
+- Set maximum attempts and a hard allocated-time cap per job; recover at checkpoints. Failed jobs, calibration, evaluation and storage all count toward cost.
+- Put the measured quote, selected n and a separately stated contingency in the run plan. A provisional 20% contingency may be used for forecasting, then updated from observed overhead; it is not a spending limit or a measured failure rate. Track forecast versus actual cost after each operational batch without using main-effect significance to decide continuation. Diagnose substantial runtime overruns or repeated failures before launching more jobs. Choose one useful extension at a time and reforecast it; avoid multiplying all models, adaptation methods, schedules and seeds into an automatic grid.
+
+**Fields that must be filled before S2:** hardware/venue and billing unit; development spent/remaining; actual full-FT peak memory; measured Stage-1/continuation/evaluation/checkpoint durations; frozen E/L/Stage-2 length/`D*`/maximum delay; n and predicted precision; core cost and contingency; maximum attempts; next stage decision and its scientific justification. Until then, report counts and formulas rather than invented dollar or GPU-hour promises.
 
 ## 1.10 Acceptance criteria
 
-- [ ] Per-fact exposure logs show every old fact received exactly k reviews at its scheduled offsets in every spaced arm.
-- [ ] Every number in the paper traces to a committed results file and analysis script.
-- [ ] The preregistration is timestamped before S2 starts.
-- [ ] The results report S-H1–S-H5 with CIs, TOST and per-seed values, on both the loss and accuracy scales.
+- [ ] The outer development/confirmation partition, per-replicate event roles, fact clusters, tokenizer and content manifests are immutable and audited.
+- [ ] Every schedule passes count, endpoint, capacity, content-multiset, token-budget and no-leakage assertions before launch; realized logs agree.
+- [ ] Acquisition and forgetting are measurable on development data; confirmation settings were not selected for an arm's advantage.
+- [ ] The final preregistration fixes the primary endpoint/delay, meaningful margins, n, multiplicity and failure policy before S2; the measured cost forecast and dynamic budgeting policy are recorded.
+- [ ] All five paired arms use shared Stage-1 optimizer/RNG/data state within each replicate; A/A and resume checks pass.
+- [ ] Results include raw loss, generated exact match, MCQ, new-fact learning, never-trained drift, per-replicate contrasts and actual costs.
+- [ ] Claims distinguish a loss bound from behavioral equivalence, finite fixed schedules from adaptive policies, and model-time interference from human memory.
+- [ ] Every number in the paper traces to a versioned result file and analysis script; manuscript [RERUN] sections are reconciled with this protocol before use.
 
 ---
 
@@ -241,11 +303,11 @@ Everything scientific lives in a **core** that runs the same way on a laptop GPU
 
 | Layer | Contents | Depends on pipeline? |
 |---|---|---|
-| Data | FictionalQA download pinned to revision `131cb74`, the event splits, the guessability filter, cached locally; the interleaving generators | No |
+| Data | FictionalQA download pinned to revision `131cb74`, the event splits, any development-selected metadata filter, cached locally; the interleaving generators | No |
 | Schedules | the per-fact review schedule generator; the block-length and Williams-square order generator; unit tests that check the realised exposure logs | No |
 | Training | the training loop with the same model, optimizer and LoRA/full-fine-tuning options, a constant LR, and one optimizer state across stages | No |
 | Evaluation | loss, exact match, MCQ, likelihood margin; per-item logs | No |
-| Analysis | the mixed models, TOST, Holm, figures; reads only the logged results files | No |
+| Analysis | paired-replicate estimates, TOST, Holm, heterogeneity sensitivities and figures; reads only logged results files | No |
 | Run interface | `python -m <pkg> run --config <arm>.yaml --run-id <id> --out <dir> [--resume auto] [--dry-run]` | No (defines the contract) |
 | **Launcher adapter** | a Slurm `sbatch` template (ORCD or FarmShare), a container recipe (`.edullm/Dockerfile` style), or a platform `run.yaml` | **Yes, and it's the only part that is** |
 
@@ -267,7 +329,7 @@ This is drawn from what every org pipeline required (research/notes/11, "What a 
   - the config files for every arm;
   - the analysis scripts (develop them on the pilot logs once Anshul shares `runs/`);
   - CPU smoke tests on a tiny model.
-- **Needs a GPU, but not the final pipeline:** the S1 and I1 calibration runs. These fit on one 24 GB card, so FarmShare, ORCD or a single rented GPU will do.
+- **Needs a GPU, but not the final pipeline:** the S1 and I1 calibration runs. Profile peak memory and complete-run time on the intended card before reserving the main runs; FarmShare, ORCD or a rented GPU remain options. A 24 GB fit is a target to verify, not an assumption.
 - **Waits for the pipeline decision:** the launcher adapter only, roughly a day's work for a Slurm template or a container recipe.
 
 ## 3.5 Open questions for the team

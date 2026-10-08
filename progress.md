@@ -10,8 +10,8 @@ Synthetic-student material is out of scope. **No paper text has been edited yet;
 ## TL;DR
 
 - **Spacing.** The experiment is real and its headline numbers match the code. The paper misdescribes several parts of the method, 3 citations are misused, and the design has gaps reviewers will find.
-  - **Decision needed:** write it up as an honest pilot, or rerun at 300M with per-fact schedules and controls first.
-  - **Blocking:** the `runs/` outputs and the CI script from Anshul.
+  - **Reviewed plan, 2026-10-07:** the spacing PRD now defines a five-arm 300M full-fine-tuning core, calibration-based sample size and cost accounting, with optional extensions gated separately. Recover the old logs where possible, then calibrate and freeze the new protocol before confirmation.
+  - **Evidence recovery:** the `runs/` outputs and the CI script from Anshul remain missing. They are needed to verify the old paper, but need not prevent a new self-contained experiment.
 - **Interleaving.** The report describes a 195M study that was never run. The only run (162M, digit skills, n = 1, one order) is unmentioned, and the "toy pilot" numbers have no code.
   - Cheap fix: counterbalanced orders × seeds plus recency and spacing controls, using the existing code.
 - **Mastery gating.** Two preliminary experiments, no code on any branch, no seeds. Reviewers will require real experiments.
@@ -86,16 +86,18 @@ Section numbers like "§2.4" refer to the whitepaper unless marked otherwise.
 - [ ] TOST for expanding vs. uniform.
 - [ ] Condition × time over all buffer checkpoints, on two scales (loss and probability or accuracy).
 
-### F. New runs at 300M (cheap; do before scaling up)
+### F. New spacing runs at 300M (reviewed 2026-10-07)
+- [x] Review [PRD Part 1](plans/PRD_spacing_interleaving_reruns.md) with an Astra subagent at xhigh for scientific validity and cost. The revised PRD governs implementation; older checklists and draft methods are not an additional mandatory grid.
 - [ ] Per-fact schedules: every old fact gets *k* reviews at its own expanding or uniform positions, with first and last exposure matched per fact.
-- [ ] Never-trained control set (the 40 unused FictionalQA events).
-- [ ] A massed arm, a generic-data arm at the review positions, and an arm where review is *added* rather than replacing new-fact updates.
-- [ ] Full fine-tuning, or a LoRA rank sweep.
-- [ ] ≥10 seeds; a different event split per replicate; evaluate all 386 old facts; a pre-Stage-1 baseline; a multiple-choice or likelihood-margin metric.
-- [ ] FOREVER's schedule and an adaptive per-item arm (SRT-like).
+- [ ] Split calibration and confirmation events; reserve never-trained control events and separate QA-format teaching events. Evaluate the frozen fact roster without post-treatment filtering.
+- [ ] Validate the five-arm core: no review, uniform, expanding, massed, generic-data insertion. Verify exposure, endpoint and token invariants before GPU runs.
+- [ ] Benchmark complete 300M full-fine-tuning calibration runs, including evaluation and checkpoint overhead. Share Stage-1 checkpoints and optimizer states across paired arms.
+- [ ] Freeze meaningful effect/equivalence margins, primary delay, sample size and measured cost forecast before confirmation; no unadjusted significance peeking or margin changes after seeing main results.
+- [ ] Report event-macro answer loss excluding EOS, generated-answer exact match, MCQ accuracy, old/new trade-offs and multiple delays from the same buffer. Treat drift correction as a secondary analysis with assumptions.
+- [ ] Keep LoRA comparisons, a second review span, adaptive schedulers and larger models as separately justified extensions, including informative null results.
 
-### G. Scaling (after F; research.md §7)
-- [ ] Ladder: DataDecide 150M → 1B → Pythia 410M → 2.8B → OLMo 1B/7B. Use ≥5 seeds, a fixed Stage-1 loss criterion, and report absolute and relative forgetting.
+### G. Spacing extensions (after F; PRD Part 1 governs)
+- [ ] Choose an extension for a specific unresolved question and budget it using measured costs. Run selected paired contrasts, preserving adaptation method for any size comparison. The former broad size ladder is not a launch requirement.
 
 ### H. Decisions and writing
 - [x] Draft the spacing paper as a section collage (pilot-accurate, timeless and rerun versions): [P4_spacing_paper_sections.md](paper/drafts/P4_spacing_paper_sections.md). It has 25 open placeholders, listed at the end of the file.
@@ -239,5 +241,13 @@ Section numbers like "§2.4" refer to the whitepaper unless marked otherwise.
 - Pushed this workspace to `edu-llm/OLMo-core` as the standalone branch `p4-publication`. It shares no history with `main`.
 - Added `.gitignore` (excludes the local writing skill, `CLAUDE.md`, the synthetic-student documents, OS/editor/Python junk and run artifacts).
 - Added [HANDOFF.md](HANDOFF.md) for the next agent: where everything is, and to ignore the synthetic-student content left in the unmodified originals.
+
+### 2026-10-07: Spacing PRD reviewed for scientific validity and cost
+- Used a GPT-6 Astra subagent at xhigh, as requested, to revise [PRD Part 1](plans/PRD_spacing_interleaving_reruns.md). Interleaving's experiment design remains unchanged.
+- Replaced the automatic full-FT/LoRA factorial and 1B check with one five-arm 300M full-FT core and separately justified extensions. Proposed planning sample sizes are 8, 12 or 16 complete paired bundles, selected once from calibration, precision and measured cost.
+- Added a development/confirmation event partition, exact capacity-safe review schedules, content/token invariants, stronger expanding gaps, shared Stage-1 optimizer state, actual generated-answer scoring and explicit bounds on the claims.
+- Made raw event-macro answer loss excluding EOS primary and drift correction secondary. Prespecified equivalence and practical-difference rules replace nonsignificance-as-equivalence; main-effect peeking cannot determine sample size.
+- Withdrew the unsupported spacing GPU-hour estimate. The new cost ledger includes development, initialization, training, evaluation, checkpointing, allocated idle time and retries. The user clarified that the budget is dynamic with no hard total cap; spending decisions should use measured costs and scientific value, with operational runtime/retry limits retained. No price or runtime has been measured and no experiments were launched.
+- Marked the October 4 [RERUN] paper passages as requiring reconciliation with the reviewed protocol. Updated the active spacing checklist; historical notes retain their original estimates as history.
 
 **Note:** the team's GitHub code must not be stored on this computer. Two clones and three copied code files made during the research were deleted on 2026-10-02.

@@ -4,6 +4,7 @@
 
 ## TL;DR
 
+- **Protocol status, 2026-10-07.** The revised [spacing PRD](../../plans/PRD_spacing_interleaving_reruns.md), Part 1, governs implementation after scientific and cost review. The [RERUN] passages below reflect the October 4 design and must be reconciled with the revised protocol before manuscript assembly; they do not describe completed experiments.
 - **How to use this file.** Every section carries a status tag. To build a paper, pick one version of each section and paste them together.
   - **[PILOT]** describes the experiment as it was actually run, according to the code on branch `anshulm/fictionalqa-review` (see [methods_verification.md](../../research/methods_verification.md)). Use it for a pilot or workshop paper now.
   - **[BOTH]** is true whatever the reruns show: introduction framing, related work, terminology.
