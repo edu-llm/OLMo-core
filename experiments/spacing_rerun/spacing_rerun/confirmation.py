@@ -154,8 +154,24 @@ def validate_retained_source_ancestor(chunk, ancestor):
             continue
         if key in ancestor:
             require(value == ancestor[key], 'Retained source ancestor field differs from its immutable original')
-        elif key in ('prior_full_authored_chunk', 'authored_snapshot'):
+        elif key in ('prior_full_authored_chunk', 'authored_snapshot', 'snapshot'):
             require(value == ancestor, 'Retained full source snapshot differs from immutable ancestor')
+        elif key == 'snapshot_canonical_sha256':
+            require(retained.get('snapshot') == ancestor and value == ancestor['sha256'],
+                    'Retained snapshot canonical seal differs from immutable ancestor')
+        elif key == 'supplied_base_version':
+            require(packet and retained.get('snapshot') == ancestor and value == 'v4' and
+                    Path(packet['current_authored_path']).name.endswith('-semantic-v4.json'),
+                    'Declared supplied base version differs from exact source-only input')
+        elif key == 'question_patch_provenance_location':
+            require(retained.get('snapshot') == ancestor and value ==
+                    'snapshot.retained_source_ancestor.question_patch_provenance' and
+                    ancestor.get('retained_source_ancestor', {}).get('question_patch_provenance'),
+                    'Retained historical patch location differs from immutable snapshot')
+        elif key == 'question_patch_provenance_note':
+            require(retained.get('snapshot') == ancestor and retained.get('supplied_base_version') == 'v4' and value ==
+                    'The supplied historical proof remains exactly in the V4 snapshot under its original ancestry. No V5 snapshot or V5 patch is supplied or created.',
+                    'Retained historical patch note is unsupported')
         elif key == 'inherited_retained_source_ancestor':
             require('retained_source_ancestor' in ancestor and value == ancestor['retained_source_ancestor'],
                     'Inherited retained source history differs from immutable ancestor')
@@ -216,13 +232,46 @@ def validate_retained_source_ancestor(chunk, ancestor):
             require(False, 'Unsupported retained source ancestor field: ' + key)
 
 
+def derived_source_metadata_base_version(chunk, authored=None):
+    """Retain the entire semantic author version beneath a computed flag view."""
+    authored = checked(authored or chunk['authored'], 'spacing-confirmation-authored-source-chunk-v1')
+    prior = checked(chunk.get('prior_authored'), authored['schema'])
+    derivation = authored.get('metadata_derivation', {})
+    require(derivation.get('revision_kind') == 'derived_flag_metadata_only' and derivation.get('metadata_only') is True and
+            authored.get('prior_authored_sha256') == prior['sha256'] and
+            authored.get('revision_author', {}).get('role') == 'derived_flag_metadata_only' and
+            derivation.get('task_id') == authored['revision_author'].get('task_id') and
+            authored.get('approval_granted') is False,
+            'Derived source-flag cleanup lost its actual prior artifact/task or claims approval')
+    excluded = {'sha256', 'source_units', 'prior_authored_sha256', 'revision_author', 'metadata_derivation', 'approval_granted'}
+    require({key: value for key, value in authored.items() if key not in excluded} ==
+            {key: value for key, value in prior.items() if key not in excluded} and
+            len(authored['source_units']) == len(prior['source_units']) and all(
+                {key: value for key, value in current.items() if key != 'nonliteral_answer_labels'} ==
+                {key: value for key, value in old.items() if key != 'nonliteral_answer_labels'}
+                for current, old in zip(authored['source_units'], prior['source_units'])),
+            'Derived source-flag cleanup changed semantic content or source membership')
+    base = chunk.get('metadata_derivation_base_version', {'authored': prior,
+        'author_task_provenance': chunk.get('prior_author_task_provenance', [])})
+    require(base.get('authored') == prior, 'Derived source metadata base differs from exact immutable prior version')
+    require(not (prior.get('retained_source_ancestor') or prior.get('question_patch_provenance') or
+                 prior.get('metadata_derivation')) or 'metadata_derivation_base_version' in chunk,
+            'Derived source metadata lost complete retained semantic ancestry')
+    return base
+
+
 def source_semantic_base_version(chunk):
     """Follow exact retained question-patch links to their semantic author base."""
     current, seen = chunk, set()
-    while current['authored'].get('question_patch_provenance'):
+    while current['authored'].get('question_patch_provenance') or current['authored'].get('metadata_derivation'):
         authored = checked(current['authored'], 'spacing-confirmation-authored-source-chunk-v1')
         require(authored['sha256'] not in seen, 'Cyclic retained question patch ancestry')
         seen.add(authored['sha256'])
+        if authored.get('metadata_derivation'):
+            base = derived_source_metadata_base_version(current)
+            require(base['authored']['sha256'] not in seen, 'Cyclic retained source metadata ancestry')
+            current = base
+            continue
         proof = current.get('question_patch_evidence')
         require(proof and isinstance(proof.get('base_authored'), dict), 'Missing exact retained question patch base')
         base = current.get('question_patch_base_version', {'authored': proof['base_authored'],
@@ -240,7 +289,7 @@ def source_semantic_base_version(chunk):
 
 def author_context(chunk, *, evaluation=False):
     authored = chunk['authored']
-    if authored.get('question_patch_provenance'):
+    if authored.get('question_patch_provenance') or authored.get('metadata_derivation'):
         source_semantic_base_version(chunk)
     people = {'author': authored['author']}
     if authored.get('revision_author'):
@@ -305,7 +354,13 @@ def author_context(chunk, *, evaluation=False):
         people.update({'retained_' + key: person for key, person in prior_context['people'].items()})
         channels.extend(prior_context['channels'])
         provenance = list(provenance) + list(prior_context['task_provenance'])
-    if authored.get('retained_source_ancestor') and not authored.get('question_patch_provenance'):
+    if authored.get('metadata_derivation'):
+        base_version = derived_source_metadata_base_version(chunk)
+        prior_context = author_context(base_version)
+        people.update({'metadata_base_' + key: person for key, person in prior_context['people'].items()})
+        channels.extend(prior_context['channels'])
+        provenance = list(provenance) + list(prior_context['task_provenance'])
+    if authored.get('retained_source_ancestor') and not authored.get('question_patch_provenance') and not authored.get('metadata_derivation'):
         ancestor_version = chunk.get('source_ancestor_version', {})
         ancestor = checked(ancestor_version.get('authored'), authored['schema'])
         validate_retained_source_ancestor(chunk, ancestor)
@@ -685,22 +740,7 @@ def validate_source_chunks(chunks, catalog):
                     'Mechanical source question merge differs from its exact actual source-only patch')
             authored = checked(patch_evidence['base_authored'], authored['schema'])
         if authored.get('metadata_derivation'):
-            prior = checked(chunk.get('prior_authored'), authored['schema'])
-            derivation = authored['metadata_derivation']
-            require(derivation.get('revision_kind') == 'derived_flag_metadata_only' and derivation.get('metadata_only') is True and
-                    authored.get('prior_authored_sha256') == prior['sha256'] and
-                    authored.get('revision_author', {}).get('role') == 'derived_flag_metadata_only' and
-                    derivation.get('task_id') == authored['revision_author'].get('task_id') and
-                    authored.get('approval_granted') is False,
-                    'Derived source-flag cleanup lost its actual prior artifact/task or claims approval')
-            excluded = {'sha256', 'source_units', 'prior_authored_sha256', 'revision_author', 'metadata_derivation', 'approval_granted'}
-            require({key: value for key, value in authored.items() if key not in excluded} ==
-                    {key: value for key, value in prior.items() if key not in excluded} and
-                    len(authored['source_units']) == len(prior['source_units']) and all(
-                        {key: value for key, value in current.items() if key != 'nonliteral_answer_labels'} ==
-                        {key: value for key, value in old.items() if key != 'nonliteral_answer_labels'}
-                        for current, old in zip(authored['source_units'], prior['source_units'])),
-                    'Derived source-flag cleanup changed semantic content or source membership')
+            derived_source_metadata_base_version(chunk, authored)
         if authored.get('retained_metadata_correction'):
             prior = checked(chunk.get('prior_authored'), authored['schema'])
             metadata = checked(chunk.get('metadata_only_authored'), authored['schema'])

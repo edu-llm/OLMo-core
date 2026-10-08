@@ -60,6 +60,57 @@ def execution_fixture():
 
 
 class SemanticAuthorEvidenceTests(unittest.TestCase):
+    def test_supplied_v4_snapshot_aliases_do_not_create_missing_v5_history(self):
+        chunk, row, _, ancestor = execution_fixture()
+        ancestor['retained_source_ancestor'] = {'question_patch_provenance': {'schema': 'synthetic-historical-patch'}}
+        seal(ancestor); chunk['authored']['prior_authored_sha256'] = ancestor['sha256']
+        packet = row['semantic_execution_evidence']['input_packet']
+        packet.update(current_authored=ancestor, current_authored_path='/synthetic/chunk-04-semantic-v4.json')
+        chunk['authored']['retained_source_ancestor'] = {'applies_to_authored_sha256': ancestor['sha256'],
+            'authored_path': packet['current_authored_path'], 'snapshot': ancestor,
+            'snapshot_canonical_sha256': ancestor['sha256'], 'supplied_base_version': 'v4',
+            'question_patch_provenance_location': 'snapshot.retained_source_ancestor.question_patch_provenance',
+            'question_patch_provenance_note': 'The supplied historical proof remains exactly in the V4 snapshot under its original ancestry. No V5 snapshot or V5 patch is supplied or created.'}
+        validate_retained_source_ancestor(chunk, ancestor)
+        mutations = [lambda r: r.update(snapshot_canonical_sha256='0'*64),
+                     lambda r: r.update(supplied_base_version='v5'),
+                     lambda r: r.update(question_patch_provenance_location='snapshot.question_patch_provenance'),
+                     lambda r: r.update(question_patch_provenance_note='Invented V5 history'),
+                     lambda r: r['snapshot'].update(approval=True)]
+        for mutate in mutations:
+            changed = copy.deepcopy(chunk); mutate(changed['authored']['retained_source_ancestor'])
+            with self.assertRaises(ValueError): validate_retained_source_ancestor(changed, ancestor)
+
+    def test_computed_flag_view_retains_complete_actual_semantic_author_context(self):
+        base, _, _, ancestor = execution_fixture()
+        base['source_ancestor_version'] = {'authored': ancestor}
+        current = copy.deepcopy(base['authored'])
+        who = {'agent_id': '/root/synthetic-source-derived-flags', 'task_id': '/root/synthetic-source-derived-flags',
+               'provider': 'openai', 'model': 'fixture-model', 'role': 'derived_flag_metadata_only'}
+        current.update(prior_authored_sha256=base['authored']['sha256'], revision_author=who,
+                       approval_granted=False, metadata_derivation={'revision_kind': 'derived_flag_metadata_only',
+                       'metadata_only': True, 'task_id': who['task_id']})
+        seal(current)
+        result = {'authored_sha256': current['sha256'], 'author_packet_sha256': current['source_author_packet_sha256'],
+                  'input_channel': 'source_only', 'identity': who}
+        task = {'schema': 'spacing-native-author-task-evidence-v1', 'canonical_task_name': who['agent_id'],
+                'status': 'completed', 'model': who['model'], 'actual_result': result,
+                'actual_result_text': 'Synthetic computed view ' + current['sha256'], 'result_source': 'Synthetic observed result'}
+        chunk = {'authored': current, 'prior_authored': base['authored'], 'metadata_derivation_base_version': base,
+                 'author_task_provenance': [{'role': 'revision_author', 'task_id': who['agent_id'], 'task_record': task, **result}]}
+        context = author_context(chunk)
+        self.assertIn('task:' + who['agent_id'], context['channels'])
+        self.assertIn('task:' + base['author_task_provenance'][0]['task_id'], context['channels'])
+        for kind in ('missing-base', 'wrong-base', 'changed-question', 'changed-source-flag', 'approval'):
+            changed = copy.deepcopy(chunk)
+            if kind == 'missing-base': changed.pop('metadata_derivation_base_version')
+            elif kind == 'wrong-base': changed['metadata_derivation_base_version'] = {'authored': ancestor}
+            elif kind == 'changed-question': changed['authored']['acquisition_records'][0]['questions'][0] = 'Changed semantics?'
+            elif kind == 'changed-source-flag': changed['authored']['source_units'][0]['status'] = 'preserve_source_conflict'
+            else: changed['authored']['approval_granted'] = True
+            seal(changed['authored'])
+            with self.subTest(kind=kind), self.assertRaises(ValueError): author_context(changed)
+
     def test_retained_actual_source_input_aliases_bind_exact_repair_packet(self):
         chunk, row, _, ancestor = execution_fixture()
         packet = row['semantic_execution_evidence']['input_packet']
