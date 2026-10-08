@@ -13,6 +13,7 @@ from spacing_rerun.encoding import packed_example
 from spacing_rerun.evaluation import conditional_scores
 from spacing_rerun.training import (load_checkpoint, make_optimizer, recover_exposure_log,
                                     save_checkpoint, seed_all, train_update)
+from spacing_rerun.schedule import stage1_epoch
 
 
 class Tokenizer:
@@ -84,6 +85,53 @@ class TrainingTests(unittest.TestCase):
         self.assertAlmostEqual(a["loss"], b["loss"], places=6)
         for key in one.state_dict():
             torch.testing.assert_close(one.state_dict()[key], other.state_dict()[key], rtol=1e-5, atol=1e-7)
+
+    def test_mid_epoch_restart_preserves_all_later_epochs(self):
+        """An interruption after unsaved work resumes the saved shuffled stream."""
+        from collections import Counter
+        config = dict(self.config(), batch_size=6, qa_per_step=1, order_seed=17)
+        facts = [{"id": f"{role}{i}", "role": role} for role in ("old", "qa") for i in range(7)]
+        examples = {role + "/" + f["id"]: packed_example(Tokenizer(), "ab", f["id"],
+                    [1, 2, 3, 4] * 50, 8, 12) for f in facts for role in [f["role"]]}
+        examples["filler"] = packed_example(Tokenizer(), "", "filler", [1, 2, 3, 4] * 50, 8, 12)
+        planned = [row for epoch in range(5) for row in stage1_epoch(facts, epoch, config)]
+        self.assertEqual(len(planned), 10)
+        seed_all(811)
+        model = TinyLM()
+        optimizer = make_optimizer(model, config)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint, log = Path(directory) / "state.pt", Path(directory) / "log.jsonl"
+            for i, row in enumerate(planned):
+                train_update(model, optimizer, row, examples, config, i, "cpu", contextlib.nullcontext)
+                append_json(log, {"cursor": i + 1, "examples": row, "row_sha256": digest(row)})
+                if i == 2:
+                    # Two rows per epoch: this is halfway through epoch1, well
+                    # away from an epoch/milestone boundary.
+                    save_checkpoint(checkpoint, model, optimizer,
+                                    {"epoch": 1, "epoch_cursor": 1, "global_step": 3, "cursor": 3}, "m")
+            expected = copy.deepcopy(model.state_dict())
+            expected_optimizer = copy.deepcopy(optimizer.state_dict())
+            resumed = TinyLM()
+            resumed_optimizer = make_optimizer(resumed, config)
+            progress = load_checkpoint(checkpoint, resumed, resumed_optimizer, "m", "cpu")
+            recover_exposure_log(log, progress["cursor"])
+            consumed = planned[:progress["cursor"]]
+            for epoch in range(progress["epoch"], 5):
+                rows = stage1_epoch(facts, epoch, config)
+                for index in range(progress["epoch_cursor"], len(rows)):
+                    train_update(resumed, resumed_optimizer, rows[index], examples, config,
+                                 progress["global_step"], "cpu", contextlib.nullcontext)
+                    progress["global_step"] += 1
+                    consumed.append(rows[index])
+                progress["epoch_cursor"] = 0
+            self.assertEqual(consumed, planned)
+            counts = Counter(k for row in consumed for k in row if k.startswith("old/"))
+            self.assertEqual(set(counts.values()), {5})
+            for key in expected:
+                self.assertTrue(torch.equal(expected[key], resumed.state_dict()[key]), key)
+            for pid, values in expected_optimizer["state"].items():
+                for key, value in values.items():
+                    self.assertTrue(torch.equal(value, resumed_optimizer.state_dict()["state"][pid][key]))
 
     def test_answer_shift_excludes_prompt_and_eos(self):
         class Scripted(torch.nn.Module):

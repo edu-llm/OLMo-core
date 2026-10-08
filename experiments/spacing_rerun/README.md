@@ -22,7 +22,7 @@ The checked-in configuration runs one LR candidate, `1e-4`, and tests E at `1,2,
 
 The `calibrate` command performs acquisition only. If its decision is usable, submit development arm diagnostics from its shared checkpoint. Complete at least one five-arm development bundle and enough independent UNI/EXP pairs to estimate paired variance, within the PRD's initial limit of three LR candidates and four development bundles. That cross-job limit is an operator responsibility; this package does not start a grid automatically.
 
-Each process stops after 20 hours by default and writes a restart checkpoint. The Slurm launcher requests 22 hours, one GPU, four CPU cores and 32 GB RAM, and excludes `wheat-01`. Its early signal reaches Python. Exit code 75 means a checkpointed time limit, not experiment completion. Resubmit the same command and output path to resume; each output directory allows at most three process attempts. Ordinary exceptions, divergence and nonfinite loss do not cause automatic retries.
+Each process stops after 20 hours by default and writes a restart checkpoint. The Slurm launcher requests 22 hours, one GPU, four CPU cores and 32 GB RAM, and excludes `wheat-01`. Its early signal reaches Python. Exit code 75 means a checkpointed time limit, not experiment completion. Resubmit the same command and output path to resume; each output directory allows at most three process attempts. Ordinary exceptions, divergence and nonfinite loss do not cause automatic retries. Stage 1 writes checkpoints every 50 updates, at acquisition milestones, at completion and on a time/signal stop. It does not write one at every non-milestone epoch. Resuming a checkpoint in the middle of an epoch restores the exact shuffled exposure sequence and optimizer/RNG state.
 
 Use scratch storage for the model cache, virtual environment and outputs. Each full optimizer checkpoint is several GB. The runner keeps the shared Stage-1 state, a current restart state and per-fact evaluation JSON; it does not retain optimizer snapshots at every evaluation. GPU allocation elapsed from `sacct`, CPU preparation, failures, downloads and storage must be added to process timing before forecasting the full study.
 
@@ -74,6 +74,22 @@ python -m spacing_rerun power --sd 0.02 --sd 0.04 --sd 0.08 \
 
 Those SD values illustrate sensitivity inputs. Replace them with measured paired variability and conservative larger scenarios. The power command simulates finite-sample paired t intervals under normal paired differences; it does not prove that this assumption holds or automatically choose n.
 
+## Diagnosing failed acquisition
+
+After the acquisition process terminates, a separate diagnostic can read its final `stage1.pt` without changing that checkpoint or its outputs. Run this command inside a short GPU allocation. The standard `farmshare.sbatch` invokes the main module, so use an explicit diagnostic batch command with the same environment, one GPU and `--exclude=wheat-01`.
+
+```bash
+python -m spacing_rerun.diagnose \
+  --prepared /scratch/users/USER/spacing/dev-001/prepared \
+  --checkpoint /scratch/users/USER/spacing/dev-001/stage1/stage1.pt \
+  --output /scratch/users/USER/spacing/dev-001-diagnostic.json \
+  --max-runtime-seconds 900
+```
+
+The diagnostic records a SHA-256 of the source checkpoint, its byte count, manifest, epoch/global step, code commit, load/hash/evaluation times and peak GPU memory. It scores all QA-teaching questions with loss and actual generation, all old questions with the same measures, and the old training statements with filler and EOS excluded from the primary content loss. An answer-span diagnostic scores the canonical answer only where it appears uniquely in its training statement and aligns with tokenizer offsets; every exclusion and the coverage denominator are retained. Statement reconstruction and answer-span likelihood are contextual memorization diagnostics, not proof of factual QA ability.
+
+Strong statement fitting with weak old-question performance can indicate failure to transfer trained content into QA. Weak performance even on QA-teaching questions motivates examining the teaching recipe. The comparisons use different contexts and sometimes different facts, so they do not identify a causal mechanism. Choose subsequent development settings from acquisition stability, transfer and general-language degradation. Do not select settings because EXP outperforms UNI.
+
 ## Evaluation and inference
 
 Teacher-forced scoring uses the correct next-token shift, masks the question, and reports answer-token loss excluding EOS. EOS-inclusive loss is separate. Each fact contributes a token mean; facts average within events, then events average within each training replicate. Fact-micro outcomes are also retained.
@@ -96,4 +112,4 @@ No confirmation config or preregistration is checked in as complete. The initial
 
 ## Tests and remaining checks
 
-The CPU tests cover transitive duplicate clusters, cross-event leakage, outer split isolation, exact schedules after JSON roundtrips, endpoint/dose corruption, generic budgets, context overflow, event aggregation, MCQ ties, answer/EOS alignment, full optimizer/RNG resume with dropout, gradient accumulation, and restart-log truncation. The runtime has also been exercised with a tiny instance of the actual `hf_olmo` model class. A numerical A/A checkpoint check on the actual GPU/backend is still required before confirmation. CUDA acquisition, full-run memory, elapsed time and scientific assay quality are measured by the first jobs, not inferred from CPU tests.
+The CPU tests cover transitive duplicate clusters, cross-event leakage, outer split isolation, exact schedules after JSON roundtrips, endpoint/dose corruption, generic budgets, context overflow, event aggregation, MCQ ties, answer/EOS alignment, full optimizer/RNG resume with dropout, gradient accumulation, and restart-log truncation. A mid-epoch interruption test verifies all subsequent shuffled epochs, exact fact doses and bitwise-equal final model/optimizer state. Diagnostic tests cover QA-role aggregation, statement masks and audited answer-span exclusions. The runtime and diagnostic have also been exercised with a tiny instance of the actual `hf_olmo` model class. A numerical A/A checkpoint check on the actual GPU/backend is still required before confirmation. CUDA acquisition, full-run memory, elapsed time and scientific assay quality are measured by the first jobs, not inferred from CPU tests.

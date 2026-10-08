@@ -344,7 +344,8 @@ def run_acquisition(prepared, output, *, device="cuda", fixed_exposures=None, pr
             s.maybe_checkpoint()
         s.progress["epoch"] = epoch + 1
         s.progress["epoch_cursor"] = 0
-        s.checkpoint()
+        if s.progress["epoch"] in milestones:
+            s.checkpoint()
     s.progress["status"] = "stage1_complete"
     s.progress["acquisition_usable"] = accepted
     s.audit_exposures()
