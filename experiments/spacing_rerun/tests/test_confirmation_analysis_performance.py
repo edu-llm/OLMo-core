@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -173,6 +174,14 @@ class AnalysisPerformanceArtifactTests(unittest.TestCase):
             self.assertEqual(set(channels),{"invocation","producer","preexec_receipt","custody_journal"})
             self.assertTrue(all(row["device"]==root.stat().st_dev for row in channels.values()))
             self.assertEqual(len({row["inode"] for row in channels.values()}),4)
+            native=measured["native_process_observation"]
+            self.assertEqual(measured["schema"],"p4-analysis-performance-worker-observation-v6")
+            self.assertEqual(measured["worker"]["schema"],"p4-buffered-worker-result-v6")
+            self.assertEqual(native["inherited_channel_identities_after"],channels)
+            self.assertEqual(driver.execution.original_preexec_receipt(native),b"")
+            self.assertIsNone(native["preexec_kernel_observation"])
+            self.assertEqual(len(refs),9)
+            self.assertEqual((root/"cpu-artifact-probe.preexec-receipt.bin").read_bytes(),b"")
             self.assertTrue(all(driver.raw_ref(ref["path"]) == ref for ref in refs))
 
     def test_fixture_preregistration_never_approves_a_different_n(self):
@@ -773,7 +782,7 @@ module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
             self.assertIn(captured["registry"],state["received_original_registries"])
 
     def test_real_child_custody_normal_path_and_later_export_replacements(self):
-        for suffix in ("result.json","observation.json","native.json"):
+        for suffix in ("result.json","observation.json","native.json","preexec-receipt.bin"):
             with self.subTest(suffix=suffix), tempfile.TemporaryDirectory() as name:
                 root=Path(name).resolve();output=root/"output";output.mkdir()
                 prepared,checkpoints=self.checkpoint_fixture(root)
@@ -917,6 +926,193 @@ os.write(BUFFERED_INVOCATION['producer_channel_fd'],rt.encoded({'output_registry
                 with self.assertRaisesRegex(ValueError,"unregistered"):
                     anchor.registry()
             finally:anchor.close()
+
+
+    def test_original_preexec_bytes_preserve_noncanonical_json_without_reconstruction(self):
+        raw=b' { "labelled_cpu_fixture" : true, "value" : 7 } \n\n'
+        identity=dict(device=1,inode=2,mode=3)
+        native=dict(driver.execution.observe_preexec_receipt(raw),
+                    inherited_channel_identities=dict(preexec_receipt=identity),
+                    preexec_receipt_channel_identity=identity)
+        self.assertEqual(driver.execution.original_preexec_receipt(native),raw)
+        self.assertNotEqual(raw,driver.execution.encoded(native["preexec_kernel_observation"])+b"\n")
+        self.assertEqual(native["preexec_receipt_raw_bytes"],len(raw))
+        self.assertEqual(native["preexec_receipt_raw_sha256"],driver.execution.sha(raw))
+
+    def test_original_preexec_bytes_reject_length_hash_parsed_and_identity_tampering(self):
+        raw=b'{"labelled_cpu_fixture":true}\n'
+        identity=dict(device=1,inode=2,mode=3)
+        native=dict(driver.execution.observe_preexec_receipt(raw),
+                    inherited_channel_identities=dict(preexec_receipt=identity),
+                    preexec_receipt_channel_identity=identity)
+        changes=[dict(preexec_receipt_raw_bytes=True),dict(preexec_receipt_raw_bytes=len(raw)+1),
+                 dict(preexec_receipt_raw_sha256="wrong"),dict(preexec_receipt_raw_base64="!"),
+                 dict(preexec_kernel_observation={}),dict(preexec_receipt_parse_error="invented"),
+                 dict(preexec_receipt_channel_identity={})]
+        for change in changes:
+            with self.subTest(change=change),self.assertRaises(ValueError):
+                driver.execution.original_preexec_receipt(dict(native,**change))
+
+    def receipt_failure_probe(self,root,raw,*,fail_preexec=False):
+        """Real CPU child writes labelled bytes; no kernel policy is installed."""
+        output=root/"output";output.mkdir()
+        payload=self.probe_fixture(root)
+        actual_popen=driver.execution.subprocess.Popen
+        def injected_popen(*args,**kwargs):
+            self.assertIsNone(kwargs["preexec_fn"])
+            receipt_fd=kwargs["pass_fds"][2]
+            def labelled_cpu_callback():
+                if raw: os.write(receipt_fd,raw)
+                if fail_preexec: raise RuntimeError("labelled CPU preexec callback fault")
+            kwargs["preexec_fn"]=labelled_cpu_callback
+            return actual_popen(*args,**kwargs)
+        with patch.object(driver.execution.subprocess,"Popen",new=injected_popen):
+            with self.assertRaises(driver.execution.NativeLaunchFailure) as caught:
+                driver.execute_worker(payload,output/"probe")
+        native=caught.exception.native_observation
+        state=json.loads(next(output.glob("failure-*.json")).read_bytes())
+        self.assertEqual((output/"probe.preexec-receipt.bin").read_bytes(),raw)
+        self.assertEqual(driver.execution.original_preexec_receipt(native),raw)
+        self.assertEqual(json.loads((output/"probe.native.json").read_bytes()),native)
+        self.assertEqual(state["worker_custody_transports"][0]["native_observation"],native)
+        self.assertFalse(state["original_child_custody_complete"])
+        self.assertFalse(native["original_child_custody_complete"])
+        return output,state,native
+
+    def test_genuine_malformed_truncated_and_valid_artifact_receipt_bytes_are_retained_and_rejected(self):
+        for raw in (b"{",b"not JSON",b' { "labelled_cpu_fixture" : true } \n',b"["*2000+b"0"):
+            with self.subTest(raw_length=len(raw)),tempfile.TemporaryDirectory() as name:
+                output,state,native=self.receipt_failure_probe(Path(name).resolve(),raw)
+                self.assertTrue(native["wait4_observation_available"])
+                self.assertEqual(native["exit_code"],0)
+                self.assertGreater(native["pid"],0)
+                self.assertTrue((output/"probe.producer.bin").read_bytes())
+                if raw.lstrip().startswith(b'{ "labelled'):
+                    self.assertIsNone(native["preexec_receipt_parse_error"])
+                    self.assertIn("Artifact launch",native["launch_error"])
+                else:
+                    self.assertTrue(native["preexec_receipt_parse_error"])
+                    self.assertIn("parse failed",native["launch_error"])
+
+    def test_genuine_Popen_preexec_failure_retains_available_bytes_without_invented_wait4(self):
+        with tempfile.TemporaryDirectory() as name:
+            output,state,native=self.receipt_failure_probe(Path(name).resolve(),b'{"labelled_partial":',fail_preexec=True)
+            self.assertEqual(native["schema"],"p4-internal-native-launch-failure-v1")
+            self.assertEqual(native["launch_error_type"],"SubprocessError")
+            self.assertFalse(native["wait4_observation_available"])
+            for key in ("pid","exit_code","raw_wait_status","through_exit_child_peak_rss_bytes"):
+                self.assertIsNone(native[key])
+            self.assertEqual(native["inherited_channel_identities"],native["inherited_channel_identities_after"])
+            self.assertEqual((output/"probe.producer.bin").read_bytes(),b"")
+
+    def test_genuine_Popen_preexec_failure_with_absent_receipt_stays_honestly_empty(self):
+        with tempfile.TemporaryDirectory() as name:
+            _,_,native=self.receipt_failure_probe(Path(name).resolve(),b"",fail_preexec=True)
+            self.assertEqual(native["preexec_receipt_raw_bytes"],0)
+            self.assertEqual(native["preexec_receipt_raw_sha256"],driver.execution.sha(b""))
+            self.assertIsNone(native["preexec_kernel_observation"])
+            self.assertIsNone(native["preexec_receipt_parse_error"])
+
+    def test_actual_prebuffer_output_setup_failure_retains_empty_channels_without_journal_claims(self):
+        with tempfile.TemporaryDirectory() as name:
+            root=Path(name).resolve();output=root/"output";output.mkdir()
+            payload=self.probe_fixture(root)
+            (output/"probe.invocation.json").write_bytes(b"labelled existing output")
+            with self.assertRaises(driver.execution.NativeLaunchFailure) as caught:
+                driver.execute_worker(payload,output/"probe")
+            native=caught.exception.native_observation
+            self.assertEqual(native["launch_error_type"],"FileExistsError")
+            self.assertIsNone(native["invocation_buffer_sha256"])
+            self.assertIsNone(native["pid"])
+            self.assertFalse(native["wait4_observation_available"])
+            self.assertEqual(json.loads((output/"probe.native.json").read_bytes()),native)
+            state=json.loads(next(output.glob("failure-*.json")).read_bytes())
+            transport=state["worker_custody_transports"][0]
+            self.assertIsNone(transport["journal_prefix"])
+            self.assertIn("No invocation buffer",str(transport["issues"]))
+            self.assertFalse(transport["original_child_custody_complete"])
+            for suffix in ("producer.bin","custody-journal.bin","preexec-receipt.bin"):
+                self.assertEqual((output/("probe."+suffix)).read_bytes(),b"")
+
+    def timeout_failure_probe(self,root):
+        """External CPU watchdog reaps a real child, then reports its timeout."""
+        output=root/"output";output.mkdir();payload=self.probe_fixture(root)
+        deployment=self.fault_deployment(root,before_work='os.write(invocation["producer_channel_fd"],b"labelled CPU producer prefix")\nos.write(invocation["custody_journal_fd"],b"{labelled journal truncated")\nprint("labelled CPU stdout prefix",flush=True)\ntime.sleep(60)')
+        actual_popen=driver.execution.subprocess.Popen;actual_wait4=driver.execution.os.wait4;watchdog={}
+        def injected_popen(*args,**kwargs):
+            self.assertIsNone(kwargs["preexec_fn"])
+            receipt_fd=kwargs["pass_fds"][2]
+            kwargs["preexec_fn"]=lambda:os.write(receipt_fd,b'{"labelled_timeout":')
+            return actual_popen(*args,**kwargs)
+        def external_watchdog(pid,options):
+            self.assertEqual(options,0)
+            deadline=time.monotonic()+3
+            ready=False
+            while time.monotonic()<deadline:
+                row=actual_wait4(pid,os.WNOHANG)
+                self.assertEqual(row[0],0,"CPU watchdog child exited before timeout")
+                if b"labelled CPU stdout prefix" in (output/"probe.log").read_bytes():
+                    ready=True;break
+                time.sleep(.01)
+            os.kill(pid,9);observed_pid,status,usage=actual_wait4(pid,0)
+            watchdog.update(pid=observed_pid,status=status,exit_code=os.waitstatus_to_exitcode(status),peak_rss_bytes=driver.execution.rss_bytes(usage),prefix_ready=ready)
+            if not ready: raise AssertionError("CPU watchdog prefix did not arrive")
+            raise subprocess.TimeoutExpired("labelled external CPU watchdog",3)
+        with patch.object(driver.execution,"capture_sources",return_value=deployment),patch.object(driver.execution.subprocess,"Popen",new=injected_popen),patch.object(driver.execution.os,"wait4",new=external_watchdog):
+            with self.assertRaises(driver.execution.NativeLaunchFailure) as caught:
+                driver.execute_worker(payload,output/"probe")
+        native=caught.exception.native_observation;state=json.loads(next(output.glob("failure-*.json")).read_bytes())
+        return output,state,native,watchdog
+
+    def test_actual_external_timeout_preserves_raw_prefixes_and_known_Popen_pid(self):
+        with tempfile.TemporaryDirectory() as name:
+            output,state,native,watchdog=self.timeout_failure_probe(Path(name).resolve())
+            self.assertEqual(native["pid"],watchdog["pid"])
+            self.assertEqual(watchdog["exit_code"],-9)
+            self.assertTrue(watchdog["prefix_ready"])
+            self.assertEqual(native["launch_error_type"],"TimeoutExpired")
+            self.assertFalse(native["wait4_observation_available"])
+            for key in ("exit_code","raw_wait_status","through_exit_child_peak_rss_bytes"):
+                self.assertIsNone(native[key])
+            self.assertEqual((output/"probe.producer.bin").read_bytes(),b"labelled CPU producer prefix")
+            self.assertEqual((output/"probe.preexec-receipt.bin").read_bytes(),b'{"labelled_timeout":')
+            self.assertIn(b"labelled CPU stdout prefix",(output/"probe.log").read_bytes())
+            self.assertTrue((output/"probe.custody-journal.bin").read_bytes().endswith(b"{labelled journal truncated"))
+            self.assertEqual(driver.execution.original_preexec_receipt(native),b'{"labelled_timeout":')
+            self.assertEqual(json.loads((output/"probe.native.json").read_bytes()),native)
+            transport=state["worker_custody_transports"][0]
+            self.assertIsNotNone(transport["journal_prefix"]["original_registry"])
+            self.assertIsNone(transport["journal_prefix"]["terminal_kind"])
+            self.assertFalse(transport["original_child_custody_complete"])
+
+    def test_parent_preexec_receipt_reconciles_actual_nonce_policy_wait4_and_four_channels(self):
+        with tempfile.TemporaryDirectory() as name:
+            root=Path(name).resolve();measured,_=driver.execute_worker(self.probe_fixture(root),root/"probe")
+            invocation=json.loads((root/"probe.invocation.json").read_bytes())
+            native=measured["native_process_observation"]
+            changes=[dict(invocation_nonce="wrong"),dict(policy_sha256="invented"),
+                     dict(invocation_buffer_sha256="wrong"),dict(wait4_observation_available=False),
+                     dict(inherited_channel_identities_after={}),dict(preexec_receipt_channel_identity={}),
+                     dict(driver.execution.observe_preexec_receipt(b'{"labelled_cpu_fixture":true}'))]
+            for change in changes:
+                with self.subTest(change=change),self.assertRaises(ValueError):
+                    driver.validate_worker_result(invocation["payload"],measured["worker"],invocation,dict(native,**change))
+
+    def test_export_preexec_receipt_rejects_missing_duplicate_bytes_and_hash_tampering(self):
+        for mutation in ("missing","duplicate","bytes","hash"):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as name:
+                root=Path(name).resolve();measured,refs=driver.execute_worker(self.probe_fixture(root),root/"probe")
+                receipt_ref=next(r for r in refs if r["path"].endswith(".preexec-receipt.bin"))
+                refs=copy.deepcopy(refs)
+                if mutation=="missing": refs=[r for r in refs if not r["path"].endswith(".preexec-receipt.bin")]
+                elif mutation=="duplicate": refs.append(copy.deepcopy(receipt_ref))
+                elif mutation=="bytes": Path(receipt_ref["path"]).write_bytes(b"labelled mutation")
+                else: next(r for r in refs if r["path"]==receipt_ref["path"])["file_sha256"]="wrong"
+                probe=dict(raw_log_refs=refs,peak_rss_bytes=measured["peak_rss_bytes"],
+                    wall_seconds=measured["worker"]["result"]["wall_seconds_per_operation"],
+                    total_worker_wall_seconds=measured["wall_seconds"],operation_count=6)
+                with self.assertRaises(ValueError):
+                    driver.reconcile_exported_values(dict(points=[],separate_real_probes=dict(digest=probe)),dict(records=[]))
 
 
 if __name__ == "__main__":

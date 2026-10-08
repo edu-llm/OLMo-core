@@ -40,7 +40,7 @@ CAPTURED_DRIVER_SOURCE = globals().get("CAPTURED_DRIVER_SOURCE", Path(__file__).
 ACTIVE_OUTPUT = None
 ACTIVE_DEPLOYMENT = None
 
-INPUT_SCHEMA = "p4-analysis-performance-driver-input-v5"
+INPUT_SCHEMA = "p4-analysis-performance-driver-input-v6"
 BENCHMARK_SCHEMA = "p4-analysis-benchmark-synthetic-predictions-v1"
 POINTS = (2, 8, 32)
 FUNCTIONS = ("validate_final_policy", "saved_bundle_diagnostics", "complete_contrast_report",
@@ -866,11 +866,20 @@ def validate_worker_result(payload, value, invocation, native):
     require(set(value) == {*MARKERS, "schema", "invocation_sha256", "nonce", "deployment_sha256",
             "result", "child_wall_seconds", "child_preexit_rss_bytes", "descendant_peak_rss_bytes",
             "observed_runtime", "loaded_code_identity", "output_registry", "parent_output_registry_sha256"} and
-            value["schema"] == "p4-buffered-worker-result-v5" and all(value.get(k) is v for k, v in MARKERS.items()),
+            value["schema"] == "p4-buffered-worker-result-v6" and all(value.get(k) is v for k, v in MARKERS.items()),
             "Worker result type/markers differ")
     require(value["invocation_sha256"] == invocation["payload_sha256"] and value["nonce"] == invocation["nonce"] and
             value["deployment_sha256"] == invocation["deployment"]["sha256"], "Worker result is from another exact invocation")
-    require(native.get("inherited_channel_identities") == invocation.get("inherited_channel_identities") and
+    receipt_raw = execution.original_preexec_receipt(native)
+    require(native.get("wait4_observation_available") is True and
+            native.get("invocation_nonce") == invocation["nonce"] and
+            native.get("invocation_buffer_sha256") == execution.sha(execution.encoded(invocation)) and
+            native.get("policy_sha256") == (execution.sha(execution.encoded(invocation["native_namespace"]))
+                if invocation.get("native_namespace") is not None else None) and
+            native.get("preexec_receipt_parse_error") is None,
+            "Original preexec receipt/native invocation binding differs")
+    require(native.get("inherited_channel_identities_after") == native.get("inherited_channel_identities") and
+            native.get("inherited_channel_identities") == invocation.get("inherited_channel_identities") and
             isinstance(invocation.get("inherited_channel_identities"), dict) and
             set(invocation["inherited_channel_identities"]) == {"invocation", "producer", "preexec_receipt", "custody_journal"} and
             all(row["device"] == invocation["output_identity"]["device"] for row in invocation["inherited_channel_identities"].values()),
@@ -974,6 +983,8 @@ def validate_worker_result(payload, value, invocation, native):
                 enforcement.get("actual_threads_remain_in_worker_RSS") is True,
                 "Native descendant/executable-memory enforcement contradicts actual worker")
     else:
+        require(receipt_raw == b"" and native.get("preexec_kernel_observation") is None,
+                "Artifact worker cannot claim a nonempty kernel receipt")
         require(loaded.get("native_process_enforcement") == dict(scope="artifact_only", kernel_native_process_filter_installed=False),
                 "Artifact worker cannot claim production native enforcement")
     for row in loaded["loaded_runtime_files"] + loaded["loaded_native_libraries"]:
@@ -1115,17 +1126,28 @@ def preserve_worker_custody(invocation, producer, native, anchor, root):
                      producer_raw_base64=execution.base64.b64encode(producer).decode("ascii"),
                      producer_raw_sha256=execution.sha(producer), issues=[], original_child_custody_complete=False)
     anchor.worker_custody_transports.append(transport)
+    receipt_raw = execution.original_preexec_receipt(native)
+    transport["preexec_receipt_raw_base64"] = execution.base64.b64encode(receipt_raw).decode("ascii")
+    transport["preexec_receipt_raw_bytes"] = len(receipt_raw)
+    transport["preexec_receipt_raw_sha256"] = execution.sha(receipt_raw)
+    if native.get("preexec_receipt_parse_error") is not None:
+        transport["issues"].append("Original preexec receipt parse failed: " + native["preexec_receipt_parse_error"])
     journal_raw = execution.base64.b64decode(native.get("custody_journal_raw_base64", ""), validate=True)
     transport["custody_journal_raw_base64"] = execution.base64.b64encode(journal_raw).decode("ascii")
     transport["custody_journal_raw_sha256"] = execution.sha(journal_raw)
     require(transport["custody_journal_raw_sha256"] == native.get("custody_journal_raw_sha256"), "Native original journal bytes/hash differ")
-    for suffix, data in ((".producer.bin", producer), (".custody-journal.bin", journal_raw)):
+    for suffix, data in ((".producer.bin", producer), (".custody-journal.bin", journal_raw),
+                         (".preexec-receipt.bin", receipt_raw)):
         path = root.with_suffix(suffix)
         try:
             anchor.write(path, data)
             transport[suffix + "_ref"] = raw_ref(path)
         except (ValueError, OSError) as error:
             transport["issues"].append("Raw transport remains inline: " + type(error).__name__ + ": " + str(error))
+    if native.get("invocation_buffer_sha256") is None:
+        transport["journal_prefix"] = None
+        transport["issues"].append("No invocation buffer available; journal and producer custody unverified")
+        return None, transport
     journal = execution.read_custody_journal(journal_raw, invocation)
     transport["journal_prefix"] = journal
     if journal["original_registry"] is not None:
@@ -1133,7 +1155,7 @@ def preserve_worker_custody(invocation, producer, native, anchor, root):
     value = None
     try:
         value = json.loads(producer)
-        require(isinstance(value, dict) and value.get("schema") in {"p4-buffered-worker-result-v5", "p4-buffered-worker-failure-v1"} and
+        require(isinstance(value, dict) and value.get("schema") in {"p4-buffered-worker-result-v6", "p4-buffered-worker-failure-v1"} and
                 all(value.get(k) is v for k, v in MARKERS.items()) and value.get("nonce") == invocation["nonce"] and
                 value.get("invocation_sha256") == invocation["payload_sha256"] and
                 value.get("deployment_sha256") == invocation["deployment"]["sha256"] and
@@ -1185,13 +1207,23 @@ def execute_worker(payload, output):
             collect(worker_payload)
             invocation["native_namespace"] = execution.require_native_namespace(payload["immutable_runtime"],
                 anchor, payload["production_run_roots"], exact_data_files=data_files)
-        producer, native = execution.launch_native(invocation, anchor, log_path)
+        try:
+            producer, native = execution.launch_native(invocation, anchor, log_path)
+        except execution.NativeLaunchFailure as error:
+            _, custody_transport = preserve_worker_custody(invocation, error.producer_bytes,
+                error.native_observation, anchor, root)
+            try:
+                write_json(root.with_suffix(".native.json"), error.native_observation)
+            except (ValueError, OSError) as retention_error:
+                custody_transport["issues"].append("Native observation remains inline: " +
+                    type(retention_error).__name__ + ": " + str(retention_error))
+            raise
         value, custody_transport = preserve_worker_custody(invocation, producer, native, anchor, root)
         write_json(root.with_suffix(".native.json"), native)
         require(native["exit_code"] == 0, "CPU worker failed; retain and inspect " + str(log_path))
         require(producer, "Worker did not emit its independent native producer channel")
         require(value is not None and not custody_transport["issues"], "Worker original custody transport is invalid: " + str(custody_transport["issues"]))
-        require(value.get("schema") == "p4-buffered-worker-result-v5" and value.get("nonce") == invocation["nonce"] and
+        require(value.get("schema") == "p4-buffered-worker-result-v6" and value.get("nonce") == invocation["nonce"] and
                 value.get("invocation_sha256") == invocation["payload_sha256"] and
                 value.get("deployment_sha256") == deployment["sha256"], "Producer output custody belongs to another invocation")
         anchor.receive_registry(value["output_registry"])
@@ -1203,7 +1235,7 @@ def execute_worker(payload, output):
         anchor.verify(complete=True)
         validate_worker_result(worker_payload, value, invocation, native)
         peak = native["parent_peak_rss_bytes"] + native["through_exit_child_peak_rss_bytes"]
-        measured = dict(MARKERS, schema="p4-analysis-performance-worker-observation-v5",
+        measured = dict(MARKERS, schema="p4-analysis-performance-worker-observation-v6",
             wall_seconds=native["wall_seconds"], peak_rss_bytes=peak,
             parent_peak_rss_bytes=native["parent_peak_rss_bytes"], child_peak_rss_bytes=native["through_exit_child_peak_rss_bytes"],
             descendant_peak_rss_bytes=0, memory_method="per_child_wait4_through_exit_plus_distinct_parent_high_water",
@@ -1214,7 +1246,8 @@ def execute_worker(payload, output):
         write_registered_json(anchor, observation_path, measured)
         return measured, [raw_ref(p) for p in (log_path, result_path, observation_path, input_path,
                           root.with_suffix(".native.json"), root.with_suffix(".invocation.json"),
-                          root.with_suffix(".producer.bin"), root.with_suffix(".custody-journal.bin"))]
+                          root.with_suffix(".producer.bin"), root.with_suffix(".custody-journal.bin"),
+                          root.with_suffix(".preexec-receipt.bin"))]
     except BaseException as error:
         anchor.retain_failure(error)
         raise
@@ -1308,10 +1341,12 @@ def reconcile_exported_values(benchmark, telemetry):
         result = next(r for r in row["raw_log_refs"] if r["path"].endswith(".result.json"))
         producer_refs = [r for r in row["raw_log_refs"] if r["path"].endswith(".producer.bin")]
         journal_refs = [r for r in row["raw_log_refs"] if r["path"].endswith(".custody-journal.bin")]
-        require(len(producer_refs) == len(journal_refs) == 1 and
+        receipt_refs = [r for r in row["raw_log_refs"] if r["path"].endswith(".preexec-receipt.bin")]
+        require(len(producer_refs) == len(journal_refs) == len(receipt_refs) == 1 and
                 Path(producer_refs[0]["path"]).read_bytes() == Path(log["path"]).read_bytes() and
-                Path(journal_refs[0]["path"]).read_bytes() == execution.base64.b64decode(native["custody_journal_raw_base64"], validate=True),
-                "Export raw producer/journal channels contradict original native observations")
+                Path(journal_refs[0]["path"]).read_bytes() == execution.base64.b64decode(native["custody_journal_raw_base64"], validate=True) and
+                Path(receipt_refs[0]["path"]).read_bytes() == execution.original_preexec_receipt(native),
+                "Export raw producer/journal/preexec channels contradict original native observations")
         for ref in row["raw_log_refs"]:
             require(raw_ref(ref["path"]) == ref, "Exported native evidence changed")
         require(json.loads(Path(log["path"]).read_bytes()) == json.loads(Path(result["path"]).read_bytes()) == value["worker"],
@@ -1554,7 +1589,7 @@ def main():
             require(child_usage.ru_maxrss == 0, "Worker spawned descendants; memory method needs revision")
             runtime = observed_runtime()
             loaded = execution.loaded_identity(invocation["deployment"])
-            result = dict(MARKERS, schema="p4-buffered-worker-result-v5", result=value,
+            result = dict(MARKERS, schema="p4-buffered-worker-result-v6", result=value,
                           invocation_sha256=invocation["payload_sha256"], nonce=invocation["nonce"],
                           deployment_sha256=invocation["deployment"]["sha256"],
                           child_wall_seconds=time.monotonic() - started,

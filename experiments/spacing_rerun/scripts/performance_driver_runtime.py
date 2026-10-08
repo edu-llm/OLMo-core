@@ -963,15 +963,45 @@ def rss_bytes(usage):
     return int(usage.ru_maxrss * (1 if sys.platform == "darwin" else 1024))
 
 
+class NativeLaunchFailure(ValueError):
+    """Available actual channel bytes survive a rejected native launch."""
+    def __init__(self, error, native, producer):
+        super().__init__(str(error))
+        self.native_observation = native
+        self.producer_bytes = producer
+
+
+def observe_preexec_receipt(raw):
+    parsed = None; error = None
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, UnicodeError, RecursionError) as exception:
+            error = type(exception).__name__ + ": " + str(exception)
+    return dict(preexec_receipt_raw_base64=base64.b64encode(raw).decode("ascii"),
+                preexec_receipt_raw_bytes=len(raw), preexec_receipt_raw_sha256=sha(raw),
+                preexec_kernel_observation=parsed, preexec_receipt_parse_error=error)
+
+
+def original_preexec_receipt(native):
+    """Verify actual retained bytes, never reconstruct an original from JSON."""
+    raw = base64.b64decode(native["preexec_receipt_raw_base64"], validate=True)
+    observed = observe_preexec_receipt(raw)
+    require(type(native.get("preexec_receipt_raw_bytes")) is int and
+            all(native.get(key) == value for key, value in observed.items()),
+            "Original preexec receipt bytes/length/hash/parse observation differ")
+    require(native.get("preexec_receipt_channel_identity") == native["inherited_channel_identities"]["preexec_receipt"],
+            "Original preexec receipt channel identity differs")
+    return raw
+
+
 def launch_native(invocation, anchor, log_path):
-    """One exact wait4 observation for this child, independent of prior children."""
+    """One exact wait4 observation and original channel bytes through exit."""
     anchor.verify()
-    # Inherited writable descriptors must share the verified noexec output
-    # device; a default temporary directory would leave a file-RX mmap route.
     with tempfile.TemporaryFile(dir=anchor.path) as source, tempfile.TemporaryFile(dir=anchor.path) as channel, tempfile.TemporaryFile(dir=anchor.path) as enforcement, tempfile.TemporaryFile(dir=anchor.path) as journal:
         anchor.verify()
-        inherited_channels = {name: identity(os.fstat(handle.fileno())) for name, handle in
-                              (("invocation", source), ("producer", channel), ("preexec_receipt", enforcement), ("custody_journal", journal))}
+        handles = (("invocation", source), ("producer", channel), ("preexec_receipt", enforcement), ("custody_journal", journal))
+        inherited_channels = {name: identity(os.fstat(handle.fileno())) for name, handle in handles}
         require(all(row["device"] == anchor.root_identity["device"] for row in inherited_channels.values()),
                 "Inherited native channels are outside the anchored noexec output device")
         invocation["inherited_channel_identities"] = inherited_channels
@@ -983,44 +1013,67 @@ def launch_native(invocation, anchor, log_path):
                     "Native preexec supervisor requires a single actual parent thread")
         started_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
         started = time.monotonic()
-        with anchor.open_exclusive(Path(log_path).with_suffix(".invocation.json"), binary=True) as invocation_file, anchor.open_exclusive(log_path) as log:
-            invocation["output_registry_before_child"] = anchor.registry()
-            data = encoded(invocation)
-            source.write(data); source.flush(); source.seek(0)
-            invocation_file.write(data + b"\n"); invocation_file.flush(); os.fsync(invocation_file.fileno())
-            argv = [sys.executable, "-I", "-B", "-S", "-c", BOOTSTRAP, str(source.fileno()), sha(data)]
-            preexec = (lambda: landlock_before_exec(policy, invocation["deployment"], enforcement.fileno(), sha(data))) if policy else None
-            child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                                     pass_fds=(source.fileno(), channel.fileno(), enforcement.fileno(), journal.fileno(), anchor.fd),
-                                     preexec_fn=preexec,
-                                     env=dict({k: v for k, v in os.environ.items() if not k.startswith("PYTHON")}, CUDA_VISIBLE_DEVICES=""),
-                                     cwd=str(anchor.path))
-            pid, status, usage = os.wait4(child.pid, 0)
-            child.returncode = os.waitstatus_to_exitcode(status)
+        pid = status = usage = child = None; launch_error = None; argv = None; data = None
+        try:
+            with anchor.open_exclusive(Path(log_path).with_suffix(".invocation.json"), binary=True) as invocation_file, anchor.open_exclusive(log_path) as log:
+                invocation["output_registry_before_child"] = anchor.registry()
+                data = encoded(invocation)
+                source.write(data); source.flush(); source.seek(0)
+                invocation_file.write(data + b"\n"); invocation_file.flush(); os.fsync(invocation_file.fileno())
+                argv = [sys.executable, "-I", "-B", "-S", "-c", BOOTSTRAP, str(source.fileno()), sha(data)]
+                preexec = (lambda: landlock_before_exec(policy, invocation["deployment"], enforcement.fileno(), sha(data))) if policy else None
+                child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                                         pass_fds=(source.fileno(), channel.fileno(), enforcement.fileno(), journal.fileno(), anchor.fd),
+                                         preexec_fn=preexec,
+                                         env=dict({k: v for k, v in os.environ.items() if not k.startswith("PYTHON")}, CUDA_VISIBLE_DEVICES=""),
+                                         cwd=str(anchor.path))
+                pid, status, usage = os.wait4(child.pid, 0)
+                child.returncode = os.waitstatus_to_exitcode(status)
+        except Exception as error:
+            launch_error = error
+            if child is not None and pid is None:
+                pid = child.pid
         elapsed = time.monotonic() - started
         channel.seek(0); producer_bytes = channel.read()
         enforcement.seek(0); enforcement_bytes = enforcement.read()
         journal.seek(0); journal_bytes = journal.read()
-        kernel_receipt = json.loads(enforcement_bytes) if enforcement_bytes else None
-        require(inherited_channels == {name: identity(os.fstat(handle.fileno())) for name, handle in
-                    (("invocation", source), ("producer", channel), ("preexec_receipt", enforcement), ("custody_journal", journal))},
-                "Inherited native channel descriptor identities changed through exit")
-        if policy:
-            require(kernel_receipt and kernel_receipt.get("pid") == pid and
-                    kernel_receipt.get("invocation_buffer_sha256") == sha(data) and
-                    kernel_receipt.get("policy_sha256") == sha(encoded(policy)) and
-                    kernel_receipt.get("exact_self_maps_read_path") == "/proc/" + str(pid) + "/maps" and
-                    kernel_receipt.get("handled_access_fs") == native_handled_access() and
-                    kernel_receipt.get("restrict_self_result") == 0 and kernel_receipt.get("abi", 0) >= 3,
-                    "Actual preexec kernel receipt is missing or contradicts native invocation")
-    return producer_bytes, dict(schema="p4-internal-native-process-observation-v1", pid=pid,
-        argv=argv, cwd=str(anchor.path), invocation_buffer_sha256=sha(data),
-        inherited_channel_identities=inherited_channels,
-        custody_journal_raw_base64=base64.b64encode(journal_bytes).decode("ascii"), custody_journal_raw_sha256=sha(journal_bytes),
-        started_utc=started_utc, ended_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        wall_seconds=elapsed, exit_code=child.returncode, raw_wait_status=status,
-        preexec_kernel_observation=kernel_receipt, preexec_receipt_raw_sha256=sha(enforcement_bytes),
-        native_loading_completeness_scope="production kernel denies uncensused file reads before execve; data noexec; artifact mode supplies no native-loading completeness proof",
-        through_exit_child_peak_rss_bytes=rss_bytes(usage), parent_peak_rss_bytes=rss_bytes(resource.getrusage(resource.RUSAGE_SELF)),
-        descendant_scope="production_seccomp_prohibits_native_descendants;artifact_only_CPython_audit_and_RUSAGE_CHILDREN_no_native_completeness_proof",
-        root_scheduler_or_terminal_authenticity_claimed=False)
+        receipt = observe_preexec_receipt(enforcement_bytes)
+        channels_after = {name: identity(os.fstat(handle.fileno())) for name, handle in handles}
+        native = dict(schema="p4-internal-native-process-observation-v1" if usage is not None else "p4-internal-native-launch-failure-v1",
+            pid=pid, argv=argv, cwd=str(anchor.path), invocation_buffer_sha256=sha(data) if data is not None else None,
+            invocation_nonce=invocation.get("nonce"), policy_sha256=sha(encoded(policy)) if policy is not None else None,
+            inherited_channel_identities=inherited_channels, inherited_channel_identities_after=channels_after,
+            preexec_receipt_channel_identity=inherited_channels["preexec_receipt"],
+            custody_journal_raw_base64=base64.b64encode(journal_bytes).decode("ascii"), custody_journal_raw_sha256=sha(journal_bytes),
+            started_utc=started_utc, ended_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(), wall_seconds=elapsed,
+            exit_code=child.returncode if usage is not None else None, raw_wait_status=status,
+            through_exit_child_peak_rss_bytes=rss_bytes(usage) if usage is not None else None,
+            parent_peak_rss_bytes=rss_bytes(resource.getrusage(resource.RUSAGE_SELF)),
+            wait4_observation_available=usage is not None, original_child_custody_complete=False,
+            native_loading_completeness_scope="production kernel denies uncensused file reads before execve; data noexec; artifact mode supplies no native-loading completeness proof",
+            descendant_scope="production_seccomp_prohibits_native_descendants;artifact_only_CPython_audit_and_RUSAGE_CHILDREN_no_native_completeness_proof",
+            root_scheduler_or_terminal_authenticity_claimed=False, **receipt)
+        if launch_error is None:
+            try:
+                require(inherited_channels == channels_after,
+                        "Inherited native channel descriptor identities changed through exit")
+                require(receipt["preexec_receipt_parse_error"] is None, "Original preexec receipt parse failed: " + str(receipt["preexec_receipt_parse_error"]))
+                kernel_receipt = receipt["preexec_kernel_observation"]
+                if policy:
+                    require(isinstance(kernel_receipt, dict) and kernel_receipt.get("pid") == pid and
+                            kernel_receipt.get("invocation_buffer_sha256") == sha(data) and
+                            kernel_receipt.get("policy_sha256") == sha(encoded(policy)) and
+                            kernel_receipt.get("exact_self_maps_read_path") == "/proc/" + str(pid) + "/maps" and
+                            kernel_receipt.get("handled_access_fs") == native_handled_access() and
+                            kernel_receipt.get("restrict_self_result") == 0 and kernel_receipt.get("abi", 0) >= 3,
+                            "Actual preexec kernel receipt is missing or contradicts native invocation")
+                else:
+                    require(not enforcement_bytes and kernel_receipt is None,
+                            "Artifact launch cannot claim a nonempty kernel receipt")
+            except Exception as error:
+                launch_error = error
+        if launch_error is not None:
+            native["launch_error_type"] = type(launch_error).__name__
+            native["launch_error"] = str(launch_error)
+            raise NativeLaunchFailure(launch_error, native, producer_bytes) from launch_error
+        return producer_bytes, native

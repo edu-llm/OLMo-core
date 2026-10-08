@@ -6,16 +6,17 @@ training loop or GPU operation. It creates no scientific, source, property,
 membership, reporting, production or launch approval. Its small artifact tests
 are engineering checks, never an actual benchmark.
 
-The v5 interface responds to R4-F04 in the genuine independent R4 rejection.
-It preserves original child custody on failed runs through a flushed creation
-journal and an explicit failure packet. The R4 review resolved the specific R3
-native-memory and successful-child replacement defects within its engineering
-scope. All R1 through R4 reviews, handoffs and failed checks remain historical
-artifacts. Fresh independent R5 review remains pending.
+The v6 successor retains the actual preexec receipt bytes through parent export
+and failure preservation. Its `launch_native` implementation changed. The eight
+native filter, ELF and read-scope functions and BOOTSTRAP retain their accepted
+R5 bytes. The genuine R5 engineering acceptance remains valid for its exact v5
+snapshot and commit. This separate v6 successor needs independent R6 review.
+All R1 through R5 reviews, handoffs, failed checks and earlier dispositions remain
+historical artifacts. None supplies production, scientific or launch approval.
 
 ## Exact external inputs
 
-The sealed input uses `p4-analysis-performance-driver-input-v5`. The three markers
+The sealed input uses `p4-analysis-performance-driver-input-v6`. The three markers
 are `production_approval=false`, `scientific_outcome=false` and
 `test_fixture_preregistration=true`. References use canonical absolute literal
 paths. Sealed JSON refs have `path`, `file_sha256`, `content_sha256`; raw refs have
@@ -271,8 +272,8 @@ and memory fields must agree before benchmark and telemetry are exported. Final
 builder integration must independently bind actual root invocation, scheduler
 allocation/process/native evidence and every exported value.
 
-Worker results and observations use `p4-buffered-worker-result-v5` and
-`p4-analysis-performance-worker-observation-v5`. Each observation registers its
+Worker results and observations use `p4-buffered-worker-result-v6` and
+`p4-analysis-performance-worker-observation-v6`. Each observation registers its
 own original inode before serialization and retains combined parent/child custody.
 Export replay rechecks the original parent, child and observation registries.
 Later workers sharing the output include the previous artifacts in their parent
@@ -307,9 +308,45 @@ scan never becomes original custody. Raw bytes are retained in the failure state
 as well as exclusive binary files where current anchoring permits those writes.
 The native through-exit observation and traceback log remain evidence of failure.
 Zero exit also rejects without the complete successful journal and exact result.
-Export replay checks both retained binary channels against the original native
+Export replay checks the retained producer, journal and preexec receipt binaries against the original native
 bytes. No failure packet, valid prefix or success-labelled record overrides the
 actual process exit or supplies benchmark success.
+
+The original preexec receipt is read from the still-open inherited descriptor,
+never reconstructed from parsed JSON. The native observation retains its base64
+bytes, exact byte length, SHA256, parsed value or parse error, original receipt
+channel identity, all four channel identities before launch and after exit,
+invocation buffer hash, nonce and policy hash. The parent writes those exact bytes
+to `.preexec-receipt.bin`, the ninth worker artifact, and retains them inline in
+failure transport if current anchoring prevents a binary write. Export replay
+requires exactly one receipt reference, reconciles its bytes with the original
+native observation and rechecks its raw hash and original inode custody. Parent
+success checks also reconcile the parsed receipt with those original bytes and
+retain the existing production PID, invocation, policy, census, filter, ABI and
+canonical serialization guards. Artifact mode requires an honestly empty receipt
+and no parsed kernel observation.
+
+Malformed, truncated, absent or failed receipts preserve available original
+bytes before rejection. A `Popen` preexec callback failure can reap the child
+internally before returning a process object. Such a record uses
+`p4-internal-native-launch-failure-v1`, `wait4_observation_available=false` and
+null PID, exit status and child RSS rather than invented native accounting.
+If `Popen` returned a child but a later wait failed, the actual returned PID
+remains recorded; absent wait4 status and usage remain null. A labelled external
+CPU-watchdog fixture kills and reaps a real child and reports `TimeoutExpired`,
+then checks original stdout, producer, journal and receipt prefixes. Its separate
+watchdog accounting never becomes the launcher's missing wait4 observation.
+Available invocation, receipt, producer and journal bytes still retain their
+actual descriptor identities. Failures before channel setup or during channel
+capture cannot promise available transport. A captured output-setup failure
+before invocation buffering retains available channels with a null buffer hash
+and no journal-prefix claims. Failed child custody remains
+explicitly incomplete. The CPU fault fixtures write labelled bytes and install
+no native kernel policy; they demonstrate retention, rejection and replay only.
+The launcher adds no timeout control. An external forced termination of the
+supervisor before descriptor capture can destroy anonymous channel bytes. This
+successor does not claim crash-durable transport across that boundary; the final
+diagnostic owner must retain or disclose unavailable failure evidence.
 
 Only the sole remote owner executes an actual CPU sample after final genuine
 inputs, independent adapter approvals and immutable committed deployment exist.
