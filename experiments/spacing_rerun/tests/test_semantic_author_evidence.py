@@ -6,7 +6,7 @@ import unittest
 
 from spacing_rerun.confirmation import (local_author_identity, semantic_execution_evidence,
     validate_retained_source_ancestor, source_preservation_context, validate_source_chunks, author_context,
-    declared_receipt_bindings)
+    declared_receipt_bindings, source_semantic_base_version)
 from spacing_rerun.common import digest
 from spacing_rerun.source_patch import normalize_task
 from test_confirmation import confirmation_fixture, seal
@@ -60,6 +60,52 @@ def execution_fixture():
 
 
 class SemanticAuthorEvidenceTests(unittest.TestCase):
+    def test_retained_actual_source_input_aliases_bind_exact_repair_packet(self):
+        chunk, row, _, ancestor = execution_fixture()
+        packet = row['semantic_execution_evidence']['input_packet']
+        packet['history_requirements'] = {'prior_authored_sha256': ancestor['sha256']}
+        chunk['authored']['retained_source_ancestor'].update(
+            prior_full_authored_chunk=copy.deepcopy(ancestor), historical_only=True,
+            current_review_approval_inferred=False,
+            actual_source_review_materials=copy.deepcopy(packet['actual_source_review_materials']),
+            history_requirements=copy.deepcopy(packet['history_requirements']))
+        validate_retained_source_ancestor(chunk, ancestor)
+        mutations = [lambda r: r['actual_source_review_materials'].clear(),
+                     lambda r: r['history_requirements'].update(prior_authored_sha256='foreign'),
+                     lambda r: r.update(current_review_approval_inferred=True),
+                     lambda r: r.pop('prior_full_authored_chunk')]
+        for mutate in mutations:
+            changed = copy.deepcopy(chunk); mutate(changed['authored']['retained_source_ancestor'])
+            with self.assertRaises(ValueError): validate_retained_source_ancestor(changed, ancestor)
+        changed = copy.deepcopy(chunk); changed['author_task_provenance'] = []
+        with self.assertRaises(ValueError): validate_retained_source_ancestor(changed, ancestor)
+
+    def test_semantic_input_follows_all_exact_question_patch_ancestors(self):
+        from test_source_patch import proof_fixture, refresh
+        from spacing_rerun.source_patch import reconstruct_question_patch
+        semantic, _, _, _ = execution_fixture()
+        current = semantic
+        for index in range(2):
+            proof = proof_fixture(); base = copy.deepcopy(current['authored'])
+            proof['base_authored'] = base
+            selected = {**copy.deepcopy(base['acquisition_records'][0]), 'question_indices_to_revise': [0]}
+            proof['input_packet']['selected_acquisition_records'] = [selected]
+            proof['patch']['selected_acquisition_records'] = [copy.deepcopy(selected)]
+            proof['patch']['selected_acquisition_records'][0]['questions'][0] = f'Name source entry zero using wording variant {index}?'
+            for key in ('input_packet', 'patch'): proof[key]['current_authored_sha256'] = base['sha256']
+            proof['patch']['prior_authored_sha256'] = base['sha256']
+            proof['response']['prior_authored_sha256'] = base['sha256']; refresh(proof)
+            current = {'authored': reconstruct_question_patch(proof), 'question_patch_evidence': proof,
+                       'question_patch_base_version': current}
+        self.assertIs(source_semantic_base_version(current), semantic)
+        for kind in ('missing-link', 'misbound-link', 'missing-proof', 'cycle'):
+            changed = copy.deepcopy(current)
+            if kind == 'missing-link': changed.pop('question_patch_base_version')
+            elif kind == 'misbound-link': changed['question_patch_base_version'] = semantic
+            elif kind == 'missing-proof': changed['question_patch_base_version'].pop('question_patch_evidence')
+            else: changed['question_patch_base_version'] = changed
+            with self.subTest(kind=kind), self.assertRaises(ValueError): source_semantic_base_version(changed)
+
     def test_inherited_retained_history_is_exact_and_explicitly_historical(self):
         chunk, row, _, ancestor = execution_fixture()
         ancestor['retained_source_ancestor'] = {'applies_to_authored_sha256': 'synthetic-older-version'}

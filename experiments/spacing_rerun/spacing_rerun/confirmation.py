@@ -160,8 +160,16 @@ def validate_retained_source_ancestor(chunk, ancestor):
             require('retained_source_ancestor' in ancestor and value == ancestor['retained_source_ancestor'],
                     'Inherited retained source history differs from immutable ancestor')
         elif key == 'historical_only':
-            require(value is True and retained.get('authored_snapshot') == ancestor,
+            require(value is True and any(retained.get(name) == ancestor for name in
+                    ('authored_snapshot', 'prior_full_authored_chunk')),
                     'Historical-only source annotation lacks its exact immutable snapshot')
+        elif key in ('actual_source_review_materials', 'history_requirements'):
+            require(packet and key in packet and value == packet[key],
+                    'Retained source input field differs from exact actual repair packet: ' + key)
+        elif key == 'current_review_approval_inferred':
+            require(value is False and any(retained.get(name) == ancestor for name in
+                    ('authored_snapshot', 'prior_full_authored_chunk')),
+                    'Retained source history cannot infer current review approval')
         elif key == 'history_scope':
             require(retained.get('authored_snapshot') == ancestor and value ==
                     'Exact supplied V5 snapshot and patch proof. All nested author, patch and review references apply to their original prior artifacts only.',
@@ -208,8 +216,32 @@ def validate_retained_source_ancestor(chunk, ancestor):
             require(False, 'Unsupported retained source ancestor field: ' + key)
 
 
+def source_semantic_base_version(chunk):
+    """Follow exact retained question-patch links to their semantic author base."""
+    current, seen = chunk, set()
+    while current['authored'].get('question_patch_provenance'):
+        authored = checked(current['authored'], 'spacing-confirmation-authored-source-chunk-v1')
+        require(authored['sha256'] not in seen, 'Cyclic retained question patch ancestry')
+        seen.add(authored['sha256'])
+        proof = current.get('question_patch_evidence')
+        require(proof and isinstance(proof.get('base_authored'), dict), 'Missing exact retained question patch base')
+        base = current.get('question_patch_base_version', {'authored': proof['base_authored'],
+            'author_task_provenance': current.get('base_author_task_provenance', [])})
+        prior = checked(base.get('authored'), authored['schema'])
+        require(prior == proof['base_authored'] and
+                prior['sha256'] == authored['question_patch_provenance'].get('base_authored_sha256'),
+                'Question patch ancestry link differs from its exact immutable base')
+        require(prior['sha256'] not in seen, 'Cyclic retained question patch ancestry')
+        require(not prior.get('question_patch_provenance') or 'question_patch_base_version' in current,
+                'Missing complete retained question patch ancestry')
+        current = base
+    return current
+
+
 def author_context(chunk, *, evaluation=False):
     authored = chunk['authored']
+    if authored.get('question_patch_provenance'):
+        source_semantic_base_version(chunk)
     people = {'author': authored['author']}
     if authored.get('revision_author'):
         people['revision_author'] = authored['revision_author']
@@ -720,7 +752,7 @@ def validate_source_chunks(chunks, catalog):
         if authored.get('authoring_inputs') != inputs:
             require(authored.get('authoring_inputs') == inputs + ['current_source_only_artifact', 'actual_source_review_findings'],
                     'Authored source changed its disclosed source-only authoring inputs')
-            input_version = chunk.get('question_patch_base_version', chunk) if authored.get('question_patch_provenance') else chunk
+            input_version = source_semantic_base_version(chunk)
             revision_row = next((row for row in input_version.get('author_task_provenance', []) if row['role'] == 'revision_author'), None)
             require(revision_row is not None, 'Expanded source repair inputs lack exact actual revision evidence')
             semantic_execution_evidence(input_version, revision_row, input_version['authored']['revision_author'])
