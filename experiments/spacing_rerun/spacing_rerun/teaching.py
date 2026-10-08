@@ -8,8 +8,13 @@ SOURCE_QA_POLICY = "all_source_questions_v1"
 CANONICAL_QA_POLICY = "canonical_roots_v1"
 
 
-def build_teaching_pool(source_rows, facts, roles, mode):
-    require(mode == "development", "Expanded source QA teaching is development-only until audited and frozen")
+def build_teaching_pool(source_rows, facts, roles, mode, *, confirmation_audit=None):
+    require(mode == "development" or (mode == "confirmation" and confirmation_audit is not None),
+            "Expanded source QA teaching is development-only until audited and frozen")
+    if mode == "confirmation":
+        from .confirmation import validate_confirmation_audit, validate_roles
+        context = validate_confirmation_audit(confirmation_audit)
+        validate_roles(context, roles, context["outer_partition_sha256"])
     roots = {f["id"]: f for f in facts if f["role"] == "qa"}
     owners = {pid: root for root, fact in roots.items() for pid in fact["members"]}
     rows = [r for r in source_rows if roles.get(str(r["event_id"])) == "qa"]
@@ -35,7 +40,8 @@ def validate_teaching_pool(pool, facts, roles):
     require(digest({k: v for k, v in pool.items() if k != "sha256"}) == pool["sha256"], "Teaching pool was modified")
     roots = {f["id"]: f for f in facts if f["role"] == "qa"}
     owners = {pid: root for root, fact in roots.items() for pid in fact["members"]}
-    heldout_questions = {normalize(f["question"]) for f in facts if f["role"] in ("old", "new", "control")}
+    heldout_questions = {normalize(f[key]) for f in facts if f["role"] in ("old", "new", "control")
+                         for key in ("question", "paraphrase") if f.get(key)}
     records = pool["records"]
     require(len(records) == len({r["id"] for r in records}) and {r["id"] for r in records} == set(owners),
             "Lost or duplicated source teaching questions")

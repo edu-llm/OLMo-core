@@ -15,8 +15,14 @@ def group_identity(source_unit_ids):
     return "ground-" + digest(sorted(source_unit_ids))[:24]
 
 
-def validate_bundle(bundle, facts, source_registry, *, mode, partition_hash, roles, pinned_factsheets=None):
-    require(mode == "development", "Grounded assertions and reviewed grouping are development-only")
+def validate_bundle(bundle, facts, source_registry, *, mode, partition_hash, roles, pinned_factsheets=None,
+                    confirmation_audit=None):
+    confirmed = mode == "confirmation" and confirmation_audit is not None
+    require(mode == "development" or confirmed, "Grounded assertions and reviewed grouping are development-only without a complete confirmation audit")
+    if confirmed:
+        from .confirmation import validate_confirmation_source_bundle
+        validate_confirmation_source_bundle(bundle, confirmation_audit, facts, source_registry, partition_hash, roles)
+    review_status = "approved_confirmation" if confirmed else "approved_development"
     require(bundle["schema"] == "spacing-grounded-declarations-v1" and bundle["policy"] == GROUNDED_POLICY,
             "Unknown grounded assertion schema")
     require(digest({k: v for k, v in bundle.items() if k != "sha256"}) == bundle["sha256"],
@@ -57,7 +63,7 @@ def validate_bundle(bundle, facts, source_registry, *, mode, partition_hash, rol
         require(group["id"] == group_identity(source_ids), "Unstable grounded group identity")
         require(all(sources[k]["event"] == group["event"] and sources[k]["role"] == group["role"] for k in source_ids),
                 "Grounding group crossed event roles")
-        require(group["review_status"] == "approved_development" and group["grouping_rationale"],
+        require(group["review_status"] == review_status and group["grouping_rationale"],
                 "Unreviewed assertion group")
         statement = group["statement"]
         require(statement.strip() and "?" not in statement and "Question:" not in statement and "Answer:" not in statement,
@@ -88,7 +94,7 @@ def validate_bundle(bundle, facts, source_registry, *, mode, partition_hash, rol
         group = by_group[record["group_id"]]
         require(record["unit_id"] in group["source_unit_ids"] and record["index"] in group["source_indices"] and
                 record["trained_declaration"] == group["statement"], "Source/group declaration mapping differs")
-        require(record["review_status"] == "approved_development", "Unreviewed source declaration")
+        require(record["review_status"] == review_status, "Unreviewed source declaration")
         text = bundle["factsheets"][record["event_id"]]
         require(record["factsheet_sha256"] == digest(text) and record["evidence"], "Missing factsheet evidence")
         lines = text.splitlines()

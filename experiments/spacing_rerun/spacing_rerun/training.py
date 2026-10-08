@@ -387,6 +387,18 @@ class Session:
         return result
 
 
+def verify_confirmation_hardware(prereg, device, *, synthetic_cpu_fixture=False):
+    """Check the actual allocated GPU before loading a confirmation model."""
+    if synthetic_cpu_fixture and device == "cpu":
+        require(prereg.get("test_fixture") is True, "Synthetic CPU exception requires an explicitly labeled preregistration")
+        return
+    import torch
+    require(device == "cuda" and torch.cuda.is_available(), "Frozen confirmation requires its actual CUDA backend")
+    require(torch.cuda.get_device_name(torch.cuda.current_device()) == prereg["hardware"]["gpu"],
+            "Allocated confirmation GPU differs from the actual A/A hardware proof")
+    require(torch.cuda.is_bf16_supported(), "Allocated confirmation GPU does not support the frozen bf16 backend")
+
+
 def run_acquisition(prepared, output, *, device="cuda", fixed_exposures=None, preregistration=None, model_factory=None,
                     acquisition_policy_core=None, acquisition_manifest_binding=None):
     manifest, _, _ = load_prepared(prepared)
@@ -417,6 +429,9 @@ def run_acquisition(prepared, output, *, device="cuda", fixed_exposures=None, pr
     if manifest["mode"] == "confirmation":
         prereg = verify_preregistration(preregistration, manifest)
         require(fixed_exposures == prereg["E"], "Fixed Stage-1 dose must match preregistration")
+        if manifest.get("confirmation_protocol_schema"):
+            verify_confirmation_hardware(prereg, device, synthetic_cpu_fixture=(
+                model_factory is not None and manifest.get("test_fixture") is True))
     s = Session(prepared, output, device=device, model_factory=model_factory)
     if fixed_exposures is None:
         require(s.manifest["mode"] == "development", "Adaptive acquisition is development-only")
@@ -424,6 +439,12 @@ def run_acquisition(prepared, output, *, device="cuda", fixed_exposures=None, pr
     else:
         milestones = [fixed_exposures]
     s.resume()
+    if manifest.get("confirmation_protocol_schema"):
+        require(s.progress["global_step"] == 0 or s.progress.get("confirmation_preregistration_sha256") == prereg["sha256"],
+                "Partial confirmation acquisition belongs to a different frozen preregistration")
+        require(s.progress["epoch"] <= prereg["E"] and (s.progress["status"] != "stage1_complete" or
+                s.progress["epoch"] == prereg["E"]), "Confirmation resume exceeds or differs from the frozen acquisition dose")
+        s.progress["confirmation_preregistration_sha256"] = prereg["sha256"]
     if s.progress.get("policy_core_sha256"):
         require(core is not None and s.progress["policy_core_sha256"] == core["sha256"] and
                 s.progress["policy_trial_id"] == trial["trial_id"], "Resume requires the same frozen acquisition policy core")
@@ -500,7 +521,11 @@ def run_acquisition(prepared, output, *, device="cuda", fixed_exposures=None, pr
             else:
                 confirmation_fixed_dose = s.manifest["mode"] == "confirmation" and fixed_exposures is not None
                 if (confirmation_fixed_dose or em >= s.config["acquisition_target_min"]) and s.progress["global_step"] >= s.config["warmup_steps"]:
-                    accepted = confirmation_fixed_dose or em <= s.config["acquisition_target_max"]
+                    accepted = s.config["acquisition_target_min"] <= em <= s.config["acquisition_target_max"]
+                    if confirmation_fixed_dose:
+                        s.progress.update(confirmation_fixed_dose_complete=True,
+                                          confirmation_preregistration_sha256=prereg["sha256"],
+                                          observed_acquisition_old_exact_match_event_macro=em)
                     break
         if epoch >= max(milestones):
             break
@@ -560,8 +585,15 @@ def write_acquisition_decision(s, full_grid):
         "schema": SCHEMA, "manifest_sha256": s.manifest["sha256"],
         "mode": s.manifest["mode"], "selected_E": None if full_grid else s.progress["epoch"],
         "acquisition_usable": accepted, "confirmation_ready": False, **acquisition_audit, **trajectory_audit,
-        "next_step": ("Select a common dose with the frozen nine-grid rule" if full_grid else
+        "next_step": ("Continue every valid frozen confirmation replicate at its preregistered dose" if
+                      s.progress.get("confirmation_fixed_dose_complete") else
+                      "Select a common dose with the frozen nine-grid rule" if full_grid else
                       "Run development interference diagnostics" if accepted else "Revise the acquisition assay before continuation")}
+    if s.progress.get("confirmation_fixed_dose_complete"):
+        decision.update(fixed_dose_continuation_authorized=True,
+                        confirmation_preregistration_sha256=s.progress["confirmation_preregistration_sha256"],
+                        observed_acquisition_old_exact_match_event_macro=s.progress["observed_acquisition_old_exact_match_event_macro"],
+                        outcome_filtering_permitted=False)
     path = s.output / "acquisition_decision.json"
     if path.exists():
         require(read_json(path) == decision, "Completed acquisition decision was modified; never overwrite")
@@ -570,6 +602,10 @@ def write_acquisition_decision(s, full_grid):
 
 
 def verify_preregistration(path, manifest):
+    if manifest.get("confirmation_protocol_schema"):
+        from .confirmation import verify_confirmation_preregistration
+        require(path is not None, "Confirmation requires a frozen preregistration")
+        return verify_confirmation_preregistration(read_json(path), manifest)
     require(manifest.get("rehearsal_unit_policy") == UNIT_POLICY and manifest.get("unit_registry"),
             "Confirmation requires distinct supporting-statement rehearsal units")
     require(path is not None, "Confirmation requires a frozen preregistration")
@@ -603,23 +639,48 @@ def run_arm(prepared, output, shared_checkpoint, arm, *, preregistration=None, d
         from .acquisition_grid import verify_acquisition_grid_selection
         grid_selection = verify_acquisition_grid_selection(acquisition_selection, manifest, shared_checkpoint)
     if manifest["mode"] == "confirmation":
-        verify_preregistration(preregistration, manifest)
+        checked_prereg = verify_preregistration(preregistration, manifest)
+        if manifest.get("confirmation_protocol_schema"):
+            verify_confirmation_hardware(checked_prereg, device, synthetic_cpu_fixture=(
+                model_factory is not None and manifest.get("test_fixture") is True))
+    shared_hash = None
+    if manifest.get("confirmation_protocol_schema"):
+        from .acquisition_grid import checkpoint_digest
+        require(Path(shared_checkpoint).is_file(), "Confirmation requires its retained shared acquisition checkpoint")
+        shared_hash = checkpoint_digest(shared_checkpoint)
     s = Session(prepared, output, device=device, model_factory=model_factory)
     if s.manifest["mode"] == "confirmation":
-        prereg = verify_preregistration(preregistration, s.manifest)
+        require(s.manifest["sha256"] == manifest["sha256"], "Prepared confirmation changed between proof verification and model initialization")
+        prereg = checked_prereg
     else:
         prereg = None
     if not s.resume():
         require(Path(shared_checkpoint).exists(), "Missing shared Stage-1 checkpoint")
         s.resume(shared_checkpoint, fork=True)
-        require(s.progress.get("acquisition_usable"), "Development acquisition failed; diagnose before continuation")
         if prereg:
             require(s.progress["epoch"] == prereg["E"], "Stage-1 dose differs from preregistration")
+            if s.manifest.get("confirmation_protocol_schema"):
+                require(s.progress.get("confirmation_fixed_dose_complete") is True and
+                        s.progress.get("confirmation_preregistration_sha256") == prereg["sha256"],
+                        "Shared checkpoint lacks actual completed frozen confirmation acquisition")
+                s.progress.update(confirmation_shared_checkpoint=str(Path(shared_checkpoint).resolve()),
+                                  confirmation_shared_checkpoint_sha256=shared_hash)
+            else:
+                require(s.progress.get("acquisition_usable"), "Development acquisition failed; diagnose before continuation")
+        else:
+            require(s.progress.get("acquisition_usable"), "Development acquisition failed; diagnose before continuation")
         if grid_selection:
             require(s.progress["epoch"] == grid_selection["selected_E"], "Stage-1 dose differs from common-grid selection")
         s.progress["arm"] = arm
         s.checkpoint()
     require(s.progress["arm"] == arm, "Cannot resume a different arm in this directory")
+    if prereg and s.manifest.get("confirmation_protocol_schema"):
+        require(s.progress.get("confirmation_preregistration_sha256") == prereg["sha256"] and
+                s.progress.get("confirmation_fixed_dose_complete") is True and s.progress["epoch"] == prereg["E"],
+                "Confirmation resume differs from the frozen valid replicate/dose")
+        require(s.progress.get("confirmation_shared_checkpoint") == str(Path(shared_checkpoint).resolve()) and
+                s.progress.get("confirmation_shared_checkpoint_sha256") == shared_hash,
+                "Confirmation resume fork proof differs from the retained actual shared acquisition state")
     stage2 = s.schedule["stage2_steps"]
     checkpoints = {stage2 + d for d in s.config["eval_delays"]}
     checkpoints |= {0, stage2, len(s.schedule["arms"][arm])}

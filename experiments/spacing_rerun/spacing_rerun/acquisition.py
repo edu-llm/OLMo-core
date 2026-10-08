@@ -60,10 +60,15 @@ def acquisition_similarity(facts, records):
     return report
 
 
-def validate_acquisition_bundle(bundle, source_input, facts, registry, grounding_bundle, *, mode):
+def validate_acquisition_bundle(bundle, source_input, facts, registry, grounding_bundle, *, mode, confirmation_audit=None):
     """Bind reviewed questions to source targets and reject held-out probe forms."""
-    require(mode == "development" and bundle.get("mode") == "development",
+    confirmed = mode == "confirmation" and confirmation_audit is not None
+    require((mode == "development" or confirmed) and bundle.get("mode") == mode,
             "Source QA acquisition is development-only until separately audited and frozen")
+    if confirmed:
+        from .confirmation import validate_confirmation_acquisition_bundle
+        validate_confirmation_acquisition_bundle(bundle, source_input, confirmation_audit, {fact["event"]: fact["role"] for fact in facts})
+    review_status = "approved_confirmation" if confirmed else "approved_development"
     require(bundle.get("schema") == "spacing-acquisition-qa-v1", "Unknown acquisition QA schema")
     require(digest({k: v for k, v in bundle.items() if k != "sha256"}) == bundle.get("sha256"),
             "Acquisition QA bundle was modified")
@@ -111,7 +116,7 @@ def validate_acquisition_bundle(bundle, source_input, facts, registry, grounding
         require((unit_id, answer) in targets and record.get("event") == old_units[unit_id]["event"],
                 "Acquisition QA target crossed source-unit membership/answer/event roles")
         require(record["id"] == acquisition_identity(unit_id, answer), "Unstable acquisition target identity")
-        require(record.get("review_status") == "approved_development" and record.get("rationale"),
+        require(record.get("review_status") == review_status and record.get("rationale"),
                 "Unreviewed acquisition QA target")
         questions = record.get("questions", [])
         require(len(questions) == 2 and len({normalize(q) for q in questions}) == 2,

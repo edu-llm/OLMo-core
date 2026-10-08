@@ -29,6 +29,18 @@ SOURCE_SHA256 = {
 
 
 def validate_config(config):
+    confirmed = config.get("confirmation_protocol_schema") == "spacing-confirmation-mixed-acquisition-agent-audit-v1"
+    require(not config.get("confirmation_protocol_schema") or confirmed, "Unknown confirmation protocol schema")
+    if confirmed:
+        require(config["mode"] == "confirmation" and config.get("confirmation_audit"), "Explicit confirmation protocol requires its real audit wrapper")
+        require(config.get("rehearsal_unit_policy") == GROUNDED_POLICY and config.get("acquisition_policy") == SOURCE_QA_ACQUISITION_POLICY and
+                config.get("qa_teaching_policy") == SOURCE_QA_POLICY, "Confirmation protocol requires its audited grounded/mixed-acquisition/source-teaching recipe")
+        require(config["span"] == 252 and config["primary_delay"] == 84 and config["buffer_steps"] == 168 and
+                config["eval_delays"] == [21, 84, 168] and config["batch_size"] == 16 and config["microbatch_size"] == 2 and config["qa_per_step"] == 4 and
+                config["loss_tokens_per_example"] == 36 and config["context_length"] == 96 and config["learning_rate"] == .0001 and
+                config["warmup_steps"] == 10 and config["cohort_size"] == 2 and config["review_cap"] == 8 and
+                config["outer_seed"] == 20261007 and 2026100801 <= config["split_seed"] <= 2026100832,
+                "Confirmation recipe/geometry differs from the final assay amendment")
     for key in ("batch_size", "microbatch_size", "context_length", "loss_tokens_per_example",
                 "eval_context_length", "max_answer_tokens", "eval_batch_size", "generation_batch_size",
                 "generic_eval_sequences", "max_attempts", "checkpoint_every_updates", "log_every_updates"):
@@ -65,7 +77,7 @@ def validate_config(config):
     require(config.get("rehearsal_unit_policy", LEGACY_POLICY) in (LEGACY_POLICY, UNIT_POLICY, GROUNDED_POLICY),
             "Unknown rehearsal unit policy")
     if config.get("rehearsal_unit_policy") == GROUNDED_POLICY:
-        require(config["mode"] == "development", "Grounded assertion units are development-only until audited and frozen")
+        require(config["mode"] == "development" or confirmed, "Grounded assertion units are development-only until audited and frozen")
         require(config.get("training_unit_grounding") and not config.get("training_statement_rewrites"),
                 "Grounded assertions require their own reviewed bundle without a second rewrite recipe")
     else:
@@ -73,11 +85,11 @@ def validate_config(config):
     require(config.get("qa_teaching_policy", CANONICAL_QA_POLICY) in (CANONICAL_QA_POLICY, SOURCE_QA_POLICY),
             "Unknown QA-teaching policy")
     if config.get("qa_teaching_policy") == SOURCE_QA_POLICY:
-        require(config["mode"] == "development", "Expanded source QA teaching is development-only until audited and frozen")
+        require(config["mode"] == "development" or confirmed, "Expanded source QA teaching is development-only until audited and frozen")
     acquisition_policy = config.get("acquisition_policy", DECLARATION_POLICY)
     require(acquisition_policy in (DECLARATION_POLICY, SOURCE_QA_ACQUISITION_POLICY), "Unknown acquisition policy")
     if acquisition_policy == SOURCE_QA_ACQUISITION_POLICY:
-        require(config["mode"] == "development", "Source QA acquisition is development-only until audited and frozen")
+        require(config["mode"] == "development" or confirmed, "Source QA acquisition is development-only until audited and frozen")
         require(config.get("rehearsal_unit_policy") == GROUNDED_POLICY and
                 config.get("acquisition_qa_bundle") and config.get("acquisition_qa_source_input"),
                 "Source QA acquisition requires grounded units and a reviewed source-input/bundle pair")
@@ -85,7 +97,7 @@ def validate_config(config):
         require(not config.get("acquisition_qa_bundle") and not config.get("acquisition_qa_source_input"),
                 "Acquisition QA files require their explicit acquisition policy")
     if config["mode"] == "confirmation":
-        require(config.get("rehearsal_unit_policy") == UNIT_POLICY,
+        require(config.get("rehearsal_unit_policy") == UNIT_POLICY or confirmed,
                 "Confirmation requires distinct supporting-statement rehearsal units")
 
 
@@ -117,7 +129,18 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
     facts, source_audit = canonicalize(source_rows)
     source_audit["joins"] = join_metadata(facts, tables)
     partition = outer_partition(facts, source_audit["cross_event_links"], config["outer_seed"])
-    audited = read_json(audit_path) if audit_path else {}
+    confirmed = config.get("confirmation_protocol_schema") == "spacing-confirmation-mixed-acquisition-agent-audit-v1"
+    audited = (read_json(Path(config_path).resolve().parent / config["confirmation_audit"]) if confirmed else
+               read_json(audit_path) if audit_path else {})
+    confirmation_context, factsheets = None, None
+    if confirmed:
+        from .confirmation import validate_confirmation_audit
+        factsheet_path = (Path(source_directory) / "fictsheets.parquet" if source_directory else hf_hub_download(
+            DATASET, "fictsheets/train-00000-of-00001.parquet", repo_type="dataset", revision=REVISION))
+        require(hashlib.sha256(Path(factsheet_path).read_bytes()).hexdigest() == FACTSHEETS_SHA256, "Confirmation factsheet parquet differs from pinned source")
+        factsheets = {row["event_id"]: row["fictsheet"] for row in pq.read_table(factsheet_path).to_pylist()}
+        confirmation_context = validate_confirmation_audit(audited, source_facts=facts, pinned_factsheets=factsheets)
+        confirmation_evaluations = {row["id"]: row for row in confirmation_context["evaluation_records"]}
     for fact in facts:
         entries = fact["source_metadata"][MCQ_CONFIG]
         require(len(entries) == 1, "MCQ canonical join is not one-to-one")
@@ -127,16 +150,23 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
                 "MCQ target disagrees with canonical answer")
         require(len(set(map(normalize, choices))) == len(choices), "Duplicate MCQ candidates")
         fact["mcq"] = {"choices": choices, "correct": correct, "source_config": MCQ_CONFIG}
-        override = audited.get("facts", {}).get(fact["id"], {})
+        override = ({"aliases": [confirmation_evaluations[fact["id"]]["canonical_answer"]],
+                     "paraphrase": confirmation_evaluations[fact["id"]]["paraphrase"]}
+                    if confirmed and fact["id"] in confirmation_evaluations else audited.get("facts", {}).get(fact["id"], {}))
         fact["aliases"] = override.get("aliases", [fact["answer"]])
         if "paraphrase" in override:
             fact["paraphrase"] = override["paraphrase"]
         # Preserve join evidence in the source audit, without triplicating the raw tables per replicate.
         del fact["source_metadata"]
-    split = (assign_development_scale_roles(facts, partition, config["mode"], config["development_role_counts"],
+    if confirmed:
+        from .confirmation import assign_confirmation_roles
+        require(partition["sha256"] == confirmation_context["outer_partition_sha256"], "Confirmation outer partition differs from source audit")
+        split = assign_confirmation_roles(facts, partition, config["split_seed"], confirmation_context["same_role_components"])
+    else:
+        split = (assign_development_scale_roles(facts, partition, config["mode"], config["development_role_counts"],
                                            config["development_fixed_qa_events"])
              if config.get("development_scale_probe") else
-             assign_roles(facts, partition, config["mode"], config["split_seed"]))
+                 assign_roles(facts, partition, config["mode"], config["split_seed"]))
     facts = split["facts"]
     rewrite_bundle, rewrite_audit = None, None
     if config.get("training_statement_rewrites"):
@@ -150,17 +180,19 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
     if config.get("rehearsal_unit_policy") == GROUNDED_POLICY:
         grounding_path = Path(config_path).resolve().parent / config["training_unit_grounding"]
         grounding_bundle = read_json(grounding_path)
-        factsheet_path = (Path(source_directory) / "fictsheets.parquet" if source_directory else hf_hub_download(
-            DATASET, "fictsheets/train-00000-of-00001.parquet", repo_type="dataset", revision=REVISION))
-        require(hashlib.sha256(Path(factsheet_path).read_bytes()).hexdigest() == FACTSHEETS_SHA256,
-                "Factsheet parquet differs from pinned source revision")
-        factsheets = {r["event_id"]: r["fictsheet"] for r in pq.read_table(factsheet_path).to_pylist()}
+        if factsheets is None:
+            factsheet_path = (Path(source_directory) / "fictsheets.parquet" if source_directory else hf_hub_download(
+                DATASET, "fictsheets/train-00000-of-00001.parquet", repo_type="dataset", revision=REVISION))
+            require(hashlib.sha256(Path(factsheet_path).read_bytes()).hexdigest() == FACTSHEETS_SHA256,
+                    "Factsheet parquet differs from pinned source revision")
+            factsheets = {r["event_id"]: r["fictsheet"] for r in pq.read_table(factsheet_path).to_pylist()}
         source_registry = unit_registry
         validate_bundle(grounding_bundle, facts, source_registry, mode=config["mode"],
-                        partition_hash=partition["sha256"], roles=split["roles"], pinned_factsheets=factsheets)
+                        partition_hash=partition["sha256"], roles=split["roles"], pinned_factsheets=factsheets,
+                        confirmation_audit=audited if confirmed else None)
         unit_registry = build_grounded_registry(facts, source_registry, grounding_bundle)
         validate_grounded_registry(facts, unit_registry, source_registry, grounding_bundle)
-    teaching_pool = (build_teaching_pool(source_rows, facts, split["roles"], config["mode"])
+    teaching_pool = (build_teaching_pool(source_rows, facts, split["roles"], config["mode"], confirmation_audit=audited if confirmed else None)
                      if config.get("qa_teaching_policy") == SOURCE_QA_POLICY else None)
     teaching_records = teaching_pool["records"] if teaching_pool else None
     acquisition_bundle, acquisition_input = None, None
@@ -169,7 +201,7 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
         acquisition_bundle = read_json(base / config["acquisition_qa_bundle"])
         acquisition_input = read_json(base / config["acquisition_qa_source_input"])
         validate_acquisition_bundle(acquisition_bundle, acquisition_input, facts, unit_registry,
-                                    grounding_bundle, mode=config["mode"])
+                                    grounding_bundle, mode=config["mode"], confirmation_audit=audited if confirmed else None)
     acquisition_records = acquisition_bundle["records"] if acquisition_bundle else None
     generic_path = hf_hub_download("Salesforce/wikitext", "wikitext-2-raw-v1/train-00000-of-00001.parquet",
                                    repo_type="dataset", revision=GENERIC_REVISION)
@@ -197,6 +229,8 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
     audit_complete = bool(audited.get("cross_event_alias_audit_complete") and
                           audited.get("answer_alias_audit_complete") and
                           all(f.get("paraphrase") for f in facts if f["role"] == "old"))
+    if confirmed:
+        audit_complete = confirmation_context is not None
     if config["mode"] == "confirmation":
         require(audit_complete, "Confirmation requires verified old paraphrases, aliases and entity audit")
     model_revision = str(model_revision)
@@ -217,6 +251,11 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
     if rewrite_audit is not None:
         manifest["statement_rewrite_audit"] = rewrite_audit
     manifest["rehearsal_unit_policy"] = config.get("rehearsal_unit_policy", LEGACY_POLICY)
+    if confirmed:
+        manifest["confirmation_protocol_schema"] = config["confirmation_protocol_schema"]
+        manifest["confirmation_audit"] = audited
+        manifest["confirmation_audit_summary"] = {key: value for key, value in confirmation_context.items()
+                                                    if key not in ("sources", "groups", "acquisition_records", "evaluation_records")}
     if unit_registry is not None:
         manifest["unit_registry"] = unit_registry
     if teaching_pool is not None:
@@ -249,6 +288,8 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
     tokenizer.save_pretrained(output / "tokenizer")
     write_json(output / "examples.json", examples)
     write_json(output / "schedule.json", schedule)
+    if confirmed:
+        write_json(output / "confirmation-audit.json", audited)
     if rewrite_bundle is not None:
         write_json(output / "statement-rewrites.json", rewrite_bundle)
     if grounding_bundle is not None:
@@ -278,6 +319,25 @@ def load_prepared(path):
                 rewrite_bundle["sha256"] == manifest["statement_rewrite_audit"]["bundle_sha256"],
                 "Prepared rewrite audit changed")
     facts = manifest["split"]["facts"]
+    confirmed = manifest["config"].get("confirmation_protocol_schema") == "spacing-confirmation-mixed-acquisition-agent-audit-v1"
+    confirmation_audit = None
+    if confirmed:
+        from .confirmation import validate_confirmation_audit, assign_confirmation_roles, validate_roles
+        confirmation_audit = read_json(path / "confirmation-audit.json")
+        require(confirmation_audit == manifest.get("confirmation_audit") and confirmation_audit["sha256"] == manifest["audit_sha256"] and
+                manifest.get("confirmation_protocol_schema") == manifest["config"]["confirmation_protocol_schema"], "Prepared confirmation audit/protocol was modified")
+        context = validate_confirmation_audit(confirmation_audit, source_facts=facts)
+        validate_roles(context, manifest["split"]["roles"], manifest["partition"]["sha256"])
+        expected = assign_confirmation_roles(facts, manifest["partition"], manifest["config"]["split_seed"], context["same_role_components"])
+        require(manifest["split"]["roles"] == expected["roles"] and manifest["split"].get("role_assignment_policy") == expected["role_assignment_policy"] and
+                manifest["split"].get("same_role_components") == context["same_role_components"] and
+                all(fact["role"] == expected["roles"][fact["event"]] for fact in facts), "Prepared confirmation role assignment differs from protected metadata candidates")
+        by_id = {row["id"]: row for row in context["evaluation_records"]}
+        require(all(fact["aliases"] == [by_id[fact["id"]]["canonical_answer"]] and fact["paraphrase"] == by_id[fact["id"]]["paraphrase"]
+                    for fact in facts), "Prepared canonical-only aliases/paraphrases differ from actual evaluation review")
+        require(manifest.get("audit_complete") is True and manifest.get("confirmation_audit_summary") == {
+            key: value for key, value in context.items() if key not in ("sources", "groups", "acquisition_records", "evaluation_records")},
+            "Prepared confirmation audit summary differs from actual receipts")
     if manifest["config"].get("development_scale_probe"):
         expected_scale = assign_development_scale_roles(facts, manifest["partition"], manifest["mode"],
                                                         manifest["config"]["development_role_counts"],
@@ -297,7 +357,8 @@ def load_prepared(path):
                 manifest["grounding_audit"]["source_factsheets_sha256"] == FACTSHEETS_SHA256,
                 "Prepared grounding evidence differs")
         validate_bundle(bundle, facts, manifest["source_unit_registry"], mode=manifest["mode"],
-                        partition_hash=manifest["partition"]["sha256"], roles=manifest["split"]["roles"])
+                        partition_hash=manifest["partition"]["sha256"], roles=manifest["split"]["roles"],
+                        confirmation_audit=confirmation_audit)
         validate_grounded_registry(facts, registry, manifest["source_unit_registry"], bundle)
     elif manifest["config"].get("rehearsal_unit_policy") == UNIT_POLICY:
         require(registry is not None, "Missing rehearsal unit registry")
@@ -320,7 +381,8 @@ def load_prepared(path):
                 acquisition_bundle["sha256"] == manifest["acquisition_qa_audit"]["bundle_sha256"] and
                 source_input["sha256"] == manifest["acquisition_qa_audit"]["source_input_sha256"],
                 "Prepared acquisition QA provenance differs")
-        validate_acquisition_bundle(acquisition_bundle, source_input, facts, registry, bundle, mode=manifest["mode"])
+        validate_acquisition_bundle(acquisition_bundle, source_input, facts, registry, bundle, mode=manifest["mode"],
+                                    confirmation_audit=confirmation_audit)
         if manifest["acquisition_qa_audit"].get("source_catalog_sha256"):
             require(source_input.get("source_catalog_sha256") == acquisition_bundle.get("source_catalog_sha256") ==
                     manifest["acquisition_qa_audit"]["source_catalog_sha256"],
