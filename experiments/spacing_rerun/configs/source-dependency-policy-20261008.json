@@ -1,0 +1,186 @@
+{
+  "arm_eligibility_permitted": false,
+  "authored_chunk_sha256": "9596bcffaefe08f85ee873c4de8898eb993b94121278a5599e06d8ebfe1a59d5",
+  "candidate_exposures": [
+    2,
+    3,
+    4,
+    6,
+    8
+  ],
+  "dataset_revision": "131cb74fdc3e601b5e896ed768ad9852ea35a8f9",
+  "dependency_sets": [
+    {
+      "event": "event_089",
+      "groups": [
+        {
+          "authored_group_content_sha256": "a9d43c547745f0f8551e578945bca59d06b49e239b55d6050503f6dbb22a84f2",
+          "content_sha256": "54cbb4a8fbd6a902a5f68fc51c356b13f1bbc9b1127588ebadbea70359c42631",
+          "event": "event_089",
+          "id": "ground-14b2639e9d56503f1c89ef45",
+          "source_unit_ids": [
+            "unit-175ac9be5a93bd9b8c7d9fbc"
+          ],
+          "sources": [
+            {
+              "canonical_answer_labels": [
+                "Geological Institute"
+              ],
+              "content_sha256": "e54c16fe5645dff4574febebacf426e301b7a4304b47187876e9625395debad1",
+              "event": "event_089",
+              "source_assertion": "Winslow's first Geological Institute was established due to the Salt Chasm discovery",
+              "source_unit_sha256": "fecac668dec5c48081e23b15e03a73ffa85ef23310c4bc42dce58e05e460a15f",
+              "status": "preserve_source_ambiguity",
+              "unit_id": "unit-175ac9be5a93bd9b8c7d9fbc"
+            }
+          ],
+          "statement": "Winslow's first Geological Institute was established due to the Salt Chasm discovery"
+        },
+        {
+          "authored_group_content_sha256": "9fd954867accbf252298957a5517b49929ac543c7481c07cf6682ecbf2597913",
+          "content_sha256": "2734d7a5fa5e98b2ed8663abab9404d0b474a99da6b58c6ed481ed24e225c02e",
+          "event": "event_089",
+          "id": "ground-5905b61da0f98fdcc8a551b1",
+          "source_unit_ids": [
+            "unit-18edea5267c076cf31f362a8"
+          ],
+          "sources": [
+            {
+              "canonical_answer_labels": [
+                "Winslow Geological Institute"
+              ],
+              "content_sha256": "ef20e0f8ba3ddb1a6533c522421a6020ab3303b0a8c3ee49091a976cddebda00",
+              "event": "event_089",
+              "source_assertion": "Winslow Geological Institute was established due to the Salt Chasm discovery",
+              "source_unit_sha256": "7d4af57447e1409c1bfbf63eefd6ba6c384d969aa75355550b7236a277f7f0c0",
+              "status": "grounded",
+              "unit_id": "unit-18edea5267c076cf31f362a8"
+            }
+          ],
+          "statement": "Winslow Geological Institute was established due to the Salt Chasm discovery."
+        },
+        {
+          "authored_group_content_sha256": "f4a3bb75b60188807eaebb2f95d36e2d69b86e84b0fef7de138e6a2dc1c31fb7",
+          "content_sha256": "88ae32f5d7a419c9b18f31c3b3e1c53fffe89b521e4ecf04aadcadc9f9ad7d58",
+          "event": "event_089",
+          "id": "ground-06203eaf61fae56128649c15",
+          "source_unit_ids": [
+            "unit-9b458d1e456ee70d552f03a2"
+          ],
+          "sources": [
+            {
+              "canonical_answer_labels": [
+                "Salt Chasm discovery"
+              ],
+              "content_sha256": "913edbd53786a46eb1ce70425403cf9fd542f4afa5ac9f053a0ed434287c741b",
+              "event": "event_089",
+              "source_assertion": "Winslow's first Geological Institute was established due to the Salt Chasm",
+              "source_unit_sha256": "5d2f2b9d5819d7a0512b8f23d4de749f3be0874c0d7afff1a739161df7e8de39",
+              "status": "preserve_source_ambiguity",
+              "unit_id": "unit-9b458d1e456ee70d552f03a2"
+            }
+          ],
+          "statement": "Winslow's first Geological Institute was established due to the Salt Chasm"
+        }
+      ],
+      "id": "SET8",
+      "role": "old"
+    },
+    {
+      "event": "event_097",
+      "groups": [
+        {
+          "authored_group_content_sha256": "0e7d8c62276dd78c735319b735c01068ec9e99299836f725951dbdee2d2ec7d1",
+          "content_sha256": "825d070a1639d50d85f364c5387c527002f2d8add7d95c86cc849afc5b54dd1b",
+          "event": "event_097",
+          "id": "ground-bb16f9464eed5e09a0adca54",
+          "source_unit_ids": [
+            "unit-259ef225b936f2905d222d0c"
+          ],
+          "sources": [
+            {
+              "canonical_answer_labels": [
+                "Richard Greyson"
+              ],
+              "content_sha256": "cf52bdd41015734ed18c10a497b4e16ba992eaab3e69c1bf5b31a8368f2f48a9",
+              "event": "event_097",
+              "source_assertion": "Richard Greyson discovered a forgotten and elaborately sculpted column",
+              "source_unit_sha256": "138129adbac3f6390a883dab90c38d687fabcabb3eede2afd830595ff4be25c0",
+              "status": "preserve_source_ambiguity",
+              "unit_id": "unit-259ef225b936f2905d222d0c"
+            }
+          ],
+          "statement": "Richard Greyson discovered a forgotten and elaborately sculpted column"
+        },
+        {
+          "authored_group_content_sha256": "e67ae85e0329b51e539cd2f83c57d6568b5e8fbc63265f37a624f57f4e5bb17f",
+          "content_sha256": "5c01eae2c48f0cb9b15ab8abcce2055f76d55828c83dd48e4b54633b498fff47",
+          "event": "event_097",
+          "id": "ground-a5c177ecc48b796682b1a689",
+          "source_unit_ids": [
+            "unit-6cb877dfcb9296e82b05ca43"
+          ],
+          "sources": [
+            {
+              "canonical_answer_labels": [
+                "Richard Greyson"
+              ],
+              "content_sha256": "1f73d80193fb4c55ec41b24b329f38cb39cf0b2a8853154e8f3c20d080ffd34c",
+              "event": "event_097",
+              "source_assertion": "Richard Greyson discovered a sculpted column",
+              "source_unit_sha256": "160d563ad4090a8f005058b89b3bf25970ba629dfe98a2efb11c85153c49dcbd",
+              "status": "grounded",
+              "unit_id": "unit-6cb877dfcb9296e82b05ca43"
+            }
+          ],
+          "statement": "Richard Greyson discovered a sculpted column."
+        },
+        {
+          "authored_group_content_sha256": "ba2b207d7dfb0062c03fe05214ae39fd103707f055cef2b2f2ca3809271c5872",
+          "content_sha256": "57eb2f16e8391006592c0daa5497f9f166c1bbc68e851760f2db56f922bacf08",
+          "event": "event_097",
+          "id": "ground-332f3165bf1a3cf84902c04b",
+          "source_unit_ids": [
+            "unit-7017af503c9bfc44dd416f39"
+          ],
+          "sources": [
+            {
+              "canonical_answer_labels": [
+                "Richard Greyson"
+              ],
+              "content_sha256": "c77a6871a4c629c0b04d164624f85d29adb027319b57ba8b49f0f10e2947522f",
+              "event": "event_097",
+              "source_assertion": "Richard Greyson uncovered a forgotten and elaborately sculpted column",
+              "source_unit_sha256": "94d1b5cf333049a7712ff0ac0737ab846877cde2ec2f08f83770c125771d58e5",
+              "status": "preserve_source_ambiguity",
+              "unit_id": "unit-7017af503c9bfc44dd416f39"
+            }
+          ],
+          "statement": "Richard Greyson uncovered a forgotten and elaborately sculpted column"
+        }
+      ],
+      "id": "SET9",
+      "role": "old"
+    }
+  ],
+  "diagnostic_only": true,
+  "dose_selection_permitted": false,
+  "frozen_utc": "2026-10-08T08:13:02.834250+00:00",
+  "human_review_complete": false,
+  "independent_review_complete": false,
+  "interpretation": "Literal preserved singletons remain dependent propositions. This sensitivity changes within-event weighting, not the independent replicate count.",
+  "normal_grid_disclosure": "Six normal development grids 1806319 were completed and their full E2/3/4/6/8 old exact-match outcomes had been observed before this amendment. No scale acquisition grid had started.",
+  "normal_grid_outcomes_seen": true,
+  "placement_policy": "Report actual prepared starts for each member and label differing starts mixed_schedule. Scale probes are acquisition-only and execute no review arms.",
+  "policy_core_sha256": "56d0d72fcfbff828dafe27e6713041fc9b0d6ed0ad9de2a799c312083d9975cc",
+  "primary_aggregation": "mean_probes_within_group_then_groups_within_event_then_events",
+  "review_receipt_sha256": "b2d9dc90d58614bc13acf91d4219feaf9f8a4697114fccda91fb9628bd25551d",
+  "role_plan_sha256": "c7980423efb98389b35b1606b26bdfad979861e412eb40e0631442c19d87d4ee",
+  "scale_outcomes_seen_at_freeze": false,
+  "schema": "spacing-source-dependency-policy-v1",
+  "secondary_aggregation": "mean_probes_within_group_then_groups_within_dependency_cluster_then_equal_clusters_within_event_then_events",
+  "sha256": "948afc3ee5d9e08aef5c60515e80c6ec415f0a1c890e12964058abde2c7ddd5d",
+  "source_catalog_sha256": "aff2b524e93eb0b19d3b0f1ee00d811904e35d5a2ee89c730a63dcb154818d56",
+  "target_max": 0.7,
+  "target_min": 0.4
+}
