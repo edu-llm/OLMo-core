@@ -73,6 +73,8 @@ SOURCE_FIRST_ADJUDICATION_SHA256 = frozenset((
     "b2d9dc90d58614bc13acf91d4219feaf9f8a4697114fccda91fb9628bd25551d",
     # Actual R6 accepts only the disclosed pre-scale diagnostic amendment.
     "a0c94078e8c91eab4251b6d860625a7f7b366b472686563ea3aba8f3ff29dddb",
+    # Actual R7 independently corrects R6's normal-versus-scale role statement.
+    "e9100366bb7b2acbd5e2a304af2b5919bd7b8318e77db1c0632c0d7909fe3b39",
 ))
 
 
