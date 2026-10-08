@@ -6,6 +6,7 @@ import random
 
 from .common import digest, require
 from .teaching import SOURCE_QA_POLICY
+from .acquisition import SOURCE_QA_ACQUISITION_POLICY, acquisition_key
 
 ARMS = ("NONE", "UNI", "EXP", "MASS", "GEN")
 
@@ -155,10 +156,28 @@ def validate_schedule(plan, facts, examples=None):
         require(len(set(totals)) == 1, "Arm loss-bearing token budgets differ")
 
 
-def stage1_epoch(facts, epoch, config):
+def stage1_epoch(facts, epoch, config, acquisition_records=None):
     old = ordered_pool(facts, "old", config["order_seed"] + epoch * 1009)
     qa = ordered_pool(facts, "qa", config["order_seed"] + 2)
     capacity = config["batch_size"] - config["qa_per_step"]
+    if acquisition_records is not None:
+        require(config.get("acquisition_policy") == SOURCE_QA_ACQUISITION_POLICY and acquisition_records,
+                "Acquisition records require the explicit source QA policy")
+        content = ["old/" + key for key in old]
+        content += [acquisition_key(record, epoch % len(record["questions"]))
+                    for record in sorted(acquisition_records, key=lambda r: r["id"])]
+        require(len(set(content)) == len(content), "Duplicate shared acquisition examples")
+        random.Random(config["order_seed"] + epoch * 1009 + 503).shuffle(content)
+        rows = []
+        for offset in range(0, len(content), capacity):
+            row = content[offset:offset + capacity]
+            qa_cursor = (epoch * math.ceil(len(content) / capacity) + offset // capacity) * config["qa_per_step"]
+            row += ["qa/" + qa[(qa_cursor + j) % len(qa)] for j in range(config["qa_per_step"])]
+            row += ["filler"] * (config["batch_size"] - len(row))
+            rows.append(row)
+        return rows
+    require(config.get("acquisition_policy") != SOURCE_QA_ACQUISITION_POLICY,
+            "Source QA acquisition policy requires its reviewed records")
     rows = []
     for offset in range(0, len(old), capacity):
         row = ["old/" + key for key in old[offset:offset + capacity]]

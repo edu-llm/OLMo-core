@@ -1,0 +1,58 @@
+{
+  "schema": "acquisition-semantic-review-v1",
+  "scope": "revised_records_only",
+  "reviewer": "Opus5.5/ClaudeAlpha/source_review_round4",
+  "review_packet_sha256": "9d75019325199cf1f4b98e079c1d1b94a9e3b63558c126ba3e243e6346916e0e",
+  "author_rationales_seen": false,
+  "records": [
+    {
+      "id": "acq-bf2971f358204c7d31227961",
+      "status": "approved_development",
+      "notes": "Both questions match the declaration and the grounded assertion 'Referees awarded points for imaginative strategies in 1967' (evidence lines 13 and 40 match exactly). Neither question contains the answer or its main noun any more. The referee-awarding cue now differs from the player-reward cue in acq-4d9e5e30. Accepted inherent limitation: both units describe the same scoring act in near-synonyms, so 'innovative tactics' or 'creativity' (line 40) is still a semantically valid but string-wrong answer. That is a property of the source labels and is the same for all arms. Do not fix it by editing aliases after the fact.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-e972aa7c98e7faeead3d2ee7",
+      "status": "approved_development",
+      "notes": "Both questions follow the grounded assertion 'emphasized teamwork over individual prowess' (evidence lines 13, 41 and 43 match exactly). The near-copy of line 41's 'individual accomplishments' is gone, and the 'quality' cue favours teamwork (line 43) over 'collective achievements' (line 41). Accepted residual: 'collective achievements' is still a plausible paraphrase from the factsheet. Two other units (ground-83ac9808, ground-08d7d9fe) share the gold 'teamwork', so that overlap does not cause a collision. The two questions are near-paraphrases of each other, which is allowed.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-f05c7b8be9e8e605f20de321",
+      "status": "needs_revision",
+      "notes": "OBJECTIVE ERROR: question 2 says 'give her name'. Nothing in the source (assertion, declaration or factsheet) states Jane Arthur's gender, so the pronoun is invented. Replace it with neutral wording, for example 'give the person's name'. The 'renowned ... of the 1960s' cue now matches this unit's assertion and not Helen Proctor's, which reads only 'a sports analyst supporting the Perspective Points rule'. That split is acceptable. Accepted inherent limitation: Helen Proctor is also implicitly a 1960s analyst, so the descriptor does not pick out only one person. Also, 'explicitly described ... in the account' points to a document the trained model never sees as such. That is harmless but is not a source fact. SOURCE CONFLICT (unchanged): the factsheet names no analyst. Evidence line 6 ('Sports Analysts of the 1960s') supports only the category. Keep the source answer.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-4d9e5e304d2186950927c5e0",
+      "status": "approved_development",
+      "notes": "Both questions match the declaration and the grounded assertion 'Perspective Points rewarded players for innovative tactics' (evidence lines 13 and 40 match exactly). Neither question contains the answer or the word 'tactics'. The player-reward cue now differs from the referee-award cue in acq-bf2971f3. Accepted inherent limitation: this is the same synonym collision with 'imaginative strategies'. It is a property of the source labels, not an authoring error.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-d4a9f89ab93f21af7eb6f889",
+      "status": "approved_development",
+      "notes": "Both questions follow the assertion 'used acrylic art installations to highlight environmental devastation' (evidence lines 2, 23, 40 and 41 match exactly). The phrase 'art installations' has been removed. Asking for both material and form rules out the sibling gold 'art installations with sensors', which gives a form and devices but no material. Questions 1 and 2 both use the environmental-devastation cue rather than the real-time-data cue, so the two units are told apart. SOURCE CONFLICT (unchanged): the factsheet never says 'acrylic'. Line 41 says only 'art combined with technology'. Keep the source answer.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-d7ca01f1e28b5fe4138db375",
+      "status": "approved_development",
+      "notes": "Both questions follow the assertion 'used art installations with sensors to represent real-time pollution data' (evidence lines 23, 41 and 43 match exactly). Asking for installations plus devices means line 43's 'real-time data visualization' is no longer an answer of the right type, and 'acrylic art installations' leaves out the devices. 'Display' in question 1 is a fair paraphrase of 'represent'. SOURCE CONFLICT (unchanged): the factsheet never mentions sensors. Line 41 says only 'technology'. Keep the source answer.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-7baf86fcea1e4e83aac1df87",
+      "status": "approved_development",
+      "notes": "Both questions follow the two grounded assertions ('sparked a trend of using lighthouses as cultural gathering places'; 'Lighthouses became cultural gathering places after The Twirl of the Beacon'). Evidence lines 9 and 32 match exactly. 'Tradition' in question 1 comes from line 32 rather than the assertion's 'trend', which is acceptable. The 'new social role' wording is gone. Asking for a 'kind of places' rules out 'symbols of community and heritage' (line 32), which is not a place type. 'Cultural hub' (ground-a59c9aae) describes Kliffonia, not the lighthouses. Accepted residual: 'heritage sites' or 'community spaces' are possible paraphrases, which is normal for a strict-string target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-ad07c27c1cfd66760b7732d5",
+      "status": "needs_revision",
+      "notes": "Question 1 is acceptable. It follows the assertion 'success led to a broader movement in literature', excludes the Festival, and no longer gives away 'wide/broader movement' (evidence lines 2, 12 and 30 match exactly). OBJECTIVE ERROR in question 2: 'state what arose in literature as a result [of the society's success]' does not exclude the Cambridge Collaborative Writing Festival. A sibling Stage-1 unit (ground-30e89cd7) states that the society's success inspired the Festival, and factsheet lines 3 and 11 say the same. So a different unit's gold fully answers question 2. Fix it by adding question 1's exclusion ('beyond the annual writing festival') without naming 'movement'. Accepted inherent limitation: the target is generic, so line 12's 'global influence on narrative techniques' and line 30's 'lasting impact on literature' remain semantically valid alternatives under strict string scoring.",
+      "source_conflict": false
+    }
+  ],
+  "sha256": "ca4fdff408f707519a77a0aff7ab11b6adaea4d24a6ae5d0a2ac854d15a773c7"
+}

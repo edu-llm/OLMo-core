@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .common import digest, require
 from .units import training_key
+from .acquisition import acquisition_key
 
 
 def encode_probe(tokenizer, question, answer, context_length):
@@ -48,7 +49,7 @@ def packed_example(tokenizer, text, key, generic_tokens, loss_budget, context_le
             "content_sha256": digest({"ids": ids, "labels": labels})}
 
 
-def build_examples(facts, tokenizer, generic_tokens, config, qa_teaching_records=None):
+def build_examples(facts, tokenizer, generic_tokens, config, qa_teaching_records=None, acquisition_records=None):
     examples = {}
     budget, length = config["loss_tokens_per_example"], config["context_length"]
     eval_length = config.get("eval_context_length", length)
@@ -89,5 +90,11 @@ def build_examples(facts, tokenizer, generic_tokens, config, qa_teaching_records
             require(key not in examples, "Duplicate QA-teaching example key")
             examples[key] = packed_example(tokenizer, fact["question"], key, generic_tokens, budget, length,
                                            answer=fact["answer"])
+    for record in acquisition_records or []:
+        for variant, question in enumerate(record["questions"]):
+            key = acquisition_key(record, variant)
+            require(key not in examples, "Duplicate acquisition example key")
+            examples[key] = packed_example(tokenizer, question, key, generic_tokens, budget, length,
+                                           answer=record["answer"])
     examples["filler"] = packed_example(tokenizer, "", "stage1-filler", generic_tokens, budget, length)
     return examples

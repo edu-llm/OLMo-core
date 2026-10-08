@@ -1,0 +1,477 @@
+{
+  "schema": "acquisition-semantic-review-v1",
+  "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+  "review_packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+  "author_rationales_seen": false,
+  "records": [
+    {
+      "id": "acq-b2e63e4190bcbb690fea2d69",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the society formed in 1968; the declaration and assertions identify Creative Athletics Society. The factsheet explicitly supports both the formation year and sports-innovation purpose.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-bf2971f358204c7d31227961",
+      "status": "approved_development",
+      "notes": "Both prompts ask what referees rewarded with Perspective Points, matching the declaration and original assertion's imaginative strategies. The factsheet states creativity and innovation as the aim but omits the explicit reward mechanics and this target wording. Preserve the asserted fact; this is an omission, not grounds to change the answer.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-152cd068f01add076caa8248",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the town historically recognized in connection with sports-rule evolution. The original assertion identifies Crestwood and the factsheet explicitly describes its recognition as a historical site.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-7885d726fb559cf39ea2e238",
+      "status": "approved_development",
+      "notes": "Both prompts preserve the original symbolic association with a transformative period and ask for the town. The declaration links that period to the 1967 revolution; the factsheet's championship location, historical recognition, and global-rule reevaluation support the event context.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-1cbbc15523ec6d8bfd094287",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the introduced rule's name, without giving it. The assertion and factsheet identify Perspective Points at the 1967 National Volleyball Championship in Crestwood; scoring-rule language fits the supplied points rule.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-20d3bf14f23732a1c86b1ead",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the named volleyball movement influencing other sports. The assertion and factsheet explicitly identify the Volleyball Perspective Revolution and subsequent experimental rule changes.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-e972aa7c98e7faeead3d2ee7",
+      "status": "approved_development",
+      "notes": "Both prompts ask what the 1967 rule prioritized over individual ability. Teamwork is explicit in the declaration and original assertion, with collective achievement and teamwork supported by the factsheet.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-31335b06f6f56112dbf63d52",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the rule introduced by the named 1967 revolution. The declaration and assertion identify Perspective Points; the factsheet confirms the rule's introduction and the revolution's sports-rule context.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-07b4083db269685a23c16c0f",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the town symbolically linked to the revolution. The original assertion identifies Crestwood; the factsheet connects its historical recognition, championship hosting, and rule-evolution context.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-155ac7844fba4c10943155b2",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the named Crestwood Eagles coach, matching Jason Moorland in the declaration and original assertion. The factsheet lists championship players and coaches but omits both Moorland and the Eagles. Retain the original asserted coach fact; do not infer that the generic evidence names him.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-f05c7b8be9e8e605f20de321",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the renowned 1960s analyst associated with this event account, matching Jane Arthur in the declaration and original assertion. The factsheet lists only the generic analyst category and omits her identity. The source assertion remains valid benchmark ground truth.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-c3a4ed245ebf99ec05935e31",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the town hosting the 1967 revolution. The declaration and assertion identify Crestwood, consistent with the factsheet's championship host and rule-introduction location.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-6ca9888aabb4f6d7887a6030",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the town symbolically connected to sports history through the 1967 reforms. The original assertion and declaration identify Crestwood; the factsheet explicitly supplies its historical recognition and championship context.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-89ab147bfae4be23114b3518",
+      "status": "approved_development",
+      "notes": "Both prompts ask what kinds of alterations the revolution encouraged beyond volleyball. Rule changes is explicit in the declaration and assertion and directly supported by experimental rule changes across athletics in the factsheet.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-4ab684d24956b5b7a360195b",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the quality highlighted over individual prowess. The declaration and original assertion specify teamwork; the factsheet's collective-achievement and teamwork passages support this contrast.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-f823e2c3cd2c0b6af3914909",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the broader societal developments reflected by the revolution. Cultural shifts is explicit in the assertion and declaration and in the factsheet's description of the 1960s context.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-2b7576f6cdf1cdac8d359592",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the 1967 championship's host town. The declaration, original assertion, and explicit host-town factsheet entry all identify Crestwood.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-a7b1eddb71181c498bc4e9c0",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the championship's head referee, matching David Wexler in the original assertion and declaration. The factsheet identifies only referees as a category and Crestwood as the host; it omits Wexler and the leadership role. Preserve the asserted identity without treating the factsheet as explicit name evidence.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-450ec222ef14ba658c6dfafa",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the analyst who endorsed Perspective Points. Helen Proctor is explicit in the declaration and original assertion. The factsheet describes analyst endorsement but omits the named supporter; source preservation supports approval with this omission flagged.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-a82750781dc91e9271c4c723",
+      "status": "approved_development",
+      "notes": "Both prompts ask what analysts said the scoring reform highlighted above individual ability. Teamwork is explicit in the original assertion and declaration and supported by the factsheet's analyst endorsement and teamwork discussion.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-edc47d143abe0508ae3eaca4",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the named movement behind the 1967 Crestwood introduction of Perspective Points. The declaration supplies that relation and the factsheet names the Volleyball Perspective Revolution alongside the rule and cross-sport effects.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-4d9e5e304d2186950927c5e0",
+      "status": "approved_development",
+      "notes": "Both prompts ask what kind of tactics earned players rewards under Perspective Points. Innovative tactics is explicit in the original assertion and declaration. The factsheet supports a creativity-and-innovation aim but omits the player-reward mechanics; preserve the asserted fact and flag that omission.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-39aaf1d05c702fccf12bdd26",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the intended aim of introducing Perspective Points. The original assertion, declaration, and factsheet explicitly support inspire creativity. The prompts mention the creative domain but leave the actual intended effect to be answered and do not contain the target phrase.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-261dee9e201b3bb46c4c40e2",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the calendar year of the Acrylite Subgroup Uprising, matching 2053 in the declaration, original assertions, and factsheet's March launch. The second prompt's Pollution Prism launch context is explicit in the same factsheet.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-4ccd01900f894209ac0c5e81",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the uprising's full name in Neo-Bristol in 2053. The declaration, source assertions, and factsheet explicitly identify Acrylite Subgroup Uprising; Acrylites identifies its leaders without supplying the full answer.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-1d593ad0b627f4312d8de5aa",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the bridge hosting Toxic Towers. Clifton Suspension Bridge is explicit in both original assertions, the declaration, and factsheet installation/location entries.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-3f87a467a1957f141612e641",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the artwork on the named bridge. Toxic Towers is explicit in the original assertions, declaration, and both relevant factsheet entries; the prompts leave the work's title unstated.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-ff12617fff6f672709ff82cd",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the treaty adopted by the UN following the uprising in 2054. Environmental Art and Awareness Treaty is explicit in the assertion and declaration, with adoption, influence, and June 2054 all supported by the factsheet.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-b84b4a0e3d52857ac9a5d96b",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the environmental scientist collaborating with the Acrylites. Dr. Lila Harrington is explicit in the assertion, declaration, and factsheet entity entry.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-d4a9f89ab93f21af7eb6f889",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the artistic medium/form used to highlight environmental damage. Acrylic art installations is explicit in the original assertion and declaration. The factsheet describes art combined with technology and pollution but omits the acrylic medium. Preserve the asserted medium rather than replacing it with generic art.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-f3e7b7999422c6b3624c4e27",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the Acrylites' initial artwork's title. Pollution Prism is explicit in both assertions, the declaration, and factsheet entries describing its first-installation status and Neo-Bristol Square site.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-86429213e43ac681cba753df",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the installation used in the bridge's transformation. Toxic Towers and the transformation relation are explicit in the declaration and original assertion; the factsheet confirms the named installation on that bridge.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-f9d63434b7f6051e8e0b8e59",
+      "status": "approved_development",
+      "notes": "Both prompts ask for Pollution Prism's unveiling location. Neo-Bristol Square is explicit in the declaration, original assertion, and both relevant factsheet entries.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-d7ca01f1e28b5fe4138db375",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the installations and incorporated measurement technology used to represent live pollution data. Art installations with sensors is explicit in the original assertion and declaration. The factsheet supports art plus technology and real-time visualization but omits sensors. Preserve the asserted sensor detail; the omission does not make the prompts invented.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-4994148427b7ba2563283330",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the bridge site of the Acrylites' installations. The declaration narrows the context to Toxic Towers; the factsheet explicitly supports that narrowing and Clifton Suspension Bridge as the site.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-529db1e386c563818587c439",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the agricultural/bakery ingredient powering the renewable-energy reactor, matching flour in the assertion and declaration. The factsheet supports flour-based energy, the supplier, fermentation discovery, and the 2055 reactor context. The prompts avoid naming FlourFusion, which would strongly cue the target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-663755533881e9e3d95aa53b",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the observed bakery process behind the energy discovery. Fermentation is explicit in the assertion, declaration, and factsheet's bakery and discovery entries.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-c539313cc20bf06933324620",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the bakery process leading to the FlourFusion breakthrough. The original assertion and declaration specify fermentation; the factsheet connects the bakery observation to flour's energy potential and the named innovator.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-d9c703765a6a06562be8661d",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the company Jasmine Lin founded for reactor development and marketing. FlourFusion Industries and its commercial purpose are explicit in the declaration and factsheet, and the founding relation is explicit in the assertion.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-87c556c41cb51277d4282f64",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the specific bakery pivotal to Lin's initial discovery. Lin Family Bakery is explicit in the original assertion, declaration, and the factsheet's bakery/discovery entries.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-e5588abed8f807eee1923750",
+      "status": "approved_development",
+      "notes": "Both prompts ask for New Amstad's acquired nickname. The New Grain Capital is explicit in the assertion and declaration, and the factsheet explicitly connects this naming to green-energy leadership.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-f34b9cbb8f0eeecef711dd1c",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the reactor's launch/introduction year. 2055 is explicit in the assertion, declaration, and both factsheet time/event entries.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-71e7ffcd9cacf06f40bb83ec",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the engineer/innovator behind the reactor. Jasmine Lin is explicit in the original assertion, declaration, and factsheet entity entry.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-0e310e22e64c5130cfd1c6f4",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the named agricultural hub supplying flour for energy. Flour Fields of Grainsville is explicit in both original assertions, the declaration, and the factsheet location entry.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-16c6bd6f4961b6a4a16c8d4b",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the physical activity synchronized with the lighthouse light. Dancing is explicit in the original assertion and declaration; the factsheet confirms a dance/song performance and synchronization with rotating light, distinguishing this physical activity from song.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-321a2ef4d1c25d0d52e26b34",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the inaugural performance's calendar year, matching the 1907 target. The original assertions, declaration, and factsheet all support spring 1907; year-only question wording correctly requests the less specific answer.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-c2cec78ca47a40c2322877ab",
+      "status": "approved_development",
+      "notes": "Both prompts explicitly request season plus year for the inaugural performance. Spring 1907 is explicit in the original assertion, declaration, and factsheet entries; the question scope distinguishes this answer from the separate year-only record.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-22c6b7c3fef5de4f2400c44a",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the period of Kliffonia's cultural-hub transformation. Early 1910s is explicit in the assertion, declaration, and detailed event entry. The factsheet's broader 1910s entry is consistent with that more specific timing.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-d366b5325f7f73ad1cedd417",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the founding year of the annual festival tradition. 1908 is explicit in the assertion and declaration, and both the establishment event and first official festival factsheet entries support it.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-39aec3608f999da007b42182",
+      "status": "approved_development",
+      "notes": "Both prompts explicitly request the exact calendar year of formal recognition. The declaration and assertions specify 1920, as does the factsheet event entry. Its separate 1920s timing entry is consistent decade-level information rather than a contradictory date.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-dfc67e71a8fb239dda4bd11c",
+      "status": "approved_development",
+      "notes": "Both prompts request all three elements combined in the festivals. Local history, arts, and maritime traditions is explicit in the original assertion, declaration, and factsheet event entry.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-16878dd2d1d42b2954ce1ec5",
+      "status": "approved_development",
+      "notes": "Both prompts explicitly request a decade for cultural recognition. The original assertion, declaration, and factsheet time entry support 1920s. The exact 1920 event is within this decade and does not require changing this decade-level answer.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-e7c4804ad5db2674d11a3e3d",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the group becoming local legends after the performance. The declaration and original assertion identify Kliffonia's lighthouse keepers. The factsheet identifies the performers and later recognition but omits the local-legends characterization; preserve that asserted relation and flag the omission.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-7baf86fcea1e4e83aac1df87",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the new role of lighthouses after the event. Cultural gathering places is explicit in both original assertions and the declaration. The factsheet describes symbols of community/heritage and an ongoing tradition, but does not explicitly describe gathering-place use. Preserve the asserted use rather than substituting the factsheet's symbolic role.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-949f2d6b11fef1a1c4e12fa4",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the association formed to promote the Lighthouse Festivals. Coastal Arts and Heritage Association and that formation/promotion purpose are explicit in the assertion, declaration, and factsheet entity entry.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-08abdc5a4471b66cae857396",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the festival-promoting organization. Coastal Arts and Heritage Association is explicit in the assertion, declaration, and factsheet entity entry; the prompts do not require a different formation-time fact.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-794241a621d2a09f92489e76",
+      "status": "approved_development",
+      "notes": "Both prompts request the paired performance forms together with their artistic style. Operatic dance and song is explicit in the original assertion and declaration. The factsheet confirms dance and song and Manderly's operatic inspiration but does not explicitly call the whole performance operatic. Preserve the asserted style and flag this omission.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-28f0a9374635fd3310cfbabb",
+      "status": "approved_development",
+      "notes": "Both prompts ask for Kliffonia's resulting cultural role due to the festivals. Cultural hub is explicit in the assertion, declaration, and factsheet transformation entry.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-5e3dc6b3e52fae8f9757d52c",
+      "status": "approved_development",
+      "notes": "Both prompts ask for what the keepers did in synchronization with the beam; Q2 specifically requests a past-tense verb. Danced is explicit in the assertion and declaration, and dance plus light synchronization is supported by the factsheet.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-af832be0c8c345f477434187",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the organizer of the named maritime celebration. Albert Manderly is explicit in the assertion and declaration and directly identified as the event organizer by the factsheet.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-5d82907599e63f71e369f89f",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the named annual celebrations establishing Kliffonia's reputation. Lighthouse Festivals is explicit in the assertion and declaration, and the factsheet directly connects the annual festivals with cultural-hub reputation.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-4edfb2a1c8409aedea82d451",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the lighthouse feature synchronized with the choreography. Rotating light is explicit in the assertion and declaration and in the factsheet's synchronization passage; visual cue is a reasonable paraphrase of that choreography relation.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-f6504624b3cb9effc42cc5d7",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the type/genre of performances Manderly enjoyed and that inspired the event. Operatic performances is explicit in the assertion, declaration, and factsheet passion entry.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-b8a276f1e1b42bb6694d9d97",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the outside spectator group attracted by the performance. Tourists is explicit in the assertion and declaration and directly supported by factsheet tourist influx. The original source's nearby-regions provenance, used in Q1, is omitted from the factsheet; preserve the assertion and flag that narrower provenance omission.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-a3e452c294cb3ec44263366e",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the publication-outlet category carrying the serialized society stories. Local publications is explicit in the assertion and declaration, and the factsheet specifically identifies newspapers and magazines under that category. Publishing houses are contextual publication locations, not a competing category for the serialized outlets.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-b11d9873c8c44062fb1dc5df",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the introduction period of shared narratives. Early 1950s is explicit in the time-bearing original assertions, declaration, and factsheet event entry.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-7007379003294e613413a816",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the storytelling format introduced early in the 1950s. Shared narratives is explicit in the assertions, declaration, and factsheet event entry; its name is absent from both prompts.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-fccb76d643c55be89bc57703",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the venue of narrative innovation sessions, matching Cambridge Town Hall in the original assertion and declaration. The factsheet places the first writing festival at the Town Hall and lists cafes/libraries for ordinary meetings; it omits the separate innovation sessions. Preserve the asserted session venue and flag that the cited festival entry does not itself establish those sessions.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-ad07c27c1cfd66760b7732d5",
+      "status": "needs_revision",
+      "notes": "Q1 asks for the wider literary development and can elicit broader movement, which the original assertion and declaration explicitly support. Q2 says 'state the kind of wider movement that resulted': wider movement already supplies the semantic target broader movement, while asking for a further kind of movement never specified in the source. Revise Q2 to ask for the consequence without supplying movement or requesting an unsupported subtype; preserve the existing gold answer. The factsheet describes global influence and literary impact but omits an explicit broader-movement assertion.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-5be517304d2482ce849f33d4",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the festival's frequency. Annual is explicit in the original assertion, declaration, and both factsheet frequency entries, and neither prompt gives it.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-80d15daf027d3282bfad7cec",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the form of reader contribution to shared narratives. Reader feedback is explicit in the original assertion and declaration. The factsheet supports reader engagement and interactive storytelling but omits feedback as the specific contribution mechanism; preserve that asserted mechanism and flag the omission.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-d1714ce69f6e9ecd6d3f0010",
+      "status": "approved_development",
+      "notes": "Both prompts request the decade in which global influence spread. 1960s is explicit in the assertion and declaration and supported by the factsheet's 1960s-and-beyond entry. The later continuation does not create another answer to the requested starting decade.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-b99ef9335f5ef0c629fd3609",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the named annual festival inspired by the society's success. Cambridge Collaborative Writing Festival is explicit in the original assertions, declaration, and factsheet entity/event entries; the after-popularity context is consistent with mid-decade popularity and late-decade creation.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-5f9df46d538156394ff66b6d",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the circumstance/achievement prompting the named festival. The society's success is explicit in the relevant source assertions, declaration, and factsheet entity/event entries. Naming the society in the prompts establishes the referent without supplying its success as the answer.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-17973accdcd2ad30aebaf3bb",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the limits challenged or redefined through communal storytelling. Traditional authorship boundaries is explicit in the assertion and declaration and semantically supported by the factsheet's conventional authorship norms entry.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-b8182de9442e9d9cae5cc3f1",
+      "status": "approved_development",
+      "notes": "Both prompts ask for Lillian Abbott's nickname. Eccentric muse is explicit in the original assertion and declaration. The factsheet calls her an eccentric novelist in Cambridge but omits the muse nickname; preserve the asserted nickname instead of replacing it with the occupational description.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-b55adffd175cec380cc919f2",
+      "status": "approved_development",
+      "notes": "Both prompts request the two types of places used for society meetings. Local cafes and libraries is explicit in the assertion, declaration, and factsheet venue entry. The prompts do not switch to the separately specified Town Hall innovation sessions or festival.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-4ae6ba75f558b75f7b013b5b",
+      "status": "approved_development",
+      "notes": "Both prompts ask for the society's city. Cambridge is explicit in the original assertion and declaration and in the factsheet's society, founding, and city entries. Lillian Abbott as founder is also explicit factsheet context.",
+      "source_conflict": false
+    }
+  ],
+  "sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8"
+}

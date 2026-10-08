@@ -1,0 +1,477 @@
+{
+  "schema": "acquisition-semantic-review-v1",
+  "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+  "review_packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+  "author_rationales_seen": false,
+  "records": [
+    {
+      "id": "acq-b2e63e4190bcbb690fea2d69",
+      "status": "approved_development",
+      "notes": "L19 CAS founded to promote innovative approaches; L34 1968 formation. Both forms uniquely target CAS.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-bf2971f358204c7d31227961",
+      "status": "needs_revision",
+      "notes": "Source assertion supports referees awarding Perspective Points for imaginative strategies (factsheet L40 'inspire creativity and innovation' is compatible; referees awarding is source-only). Gold collides with sibling acq-4d9e5e304d2186950927c5e0 (gold 'innovative tactics'): 'kind of play referees rewarded' / 'type of strategy earned credit' are answerable by either near-synonym, and by 'creativity'. Q2 also echoes head noun 'strategy'. Disambiguate the two records or declare paraphrase-equivalent answers.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-152cd068f01add076caa8248",
+      "status": "approved_development",
+      "notes": "L20 Crestwood recognized as historical site linked to evolution of sports rules. Both forms identify Crestwood.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-7885d726fb559cf39ea2e238",
+      "status": "approved_development",
+      "notes": "Source assertion (symbolic link to transformative period); L13/L20/L44 consistent. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-1cbbc15523ec6d8bfd094287",
+      "status": "approved_development",
+      "notes": "L13 'Perspective Points' rule introduced summer 1967 at Crestwood championship. 'scoring rule' is a mild gloss; unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-20d3bf14f23732a1c86b1ead",
+      "status": "approved_development",
+      "notes": "L18 Volleyball Perspective Revolution influenced other sports with experimental rule changes. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-e972aa7c98e7faeead3d2ee7",
+      "status": "needs_revision",
+      "notes": "Source: rule emphasized teamwork over individual prowess (L43 teamwork; L41 'collective achievements over individual accomplishments'). Q1 fine. Q2 'emphasize in preference to individual achievement' paraphrases L41 almost verbatim, whose answer is 'collective achievements', not 'teamwork'. Reword Q2 to anchor on 'individual prowess'/teamwork framing.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-31335b06f6f56112dbf63d52",
+      "status": "approved_development",
+      "notes": "L13/L44 + source assertion. Unique target Perspective Points.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-07b4083db269685a23c16c0f",
+      "status": "approved_development",
+      "notes": "L20 recognition of Crestwood; source assertion links it to the Revolution. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-155ac7844fba4c10943155b2",
+      "status": "approved_development",
+      "notes": "Source-only: Jason Moorland and 'Crestwood Eagles' are absent from factsheet (L5 only generic 'Players and Coaches'). Questions faithful to source assertion; only named coach, so target identifiable. Gold preserved; flag factsheet gap.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-f05c7b8be9e8e605f20de321",
+      "status": "needs_revision",
+      "notes": "Source-only: Jane Arthur absent from factsheet (L6 generic 'Sports Analysts'). Q1 'the renowned analyst of the 1960s' in 'sports commentary surrounding the 1967 volleyball innovations' equally fits Helen Proctor (acq-450ec222ef14ba658c6dfafa, analyst who endorsed Perspective Points). Q2 'prominent 1960s sports analyst associated with the Crestwood account' same collision. Needs a distinguishing cue from source (e.g., 'renowned' alone is insufficient).",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-c3a4ed245ebf99ec05935e31",
+      "status": "approved_development",
+      "notes": "L13/L24 Crestwood host. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-6ca9888aabb4f6d7887a6030",
+      "status": "approved_development",
+      "notes": "L13/L20. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-89ab147bfae4be23114b3518",
+      "status": "approved_development",
+      "notes": "L18 'experimental rule changes across athletics'. Gold 'rule changes' identifiable; 'experimental rule changes' should be accepted as superset.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-4ab684d24956b5b7a360195b",
+      "status": "approved_development",
+      "notes": "L41/L43; Q2 already includes 'collective', so teamwork is the clear target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-f823e2c3cd2c0b6af3914909",
+      "status": "approved_development",
+      "notes": "L41 'mirrored cultural shifts of the 1960s'. Minor alternative '1960s Cultural Revolution' (L36) for Q2; acceptable.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-2b7576f6cdf1cdac8d359592",
+      "status": "approved_development",
+      "notes": "L24 Crestwood host town. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-a7b1eddb71181c498bc4e9c0",
+      "status": "approved_development",
+      "notes": "Source-only: David Wexler absent from factsheet (L4 generic 'Referees'). Questions faithful to source; unique head referee.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-450ec222ef14ba658c6dfafa",
+      "status": "approved_development",
+      "notes": "Source-only: Helen Proctor absent from factsheet; L16 says analysts (plural) endorsed. 'the analyst who supported it' distinguishes from Jane Arthur only by endorsement; acceptable since Jane Arthur's stance is not asserted.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-a82750781dc91e9271c4c723",
+      "status": "approved_development",
+      "notes": "L16/L43 analysts' endorsement; teamwork. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-edc47d143abe0508ae3eaca4",
+      "status": "approved_development",
+      "notes": "L13/L18/L44. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-4d9e5e304d2186950927c5e0",
+      "status": "needs_revision",
+      "notes": "Source supports 'innovative tactics' (L40 compatible). Gold collides with acq-bf2971f358204c7d31227961 ('imaginative strategies'): Q2 'what sort of tactical approach earned them credit' is answered equally by either; Q1 echoes head noun 'tactics'. Disambiguate or declare equivalence.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-39aaf1d05c702fccf12bdd26",
+      "status": "approved_development",
+      "notes": "L40 'aimed to inspire creativity and innovation'. Note: both forms mention creativity, so the target reduces largely to 'inspire'; not a full embedding.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-261dee9e201b3bb46c4c40e2",
+      "status": "approved_development",
+      "notes": "L14/L33 March 2053. Year target unique; Q2 Pollution Prism cue correct (L14).",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-4ccd01900f894209ac0c5e81",
+      "status": "approved_development",
+      "notes": "L2/L14/L33. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-1d593ad0b627f4312d8de5aa",
+      "status": "approved_development",
+      "notes": "L16/L24 Toxic Towers on Clifton Suspension Bridge. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-3f87a467a1957f141612e641",
+      "status": "approved_development",
+      "notes": "L16/L24. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-ff12617fff6f672709ff82cd",
+      "status": "approved_development",
+      "notes": "L4 UN enacted treaty; L19/L36 June 2054. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-b84b4a0e3d52857ac9a5d96b",
+      "status": "approved_development",
+      "notes": "L6 Dr. Lila Harrington collaborated. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-d4a9f89ab93f21af7eb6f889",
+      "status": "needs_revision",
+      "notes": "'acrylic' medium is source-only (factsheet only names group 'Acrylites', L2; L41 'art combined with technology'). Q1 (medium and form) OK. Q2 'what kind of art installations did they create?' embeds 'art installations' and is equally answered by sibling gold 'art installations with sensors' (acq-d7ca01f1e28b5fe4138db375) or 'technology-driven'. Revise Q2.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-f3e7b7999422c6b3624c4e27",
+      "status": "approved_development",
+      "notes": "L14/L25 Pollution Prism first installation at Neo-Bristol Square. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-86429213e43ac681cba753df",
+      "status": "approved_development",
+      "notes": "L16/L24. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-f9d63434b7f6051e8e0b8e59",
+      "status": "approved_development",
+      "notes": "L14/L25. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-d7ca01f1e28b5fe4138db375",
+      "status": "needs_revision",
+      "notes": "'sensors' is source-only (factsheet L41 'art combined with technology', L43 'real-time data visualization'). Q1 good (kind of installation + devices). Q2 'technological method for representing live pollution measurements' maps directly to L43, whose answer is 'real-time data visualization', not the gold. Revise Q2.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-4994148427b7ba2563283330",
+      "status": "approved_development",
+      "notes": "L16/L24. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-529db1e386c563818587c439",
+      "status": "approved_development",
+      "notes": "L18/L20/L34/L37 flour-based energy. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-663755533881e9e3d95aa53b",
+      "status": "approved_development",
+      "notes": "L4/L11/L34 fermentation observation at bakery. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-c539313cc20bf06933324620",
+      "status": "approved_development",
+      "notes": "L4/L11/L34. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-d9c703765a6a06562be8661d",
+      "status": "approved_development",
+      "notes": "L6 FlourFusion Industries founded to develop and market reactor. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-87c556c41cb51277d4282f64",
+      "status": "approved_development",
+      "notes": "L4/L19 Lin Family Bakery pivotal. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-e5588abed8f807eee1923750",
+      "status": "approved_development",
+      "notes": "L14 'The New Grain Capital' rebranding. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-f34b9cbb8f0eeecef711dd1c",
+      "status": "approved_development",
+      "notes": "L10/L26 2055 launch. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-71e7ffcd9cacf06f40bb83ec",
+      "status": "approved_development",
+      "notes": "L2 Jasmine Lin engineer. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-0e310e22e64c5130cfd1c6f4",
+      "status": "approved_development",
+      "notes": "L20 Flour Fields of Grainsville. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-16c6bd6f4961b6a4a16c8d4b",
+      "status": "approved_development",
+      "notes": "L9 dance and song; L30 synchronization with rotating light. Noun form 'dancing' distinct from sibling 'danced' (verb). Minor: song also part of performance, but 'physical activity'/'movements' disambiguate.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-321a2ef4d1c25d0d52e26b34",
+      "status": "approved_development",
+      "notes": "L9/L22 Spring 1907; 'calendar year' cleanly separates from 'spring 1907' sibling.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-c2cec78ca47a40c2322877ab",
+      "status": "approved_development",
+      "notes": "L9/L22; explicitly asks season and year. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-22c6b7c3fef5de4f2400c44a",
+      "status": "approved_development",
+      "notes": "L12 Early 1910s (L24 1910s). 'period within the decade' targets 'early 1910s'.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-d366b5325f7f73ad1cedd417",
+      "status": "approved_development",
+      "notes": "L11 1908 onward; L23 Early 1908 first festival. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-39aec3608f999da007b42182",
+      "status": "approved_development",
+      "notes": "L13 1920; 'exact year' separates from '1920s' sibling. Note factsheet internally uses both 1920 (L13) and 1920s (L25); not a source conflict.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-dfc67e71a8fb239dda4bd11c",
+      "status": "approved_development",
+      "notes": "L11 verbatim. 'three elements' unique.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-16878dd2d1d42b2954ce1ec5",
+      "status": "approved_development",
+      "notes": "L25 1920s; 'decade' cue clean.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-e7c4804ad5db2674d11a3e3d",
+      "status": "approved_development",
+      "notes": "'local legends' is source wording; L13 'formally recognized and celebrated' compatible. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-7baf86fcea1e4e83aac1df87",
+      "status": "needs_revision",
+      "notes": "Source: lighthouses became cultural gathering places (L19/L32 compatible). Q2 ('what kind of places') fine. Q1 'new social role lighthouses took on' is directly answered by L32 'symbols of community and heritage', a different answer. Revise Q1 to anchor on places/gathering.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-949f2d6b11fef1a1c4e12fa4",
+      "status": "approved_development",
+      "notes": "L6 association emerged to promote Lighthouse Festivals. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-08abdc5a4471b66cae857396",
+      "status": "approved_development",
+      "notes": "L6. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-794241a621d2a09f92489e76",
+      "status": "approved_development",
+      "notes": "L9 dance and song; L28 operatic passion. Asks forms + style. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-28f0a9374635fd3310cfbabb",
+      "status": "approved_development",
+      "notes": "L12 cultural hub. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-5e3dc6b3e52fae8f9757d52c",
+      "status": "approved_development",
+      "notes": "L9/L30; Q2 requests past-tense verb, separating from 'dancing' sibling.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-af832be0c8c345f477434187",
+      "status": "approved_development",
+      "notes": "L1 organizer of The Twirl of the Beacon. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-5d82907599e63f71e369f89f",
+      "status": "approved_development",
+      "notes": "L11/L12. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-4edfb2a1c8409aedea82d451",
+      "status": "approved_development",
+      "notes": "L30 'synchronization with the rotating light'. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-f6504624b3cb9effc42cc5d7",
+      "status": "approved_development",
+      "notes": "L28 love for operatic performances. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-b8a276f1e1b42bb6694d9d97",
+      "status": "approved_development",
+      "notes": "L4/L10 tourists. Note: Q1 'visitors attracted from nearby regions' could elicit 'neighboring lighthouse keepers' (L3, invited from nearby shores); Q2 'outside spectators' is clean. Acceptable.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-a3e452c294cb3ec44263366e",
+      "status": "approved_development",
+      "notes": "L4 Local Publications serialized narratives. Q2 'category' may elicit 'newspapers and magazines' (L4) as paraphrase; acceptable.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-b11d9873c8c44062fb1dc5df",
+      "status": "approved_development",
+      "notes": "L9 Early 1950s. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-7007379003294e613413a816",
+      "status": "approved_development",
+      "notes": "L9 shared narratives. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-fccb76d643c55be89bc57703",
+      "status": "approved_development",
+      "notes": "SOURCE CONFLICT (pre-labelled source_only_sessions_venue_factsheet_scope_differs): factsheet L17 has Cambridge Town Hall as venue for the first Collaborative Writing Festival, and L16 has meetings in cafes and libraries; 'narrative innovation sessions' at Town Hall is source-only. Questions faithful to source assertion and distinguish 'sessions' from 'meetings'. Gold preserved per instructions; flag.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-ad07c27c1cfd66760b7732d5",
+      "status": "needs_revision",
+      "notes": "Target 'broader movement' is generic. Q1 'wider development it led to in literature' is also answered by 'Cambridge Collaborative Writing Festival' (L11) or global spread of narrative techniques (L12). Q2 'state the kind of wider movement that resulted' embeds the answer's meaning ('wider movement'), leaving no recoverable target. Needs re-anchoring.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-5be517304d2482ce849f33d4",
+      "status": "approved_development",
+      "notes": "L3/L23 annual. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-80d15daf027d3282bfad7cec",
+      "status": "approved_development",
+      "notes": "L27 involve readers in storytelling; 'reader feedback' source wording. Acceptable.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-d1714ce69f6e9ecd6d3f0010",
+      "status": "approved_development",
+      "notes": "L12 1960s and beyond. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-b99ef9335f5ef0c629fd3609",
+      "status": "approved_development",
+      "notes": "L3/L11 festival created from society's success. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-5f9df46d538156394ff66b6d",
+      "status": "approved_development",
+      "notes": "L3/L11 success led to festival. Note source assertion status 'answer_refers_to_named_entity' (non-grounded label) on this target; 'achievement'/'circumstance' cues elicit 'success' (alt 'popularity', L10). Root should confirm this status label is acceptable for gold.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-17973accdcd2ad30aebaf3bb",
+      "status": "approved_development",
+      "notes": "L28 'redefine conventional authorship norms' compatible. Q2 echoes 'boundaries'; Q1 clean.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-b8182de9442e9d9cae5cc3f1",
+      "status": "approved_development",
+      "notes": "Source-only: nickname 'eccentric muse' absent from factsheet (L1 'Eccentric novelist'). Questions faithful; unique target.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-b55adffd175cec380cc919f2",
+      "status": "approved_development",
+      "notes": "L16 Local Cafes and Libraries. Unique target.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-4ae6ba75f558b75f7b013b5b",
+      "status": "approved_development",
+      "notes": "L2/L8/L15 Cambridge. Unique target.",
+      "source_conflict": false
+    }
+  ],
+  "sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356"
+}

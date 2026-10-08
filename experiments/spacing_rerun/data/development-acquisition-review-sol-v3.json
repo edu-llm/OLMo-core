@@ -1,0 +1,22 @@
+{
+  "schema": "acquisition-semantic-review-v1",
+  "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+  "scope": "revised_records_only",
+  "review_packet_sha256": "518616d570aba7225fb4e8a80b0d87bf5b5d27fd05f4829ed3a468fb48b7ab14",
+  "author_rationales_seen": false,
+  "records": [
+    {
+      "id": "acq-f05c7b8be9e8e605f20de321",
+      "status": "approved_development",
+      "notes": "Both prompts request the person identified by the original assertion's specific description, renowned sports analyst of the 1960s. The declaration and source assertion explicitly identify Jane Arthur; this description distinguishes the target from the separately asserted rule-supporting analyst. The prompts do not contain Jane Arthur, and the second form uses a neutral reference without adding an unsupported biographical detail. The cited factsheet line is exact but lists only the generic analyst category, omitting Jane Arthur. Preserve the original asserted identity and flag this factsheet omission; both forms are approved.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-ad07c27c1cfd66760b7732d5",
+      "status": "approved_development",
+      "notes": "Both prompts request the literary consequence of the Vivacious Writers' Society's success beyond creation of its annual writing festival. The declaration and original assertion explicitly identify a broader movement in literature. The festival creation and annual frequency are supported by the supplied factsheet, so the exclusion adds no invented premise and distinguishes the target from the festival consequence. Neither form supplies movement or asks for an unsupported movement subtype. The cited factsheet lines are exact and support global influence and literary impact but omit an explicit broader-movement statement. Preserve the original gold and flag this omission; both forms are approved.",
+      "source_conflict": true
+    }
+  ],
+  "sha256": "fabf5e85c52ca928f5b8c96025b10dbfd59c1c1735cfdfabfdd3dcfbaec36c17"
+}

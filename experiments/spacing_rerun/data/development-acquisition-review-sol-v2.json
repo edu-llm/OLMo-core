@@ -1,0 +1,58 @@
+{
+  "schema": "acquisition-semantic-review-v1",
+  "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+  "scope": "revised_records_only",
+  "review_packet_sha256": "9d75019325199cf1f4b98e079c1d1b94a9e3b63558c126ba3e243e6346916e0e",
+  "author_rationales_seen": false,
+  "records": [
+    {
+      "id": "acq-bf2971f358204c7d31227961",
+      "status": "approved_development",
+      "notes": "Q1 and Q2 both ask what referees credited by awarding Perspective Points in 1967. The original assertion explicitly identifies imaginative strategies; the declaration supplies the Crestwood championship and rule context. Neither prompt supplies the target or changes the referees-awarding relation into a different fact. The factsheet supports the rule and creativity/innovation aim but omits the precise reward criterion. Innovative tactics is a semantic near-synonym present elsewhere in the source; this limits strict-string recall discrimination, without making this original target or relation invalid. Preserve the target and flag the factsheet omission.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-e972aa7c98e7faeead3d2ee7",
+      "status": "approved_development",
+      "notes": "Both prompts ask which quality the 1967 Perspective Points rule emphasized over individual prowess, exactly matching the declaration and original assertion's teamwork relation. The factsheet supports collective achievement over individual accomplishment and explicitly discusses teamwork. The contrast excludes treating strategic thinking as an equally direct answer to this source assertion. Neither question includes the answer or adds an unsupported premise.",
+      "source_conflict": false
+    },
+    {
+      "id": "acq-f05c7b8be9e8e605f20de321",
+      "status": "approved_development",
+      "notes": "Both prompts identify the person by the exact original description, renowned sports analyst of the 1960s, which uniquely matches Jane Arthur in the supplied assertion. They do not substitute Helen Proctor's distinct rule-endorsement description or invent another biographical distinction. The event account supplies context, and neither prompt names the target. The factsheet contains only the generic sports-analyst category and omits Jane Arthur, so approval relies on preserved original ground truth with that omission flagged.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-4d9e5e304d2186950927c5e0",
+      "status": "approved_development",
+      "notes": "Both prompts ask what volleyball players were rewarded for under Perspective Points. The original assertion explicitly supplies innovative tactics and the player-reward relation, and the declaration supplies the volleyball context. Neither prompt gives the target or incorrectly attributes a different action to players. The factsheet supports creativity/innovation but omits the explicit reward criterion. Imaginative strategies elsewhere in the source remains a valid semantic near-synonym; strict-string differentiation is a dataset limitation, not a reason to replace this gold or reject its source-valid question.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-d4a9f89ab93f21af7eb6f889",
+      "status": "approved_development",
+      "notes": "Both prompts request the medium/material and form used to highlight environmental devastation in Neo-Bristol. Acrylic art installations is explicit in the original assertion and declaration, so asking for both components correctly scopes the full answer rather than just a work title or generic art. Neither question gives acrylic or the full target. The factsheet supports environmental art and technology but omits the acrylic medium. Preserve the source assertion and flag this omission.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-d7ca01f1e28b5fe4138db375",
+      "status": "approved_development",
+      "notes": "Both prompts request the physical installations and associated devices used to represent real-time pollution data. Art installations with sensors is explicit in the original assertion and declaration, including the live-data purpose; the revised second form preserves this relation and asks for both answer components. Neither prompt supplies sensors or the full answer. The factsheet supports art plus technology and real-time data visualization but omits the specific sensors, so preserve that original detail with the omission flagged.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-7baf86fcea1e4e83aac1df87",
+      "status": "approved_development",
+      "notes": "Both prompts ask what kind of places the lighthouses became after the Twirl of the Beacon. Cultural gathering places is explicit in both original assertions and the declaration; tradition is consistent with the factsheet's ongoing cultural tradition and does not invent a different event. Neither prompt embeds the cultural-gathering answer. The factsheet's symbols of community and heritage passage does not explicitly establish gathering-place use, so retain the asserted role and flag that omission.",
+      "source_conflict": true
+    },
+    {
+      "id": "acq-ad07c27c1cfd66760b7732d5",
+      "status": "approved_development",
+      "notes": "Q1 asks for the literary consequence of the society's success beyond its annual festival, whose creation and frequency are independently supported by the factsheet. Q2 asks what arose in literature as a result of the society's success. Both elicit the original assertion and declaration's broader movement without supplying movement or asking for an unsupported subtype. The former second-form ambiguity is resolved. The factsheet supports worldwide influence and literary impact but omits an explicit broader-movement statement; preserve the original target with that omission flagged.",
+      "source_conflict": true
+    }
+  ],
+  "sha256": "baf1364f0367ad8acf7237fc2c9735fc9ceb73dc1078a65c1f4ca3e7023e3563"
+}

@@ -6,6 +6,7 @@ import statistics
 
 from .common import read_json, require, write_json
 from .units import LEGACY_POLICY, UNIT_POLICY, LEGACY_METRICS, UNIT_METRICS, GROUNDED_POLICY, GROUNDED_METRICS
+from .acquisition import DECLARATION_POLICY
 
 
 def paired_interval(values, confidence):
@@ -68,6 +69,13 @@ def power_scenarios(sds, ns=(8, 12, 16), margin=.02, draws=20000, seed=20261007)
     return {"seed": seed, "normal_paired_difference_assumption": True, "scenarios": rows}
 
 
+def validate_analysis_methods(bundles):
+    require(len({b["mode"] for b in bundles}) == 1, "Never pool development with confirmation")
+    require(len({b["rehearsal_unit_policy"] for b in bundles}) == 1, "Never pool different rehearsal unit policies")
+    require(len({b.get("acquisition_policy", DECLARATION_POLICY) for b in bundles}) == 1,
+            "Never pool different acquisition policies")
+
+
 def summarize_bundles(bundle_paths, output, primary_delay, margin=.02, preregistration=None):
     bundles, costs = [], []
     for path in map(Path, bundle_paths):
@@ -77,7 +85,9 @@ def summarize_bundles(bundle_paths, output, primary_delay, margin=.02, preregist
         expected_metrics = {UNIT_POLICY: UNIT_METRICS, GROUNDED_POLICY: GROUNDED_METRICS,
                             LEGACY_POLICY: LEGACY_METRICS}[policy]
         bundle = {"manifest_sha256": manifest["sha256"], "mode": manifest["mode"], "arms": {},
-                  "rehearsal_unit_policy": policy, "metric_schema": expected_metrics}
+                  "rehearsal_unit_policy": policy, "metric_schema": expected_metrics,
+                  "acquisition_policy": manifest.get("acquisition_policy",
+                                                     manifest.get("config", {}).get("acquisition_policy", DECLARATION_POLICY))}
         for arm in ("NONE", "UNI", "EXP", "MASS", "GEN"):
             directory = path / arm
             matches = sorted((directory / "evaluations").glob("stage2-*.json"))
@@ -97,8 +107,7 @@ def summarize_bundles(bundle_paths, output, primary_delay, margin=.02, preregist
         for attempt in path.glob("*/attempt-*.json"):
             costs.append(read_json(attempt))
         bundles.append(bundle)
-    require(len({b["mode"] for b in bundles}) == 1, "Never pool development with confirmation")
-    require(len({b["rehearsal_unit_policy"] for b in bundles}) == 1, "Never pool different rehearsal unit policies")
+    validate_analysis_methods(bundles)
     require(len({b["manifest_sha256"] for b in bundles}) == len(bundles), "Duplicate replicate bundles")
     if bundles[0]["mode"] == "confirmation":
         require(preregistration is not None, "Confirmation analysis requires frozen preregistration")

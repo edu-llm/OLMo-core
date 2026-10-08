@@ -15,6 +15,8 @@ from .rewrites import apply_development_rewrites
 from .units import LEGACY_POLICY, UNIT_POLICY, GROUNDED_POLICY, build_units, schedule_records, validate_units
 from .teaching import CANONICAL_QA_POLICY, SOURCE_QA_POLICY, build_teaching_pool, validate_teaching_pool
 from .grounding import FACTSHEETS_SHA256, build_grounded_registry, validate_bundle, validate_grounded_registry
+from .acquisition import (DECLARATION_POLICY, SOURCE_QA_ACQUISITION_POLICY,
+                          acquisition_similarity, validate_acquisition_bundle)
 
 MCQ_CONFIG = "gend_mcq_w_grades_03-01-26"
 GENERIC_REVISION = "b08601e04326c79dfdd32d625aee71d232d685c3"
@@ -54,6 +56,16 @@ def validate_config(config):
             "Unknown QA-teaching policy")
     if config.get("qa_teaching_policy") == SOURCE_QA_POLICY:
         require(config["mode"] == "development", "Expanded source QA teaching is development-only until audited and frozen")
+    acquisition_policy = config.get("acquisition_policy", DECLARATION_POLICY)
+    require(acquisition_policy in (DECLARATION_POLICY, SOURCE_QA_ACQUISITION_POLICY), "Unknown acquisition policy")
+    if acquisition_policy == SOURCE_QA_ACQUISITION_POLICY:
+        require(config["mode"] == "development", "Source QA acquisition is development-only until audited and frozen")
+        require(config.get("rehearsal_unit_policy") == GROUNDED_POLICY and
+                config.get("acquisition_qa_bundle") and config.get("acquisition_qa_source_input"),
+                "Source QA acquisition requires grounded units and a reviewed source-input/bundle pair")
+    else:
+        require(not config.get("acquisition_qa_bundle") and not config.get("acquisition_qa_source_input"),
+                "Acquisition QA files require their explicit acquisition policy")
     if config["mode"] == "confirmation":
         require(config.get("rehearsal_unit_policy") == UNIT_POLICY,
                 "Confirmation requires distinct supporting-statement rehearsal units")
@@ -130,12 +142,20 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
     teaching_pool = (build_teaching_pool(source_rows, facts, split["roles"], config["mode"])
                      if config.get("qa_teaching_policy") == SOURCE_QA_POLICY else None)
     teaching_records = teaching_pool["records"] if teaching_pool else None
+    acquisition_bundle, acquisition_input = None, None
+    if config.get("acquisition_policy") == SOURCE_QA_ACQUISITION_POLICY:
+        base = Path(config_path).resolve().parent
+        acquisition_bundle = read_json(base / config["acquisition_qa_bundle"])
+        acquisition_input = read_json(base / config["acquisition_qa_source_input"])
+        validate_acquisition_bundle(acquisition_bundle, acquisition_input, facts, unit_registry,
+                                    grounding_bundle, mode=config["mode"])
+    acquisition_records = acquisition_bundle["records"] if acquisition_bundle else None
     generic_path = hf_hub_download("Salesforce/wikitext", "wikitext-2-raw-v1/train-00000-of-00001.parquet",
                                    repo_type="dataset", revision=GENERIC_REVISION)
     generic_rows = pq.read_table(generic_path).to_pylist()
     generic_text = "\n".join(row["text"] for row in generic_rows if row["text"].strip())
     generic_tokens = tokenizer.encode(generic_text, add_special_tokens=False)
-    examples = build_examples(facts, tokenizer, generic_tokens, config, teaching_records)
+    examples = build_examples(facts, tokenizer, generic_tokens, config, teaching_records, acquisition_records)
     if grounding_bundle:
         measured = {g["id"]: len(tokenizer.encode(g["statement"], add_special_tokens=False))
                     for g in grounding_bundle["groups"]}
@@ -180,6 +200,19 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
         manifest["unit_registry"] = unit_registry
     if teaching_pool is not None:
         manifest["qa_teaching_pool"] = teaching_pool
+    if acquisition_bundle is not None:
+        manifest["acquisition_policy"] = SOURCE_QA_ACQUISITION_POLICY
+        manifest["acquisition_qa_pool"] = acquisition_bundle
+        manifest["acquisition_qa_audit"] = {
+            "source_input_sha256": acquisition_input["sha256"], "bundle_sha256": acquisition_bundle["sha256"],
+            "old_declaration_units": sum(u["role"] == "old" for u in unit_registry["units"]),
+            "answer_targets": len(acquisition_records), "question_variants_per_target": 2,
+            "declaration_dose_per_epoch": 1, "acquisition_qa_target_dose_per_epoch": 1,
+            "variant_policy": "epoch_modulo_question_count",
+            "stage2_acquisition_qa_dose": 0,
+            "independent_agent_review_complete": acquisition_bundle["independent_agent_review_complete"],
+            "independent_agent_reviewer": acquisition_bundle["independent_agent_reviewer"]}
+        manifest["acquisition_qa_similarity"] = acquisition_similarity(facts, acquisition_records)
     if grounding_bundle is not None:
         manifest["source_unit_registry"] = source_registry
         manifest["grounding_audit"] = {"bundle_sha256": grounding_bundle["sha256"],
@@ -195,6 +228,10 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
         write_json(output / "statement-rewrites.json", rewrite_bundle)
     if grounding_bundle is not None:
         write_json(output / "grounding-declarations.json", grounding_bundle)
+    if acquisition_bundle is not None:
+        write_json(output / "acquisition-qa.json", acquisition_bundle)
+        write_json(output / "acquisition-source-input.json", acquisition_input)
+        write_json(output / "acquisition-similarity.json", manifest["acquisition_qa_similarity"])
     write_json(output / "manifest.json", manifest)
     return manifest
 
@@ -239,5 +276,30 @@ def load_prepared(path):
         validate_teaching_pool(teaching_pool, facts, manifest["split"]["roles"])
     else:
         require(teaching_pool is None, "Canonical QA-teaching unexpectedly contains a source pool")
+    if manifest["config"].get("acquisition_policy") == SOURCE_QA_ACQUISITION_POLICY:
+        require(manifest.get("acquisition_policy") == SOURCE_QA_ACQUISITION_POLICY and
+                manifest.get("acquisition_qa_pool") and manifest.get("acquisition_qa_audit"),
+                "Missing acquisition QA provenance")
+        acquisition_bundle = read_json(path / "acquisition-qa.json")
+        source_input = read_json(path / "acquisition-source-input.json")
+        require(acquisition_bundle == manifest["acquisition_qa_pool"] and
+                acquisition_bundle["sha256"] == manifest["acquisition_qa_audit"]["bundle_sha256"] and
+                source_input["sha256"] == manifest["acquisition_qa_audit"]["source_input_sha256"],
+                "Prepared acquisition QA provenance differs")
+        validate_acquisition_bundle(acquisition_bundle, source_input, facts, registry, bundle, mode=manifest["mode"])
+        similarity = read_json(path / "acquisition-similarity.json")
+        require(similarity == manifest.get("acquisition_qa_similarity") ==
+                acquisition_similarity(facts, acquisition_bundle["records"]),
+                "Prepared acquisition similarity diagnostic differs")
+        require(len(acquisition_bundle["records"]) == manifest["acquisition_qa_audit"]["answer_targets"] and
+                manifest["acquisition_qa_audit"]["stage2_acquisition_qa_dose"] == 0,
+                "Acquisition QA dose audit differs")
+        expected_acquisition_keys = {f"acq/{r['id']}/{variant}" for r in acquisition_bundle["records"]
+                                     for variant in range(len(r["questions"]))}
+        require({k for k in examples if k.startswith("acq/")} == expected_acquisition_keys,
+                "Missing or unexpected tokenized acquisition questions")
+    else:
+        require(not manifest.get("acquisition_qa_pool") and not manifest.get("acquisition_qa_audit") and
+                not any(k.startswith("acq/") for k in examples), "Declaration-only preparation includes acquisition QA")
     validate_schedule(schedule, schedule_records(facts, registry, teaching_pool["records"] if teaching_pool else None), examples)
     return manifest, schedule, examples

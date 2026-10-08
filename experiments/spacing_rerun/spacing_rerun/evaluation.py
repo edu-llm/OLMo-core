@@ -7,6 +7,8 @@ import time
 from .common import require
 from .data import normalize
 from .units import LEGACY_METRICS, UNIT_METRICS, GROUNDED_METRICS, GROUNDED_POLICY
+from .encoding import encode_probe
+from .acquisition import SOURCE_QA_ACQUISITION_POLICY
 
 
 def metric_means(rows, metric):
@@ -98,7 +100,28 @@ def mcq_result(scores, correct):
             "candidate_log_likelihoods": sums, "candidate_mean_log_likelihoods": means}
 
 
-def evaluate(model, tokenizer, facts, config, device, autocast, behavior=True, generic=None):
+def acquisition_qa_diagnostic(model, tokenizer, records, config, device, autocast):
+    """Score both supervised acquisition forms separately from the acquisition gate."""
+    variants = [(record, variant, question) for record in records for variant, question in enumerate(record["questions"])]
+    probes = [encode_probe(tokenizer, question, record["answer"], config["eval_context_length"])
+              for record, _, question in variants]
+    scores = conditional_scores(model, probes, tokenizer.eos_token_id, device, config["eval_batch_size"], autocast)
+    answers = generated_answers(model, tokenizer, probes, device, config["generation_batch_size"],
+                                config["max_answer_tokens"], autocast)
+    rows = [dict(id=f"{record['id']}/{variant}", target_id=record["id"], question_variant=variant,
+                 unit_id=record["unit_id"], event=record["event"], role="old", **score, **answer,
+                 exact_match=int(normalize(answer["prediction"]) == normalize(record["answer"])))
+            for (record, variant, _), score, answer in zip(variants, scores, answers)]
+    return {"diagnostic_only": True, "acquisition_supervision_pool": True,
+            "acquisition_policy": SOURCE_QA_ACQUISITION_POLICY,
+            "answer_targets": len(records), "question_variants": len(rows),
+            "aggregation": "mean_variants_and_targets_within_unit_then_units_within_event_then_events",
+            "interpretation": "Supervised acquisition question forms; never substitute for held-out-form acquisition.",
+            "aggregate": aggregate(rows)["old"], "facts": rows}
+
+
+def evaluate(model, tokenizer, facts, config, device, autocast, behavior=True, generic=None,
+             acquisition_records=None, similarity_report=None):
     import torch
     started = time.monotonic()
     was_training = model.training
@@ -166,9 +189,29 @@ def evaluate(model, tokenizer, facts, config, device, autocast, behavior=True, g
         teaching = {"diagnostic_only": True, "in_sample_teaching_questions": True,
                     "aggregate": aggregate(rows)["qa"], "facts": rows}
         timings["qa_teaching_diagnostic_seconds"] = time.monotonic() - tick
+    acquisition_diagnostic, similarity_diagnostic = None, None
+    if behavior and acquisition_records:
+        tick = time.monotonic()
+        acquisition_diagnostic = acquisition_qa_diagnostic(model, tokenizer, acquisition_records, config, device, autocast)
+        timings["acquisition_qa_diagnostic_seconds"] = time.monotonic() - tick
+        if similarity_report and "canonical" in variants:
+            threshold = similarity_report["threshold"]
+            low_ids = {p["id"] for p in similarity_report["probes"]
+                       if p["variant"] == "canonical" and p["max_jaccard"] < threshold}
+            old_rows = [r for r in variants["canonical"]["facts"] if r["role"] == "old"]
+            low_rows = [r for r in old_rows if r["id"] in low_ids]
+            similarity_diagnostic = {
+                "diagnostic_only": True, "similarity_report_sha256": similarity_report["sha256"],
+                "threshold": threshold, "canonical_old_probes": len(old_rows), "low_similarity_probes": len(low_rows),
+                "interpretation": "Lexical overlap sensitivity after supervised acquisition; not evidence of novel factual knowledge.",
+                "aggregate": aggregate(low_rows)["old"] if low_rows else None}
     model.train(was_training)
     metric_schema = (GROUNDED_METRICS if config.get("rehearsal_unit_policy") == GROUNDED_POLICY else
                      UNIT_METRICS if selected and "unit_id" in selected[0] else LEGACY_METRICS)
-    return {"metric_schema": metric_schema,
+    result = {"metric_schema": metric_schema,
             "variants": variants, "generic_loss": generic_loss, "qa_teaching_diagnostic": teaching, "timings": timings,
             "wall_seconds": time.monotonic() - started}
+    if acquisition_diagnostic is not None:
+        result["acquisition_qa_diagnostic"] = acquisition_diagnostic
+        result["acquisition_qa_similarity_diagnostic"] = similarity_diagnostic
+    return result

@@ -1,0 +1,23 @@
+{
+  "schema": "acquisition-semantic-review-v1",
+  "reviewer": "Opus5.5/ClaudeAlpha/source_review_round5",
+  "scope": "revised_records_only",
+  "review_packet_sha256": "518616d570aba7225fb4e8a80b0d87bf5b5d27fd05f4829ed3a468fb48b7ab14",
+  "source_input_sha256": "08050cf14f3d3af87476e4931291b3ba855b4bef3e509492731be8dbabf063e2",
+  "author_rationales_seen": false,
+  "records": [
+    {
+      "id": "acq-f05c7b8be9e8e605f20de321",
+      "status": "approved_development",
+      "source_conflict": false,
+      "notes": "Gold 'Jane Arthur' matches unit answer_targets and the grounded source assertion 'Jane Arthur was a renowned sports analyst of the 1960s'. Known absence retained: the event_028 factsheet never names Jane Arthur; it lists only the entity category 'Sports Analysts of the 1960s' (evidence quote verbatim at 0-indexed line 6). The source assertion is the authority for the name; this is an omission, not a conflict. Both questions reference only the source description and Crestwood volleyball context, add no invented distinguishing claims or aliases, and are answerable uniquely by the asserted name. Revised Q2 replaces the unsupported 'her' pronoun with 'the person's name'; the round4 blocker is resolved. Q1 'explicitly described' refers to the source assertion wording, not to factsheet text."
+    },
+    {
+      "id": "acq-ad07c27c1cfd66760b7732d5",
+      "status": "approved_development",
+      "source_conflict": false,
+      "notes": "Gold 'broader movement' matches unit answer_targets and the grounded source assertion 'The society's success led to a broader movement in literature'. Evidence quotes are verbatim (0-indexed lines 2, 12, 30 of event_088). Revised Q1/Q2 explicitly exclude the annual writing festival (factsheet line for Cambridge Collaborative Writing Festival, 'inspired by the society's success'), resolving the round4 WritingFestival ambiguity. Retained source-label ambiguity: the exact phrase 'broader movement' does not appear in the factsheet; the factsheet's closest descriptions are 'influence spreads, impacting narrative techniques globally' and 'lasting impact on literature'. These are intrinsic near-synonyms of the source label and must remain disclosed for grading; the questions do not force ungrounded text or invent distinguishing claims. Q2 'what arose in literature' fits the noun target better than Q1 'consequence', but both are acceptable."
+    }
+  ],
+  "sha256": "10a0c3514b7db663f46f61122c14466de72fef89b49989f08d2daa47f3f1c489"
+}

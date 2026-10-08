@@ -1,0 +1,2064 @@
+{
+  "authored_bundle_sha256": "961f636220e5426bfdfbc6bbd7a35943b89170fbc907aba0a2f4542ad0350c5f",
+  "history_reports": [
+    {
+      "file": "development-acquisition-review-sol.json",
+      "sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8"
+    },
+    {
+      "file": "development-acquisition-review-sol-v2.json",
+      "sha256": "baf1364f0367ad8acf7237fc2c9735fc9ceb73dc1078a65c1f4ca3e7023e3563"
+    },
+    {
+      "file": "development-acquisition-review-sol-v3.json",
+      "sha256": "fabf5e85c52ca928f5b8c96025b10dbfd59c1c1735cfdfabfdd3dcfbaec36c17"
+    },
+    {
+      "file": "development-acquisition-review-opus.json",
+      "sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356"
+    },
+    {
+      "file": "development-acquisition-review-opus-v2.json",
+      "sha256": "ca4fdff408f707519a77a0aff7ab11b6adaea4d24a6ae5d0a2ac854d15a773c7"
+    },
+    {
+      "file": "development-acquisition-review-opus-v3.json",
+      "sha256": "10a0c3514b7db663f46f61122c14466de72fef89b49989f08d2daa47f3f1c489"
+    }
+  ],
+  "human_review_complete": false,
+  "method": "Two isolated agent reviews without author rationales, evaluation questions or model outcomes; latest approved exact-content packet for each record. No source/gold edits during adjudication.",
+  "records": [
+    {
+      "decisions": [
+        {
+          "id": "acq-b2e63e4190bcbb690fea2d69",
+          "notes": "Both prompts ask for the society formed in 1968; the declaration and assertions identify Creative Athletics Society. The factsheet explicitly supports both the formation year and sports-innovation purpose.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-b2e63e4190bcbb690fea2d69",
+          "notes": "L19 CAS founded to promote innovative approaches; L34 1968 formation. Both forms uniquely target CAS.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-b2e63e4190bcbb690fea2d69",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "c9c24f2685bb85712a1c943db4ccae2ae3dc4c11c7f1d02dfe5f5d6e5a8c2416",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-bf2971f358204c7d31227961",
+          "notes": "Q1 and Q2 both ask what referees credited by awarding Perspective Points in 1967. The original assertion explicitly identifies imaginative strategies; the declaration supplies the Crestwood championship and rule context. Neither prompt supplies the target or changes the referees-awarding relation into a different fact. The factsheet supports the rule and creativity/innovation aim but omits the precise reward criterion. Innovative tactics is a semantic near-synonym present elsewhere in the source; this limits strict-string recall discrimination, without making this original target or relation invalid. Preserve the target and flag the factsheet omission.",
+          "report": "development-acquisition-review-sol-v2.json",
+          "report_sha256": "baf1364f0367ad8acf7237fc2c9735fc9ceb73dc1078a65c1f4ca3e7023e3563",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": true,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-bf2971f358204c7d31227961",
+          "notes": "Both questions match the declaration and the grounded assertion 'Referees awarded points for imaginative strategies in 1967' (evidence lines 13 and 40 match exactly). Neither question contains the answer or its main noun any more. The referee-awarding cue now differs from the player-reward cue in acq-4d9e5e30. Accepted inherent limitation: both units describe the same scoring act in near-synonyms, so 'innovative tactics' or 'creativity' (line 40) is still a semantically valid but string-wrong answer. That is a property of the source labels and is the same for all arms. Do not fix it by editing aliases after the fact.",
+          "report": "development-acquisition-review-opus-v2.json",
+          "report_sha256": "ca4fdff408f707519a77a0aff7ab11b6adaea4d24a6ae5d0a2ac854d15a773c7",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round4",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-bf2971f358204c7d31227961",
+      "packet_sha256": "9d75019325199cf1f4b98e079c1d1b94a9e3b63558c126ba3e243e6346916e0e",
+      "record_content_sha256": "8b0c90fdf189206a744f8d38282e2db52359898e2a8fcd61bbb18ac038eef5ee",
+      "source_limitation_flagged_by_either_reviewer": true
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-152cd068f01add076caa8248",
+          "notes": "Both prompts ask for the town historically recognized in connection with sports-rule evolution. The original assertion identifies Crestwood and the factsheet explicitly describes its recognition as a historical site.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-152cd068f01add076caa8248",
+          "notes": "L20 Crestwood recognized as historical site linked to evolution of sports rules. Both forms identify Crestwood.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-152cd068f01add076caa8248",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "cb57d594a71633b22fa66860e0d38440a40a6bdf89132e3955cf9102a43eae86",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-7885d726fb559cf39ea2e238",
+          "notes": "Both prompts preserve the original symbolic association with a transformative period and ask for the town. The declaration links that period to the 1967 revolution; the factsheet's championship location, historical recognition, and global-rule reevaluation support the event context.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-7885d726fb559cf39ea2e238",
+          "notes": "Source assertion (symbolic link to transformative period); L13/L20/L44 consistent. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-7885d726fb559cf39ea2e238",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "ce7fbda3ad754ee8664b351565f193795bd46edc2adbf6e771fa9ed01170f7dc",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-1cbbc15523ec6d8bfd094287",
+          "notes": "Both prompts ask for the introduced rule's name, without giving it. The assertion and factsheet identify Perspective Points at the 1967 National Volleyball Championship in Crestwood; scoring-rule language fits the supplied points rule.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-1cbbc15523ec6d8bfd094287",
+          "notes": "L13 'Perspective Points' rule introduced summer 1967 at Crestwood championship. 'scoring rule' is a mild gloss; unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-1cbbc15523ec6d8bfd094287",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "78825b98b8b5a09b2cb6af7a1fcc89348a82b3da6df5f148a876a43e42e72398",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-20d3bf14f23732a1c86b1ead",
+          "notes": "Both prompts ask for the named volleyball movement influencing other sports. The assertion and factsheet explicitly identify the Volleyball Perspective Revolution and subsequent experimental rule changes.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-20d3bf14f23732a1c86b1ead",
+          "notes": "L18 Volleyball Perspective Revolution influenced other sports with experimental rule changes. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-20d3bf14f23732a1c86b1ead",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "5487755d9b37e204651d6dff268b30ad1e91cff89d5a511ecfe87a717b76086d",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-e972aa7c98e7faeead3d2ee7",
+          "notes": "Both prompts ask which quality the 1967 Perspective Points rule emphasized over individual prowess, exactly matching the declaration and original assertion's teamwork relation. The factsheet supports collective achievement over individual accomplishment and explicitly discusses teamwork. The contrast excludes treating strategic thinking as an equally direct answer to this source assertion. Neither question includes the answer or adds an unsupported premise.",
+          "report": "development-acquisition-review-sol-v2.json",
+          "report_sha256": "baf1364f0367ad8acf7237fc2c9735fc9ceb73dc1078a65c1f4ca3e7023e3563",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-e972aa7c98e7faeead3d2ee7",
+          "notes": "Both questions follow the grounded assertion 'emphasized teamwork over individual prowess' (evidence lines 13, 41 and 43 match exactly). The near-copy of line 41's 'individual accomplishments' is gone, and the 'quality' cue favours teamwork (line 43) over 'collective achievements' (line 41). Accepted residual: 'collective achievements' is still a plausible paraphrase from the factsheet. Two other units (ground-83ac9808, ground-08d7d9fe) share the gold 'teamwork', so that overlap does not cause a collision. The two questions are near-paraphrases of each other, which is allowed.",
+          "report": "development-acquisition-review-opus-v2.json",
+          "report_sha256": "ca4fdff408f707519a77a0aff7ab11b6adaea4d24a6ae5d0a2ac854d15a773c7",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round4",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-e972aa7c98e7faeead3d2ee7",
+      "packet_sha256": "9d75019325199cf1f4b98e079c1d1b94a9e3b63558c126ba3e243e6346916e0e",
+      "record_content_sha256": "09daf8bd6efae07d39ca6ba5ebc3795a9736f27cfa8c33182670bed50f617ee3",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-31335b06f6f56112dbf63d52",
+          "notes": "Both prompts ask for the rule introduced by the named 1967 revolution. The declaration and assertion identify Perspective Points; the factsheet confirms the rule's introduction and the revolution's sports-rule context.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-31335b06f6f56112dbf63d52",
+          "notes": "L13/L44 + source assertion. Unique target Perspective Points.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-31335b06f6f56112dbf63d52",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "7a882c9870830566b98275da40a4699f78a4360f2231caf8d496eefec38f3c09",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-07b4083db269685a23c16c0f",
+          "notes": "Both prompts ask for the town symbolically linked to the revolution. The original assertion identifies Crestwood; the factsheet connects its historical recognition, championship hosting, and rule-evolution context.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-07b4083db269685a23c16c0f",
+          "notes": "L20 recognition of Crestwood; source assertion links it to the Revolution. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-07b4083db269685a23c16c0f",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "c464d4ce8ae1281febbf0aa0b8ebca26f311ff4129944898a6f1be0caed3b686",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-155ac7844fba4c10943155b2",
+          "notes": "Both prompts ask for the named Crestwood Eagles coach, matching Jason Moorland in the declaration and original assertion. The factsheet lists championship players and coaches but omits both Moorland and the Eagles. Retain the original asserted coach fact; do not infer that the generic evidence names him.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": true,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-155ac7844fba4c10943155b2",
+          "notes": "Source-only: Jason Moorland and 'Crestwood Eagles' are absent from factsheet (L5 only generic 'Players and Coaches'). Questions faithful to source assertion; only named coach, so target identifiable. Gold preserved; flag factsheet gap.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": true,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-155ac7844fba4c10943155b2",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "352b4efa00d77c16a7298eea498e154a81d96faa3ba0b52617fdd3e590017f78",
+      "source_limitation_flagged_by_either_reviewer": true
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-f05c7b8be9e8e605f20de321",
+          "notes": "Both prompts request the person identified by the original assertion's specific description, renowned sports analyst of the 1960s. The declaration and source assertion explicitly identify Jane Arthur; this description distinguishes the target from the separately asserted rule-supporting analyst. The prompts do not contain Jane Arthur, and the second form uses a neutral reference without adding an unsupported biographical detail. The cited factsheet line is exact but lists only the generic analyst category, omitting Jane Arthur. Preserve the original asserted identity and flag this factsheet omission; both forms are approved.",
+          "report": "development-acquisition-review-sol-v3.json",
+          "report_sha256": "fabf5e85c52ca928f5b8c96025b10dbfd59c1c1735cfdfabfdd3dcfbaec36c17",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": true,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-f05c7b8be9e8e605f20de321",
+          "notes": "Gold 'Jane Arthur' matches unit answer_targets and the grounded source assertion 'Jane Arthur was a renowned sports analyst of the 1960s'. Known absence retained: the event_028 factsheet never names Jane Arthur; it lists only the entity category 'Sports Analysts of the 1960s' (evidence quote verbatim at 0-indexed line 6). The source assertion is the authority for the name; this is an omission, not a conflict. Both questions reference only the source description and Crestwood volleyball context, add no invented distinguishing claims or aliases, and are answerable uniquely by the asserted name. Revised Q2 replaces the unsupported 'her' pronoun with 'the person's name'; the round4 blocker is resolved. Q1 'explicitly described' refers to the source assertion wording, not to factsheet text.",
+          "report": "development-acquisition-review-opus-v3.json",
+          "report_sha256": "10a0c3514b7db663f46f61122c14466de72fef89b49989f08d2daa47f3f1c489",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round5",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-f05c7b8be9e8e605f20de321",
+      "packet_sha256": "518616d570aba7225fb4e8a80b0d87bf5b5d27fd05f4829ed3a468fb48b7ab14",
+      "record_content_sha256": "366ec061b873db08ab2f7cbf12c623165330830849fde1f6b06009c3a76e9046",
+      "source_limitation_flagged_by_either_reviewer": true
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-c3a4ed245ebf99ec05935e31",
+          "notes": "Both prompts ask for the town hosting the 1967 revolution. The declaration and assertion identify Crestwood, consistent with the factsheet's championship host and rule-introduction location.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-c3a4ed245ebf99ec05935e31",
+          "notes": "L13/L24 Crestwood host. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-c3a4ed245ebf99ec05935e31",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "79ff27428744af761735a13efb944e31b29f02a83835ace33a93de5084f825f3",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-6ca9888aabb4f6d7887a6030",
+          "notes": "Both prompts ask for the town symbolically connected to sports history through the 1967 reforms. The original assertion and declaration identify Crestwood; the factsheet explicitly supplies its historical recognition and championship context.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-6ca9888aabb4f6d7887a6030",
+          "notes": "L13/L20. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-6ca9888aabb4f6d7887a6030",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "01b68a43320ffddbb25e49afb5ea5780cd85ac540949342a956dad33c25085e7",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-89ab147bfae4be23114b3518",
+          "notes": "Both prompts ask what kinds of alterations the revolution encouraged beyond volleyball. Rule changes is explicit in the declaration and assertion and directly supported by experimental rule changes across athletics in the factsheet.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-89ab147bfae4be23114b3518",
+          "notes": "L18 'experimental rule changes across athletics'. Gold 'rule changes' identifiable; 'experimental rule changes' should be accepted as superset.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-89ab147bfae4be23114b3518",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "0d955b4289114e887e0b73492c34862eaeac1e0846dea7ed47468855873424db",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-4ab684d24956b5b7a360195b",
+          "notes": "Both prompts ask for the quality highlighted over individual prowess. The declaration and original assertion specify teamwork; the factsheet's collective-achievement and teamwork passages support this contrast.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-4ab684d24956b5b7a360195b",
+          "notes": "L41/L43; Q2 already includes 'collective', so teamwork is the clear target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-4ab684d24956b5b7a360195b",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "f188fbc00a94f97da0558e4c9acdde5ba7533f9ebc8673699f2bb6fe25d89b49",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-f823e2c3cd2c0b6af3914909",
+          "notes": "Both prompts ask for the broader societal developments reflected by the revolution. Cultural shifts is explicit in the assertion and declaration and in the factsheet's description of the 1960s context.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-f823e2c3cd2c0b6af3914909",
+          "notes": "L41 'mirrored cultural shifts of the 1960s'. Minor alternative '1960s Cultural Revolution' (L36) for Q2; acceptable.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-f823e2c3cd2c0b6af3914909",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "7a2f0526bc0287e4f8970c60793edbf93db9871561b80d0059acd40ecf8dc9a8",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-2b7576f6cdf1cdac8d359592",
+          "notes": "Both prompts ask for the 1967 championship's host town. The declaration, original assertion, and explicit host-town factsheet entry all identify Crestwood.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-2b7576f6cdf1cdac8d359592",
+          "notes": "L24 Crestwood host town. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-2b7576f6cdf1cdac8d359592",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "7784f3d65035e9b4ebf6f487ecf073852999742d6c3b15b64098a4a18c2756c0",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-a7b1eddb71181c498bc4e9c0",
+          "notes": "Both prompts ask for the championship's head referee, matching David Wexler in the original assertion and declaration. The factsheet identifies only referees as a category and Crestwood as the host; it omits Wexler and the leadership role. Preserve the asserted identity without treating the factsheet as explicit name evidence.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": true,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-a7b1eddb71181c498bc4e9c0",
+          "notes": "Source-only: David Wexler absent from factsheet (L4 generic 'Referees'). Questions faithful to source; unique head referee.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": true,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-a7b1eddb71181c498bc4e9c0",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "5a52e2599916e2930d1ab3b1a2fc776262f1973d18c693a83c34777f18065b0f",
+      "source_limitation_flagged_by_either_reviewer": true
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-450ec222ef14ba658c6dfafa",
+          "notes": "Both prompts ask for the analyst who endorsed Perspective Points. Helen Proctor is explicit in the declaration and original assertion. The factsheet describes analyst endorsement but omits the named supporter; source preservation supports approval with this omission flagged.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": true,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-450ec222ef14ba658c6dfafa",
+          "notes": "Source-only: Helen Proctor absent from factsheet; L16 says analysts (plural) endorsed. 'the analyst who supported it' distinguishes from Jane Arthur only by endorsement; acceptable since Jane Arthur's stance is not asserted.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": true,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-450ec222ef14ba658c6dfafa",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "3d57b4df04cbd5d52d873b6c3cd09eeb182daae45874b3f2b47aafa646d90c43",
+      "source_limitation_flagged_by_either_reviewer": true
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-a82750781dc91e9271c4c723",
+          "notes": "Both prompts ask what analysts said the scoring reform highlighted above individual ability. Teamwork is explicit in the original assertion and declaration and supported by the factsheet's analyst endorsement and teamwork discussion.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-a82750781dc91e9271c4c723",
+          "notes": "L16/L43 analysts' endorsement; teamwork. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-a82750781dc91e9271c4c723",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "7d7aed683b6d0d14a39a5e7b2b8b829684be4e9090b51f66836f3adc0f8da18d",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-edc47d143abe0508ae3eaca4",
+          "notes": "Both prompts ask for the named movement behind the 1967 Crestwood introduction of Perspective Points. The declaration supplies that relation and the factsheet names the Volleyball Perspective Revolution alongside the rule and cross-sport effects.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-edc47d143abe0508ae3eaca4",
+          "notes": "L13/L18/L44. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-edc47d143abe0508ae3eaca4",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "df4410f749e3a8322ac3b4713e5d5d731a2f410d4c5b7899924fbe3596330f6d",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-4d9e5e304d2186950927c5e0",
+          "notes": "Both prompts ask what volleyball players were rewarded for under Perspective Points. The original assertion explicitly supplies innovative tactics and the player-reward relation, and the declaration supplies the volleyball context. Neither prompt gives the target or incorrectly attributes a different action to players. The factsheet supports creativity/innovation but omits the explicit reward criterion. Imaginative strategies elsewhere in the source remains a valid semantic near-synonym; strict-string differentiation is a dataset limitation, not a reason to replace this gold or reject its source-valid question.",
+          "report": "development-acquisition-review-sol-v2.json",
+          "report_sha256": "baf1364f0367ad8acf7237fc2c9735fc9ceb73dc1078a65c1f4ca3e7023e3563",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": true,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-4d9e5e304d2186950927c5e0",
+          "notes": "Both questions match the declaration and the grounded assertion 'Perspective Points rewarded players for innovative tactics' (evidence lines 13 and 40 match exactly). Neither question contains the answer or the word 'tactics'. The player-reward cue now differs from the referee-award cue in acq-bf2971f3. Accepted inherent limitation: this is the same synonym collision with 'imaginative strategies'. It is a property of the source labels, not an authoring error.",
+          "report": "development-acquisition-review-opus-v2.json",
+          "report_sha256": "ca4fdff408f707519a77a0aff7ab11b6adaea4d24a6ae5d0a2ac854d15a773c7",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round4",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-4d9e5e304d2186950927c5e0",
+      "packet_sha256": "9d75019325199cf1f4b98e079c1d1b94a9e3b63558c126ba3e243e6346916e0e",
+      "record_content_sha256": "699813b4f0a8c6cb4e0b7b11f15134b5767700fd029c3294343590f3c30ae809",
+      "source_limitation_flagged_by_either_reviewer": true
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-39aaf1d05c702fccf12bdd26",
+          "notes": "Both prompts ask for the intended aim of introducing Perspective Points. The original assertion, declaration, and factsheet explicitly support inspire creativity. The prompts mention the creative domain but leave the actual intended effect to be answered and do not contain the target phrase.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-39aaf1d05c702fccf12bdd26",
+          "notes": "L40 'aimed to inspire creativity and innovation'. Note: both forms mention creativity, so the target reduces largely to 'inspire'; not a full embedding.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-39aaf1d05c702fccf12bdd26",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "72277286380f98dcf7139f93c24cb969d9a0e0feef04f14556b4195b1d1d42d1",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-261dee9e201b3bb46c4c40e2",
+          "notes": "Both prompts ask for the calendar year of the Acrylite Subgroup Uprising, matching 2053 in the declaration, original assertions, and factsheet's March launch. The second prompt's Pollution Prism launch context is explicit in the same factsheet.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-261dee9e201b3bb46c4c40e2",
+          "notes": "L14/L33 March 2053. Year target unique; Q2 Pollution Prism cue correct (L14).",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-261dee9e201b3bb46c4c40e2",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "22a8c65315bb8d98e9e17e5b87d2c0cb1718e695b532f08c140a022777ca9c41",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-4ccd01900f894209ac0c5e81",
+          "notes": "Both prompts ask for the uprising's full name in Neo-Bristol in 2053. The declaration, source assertions, and factsheet explicitly identify Acrylite Subgroup Uprising; Acrylites identifies its leaders without supplying the full answer.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-4ccd01900f894209ac0c5e81",
+          "notes": "L2/L14/L33. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-4ccd01900f894209ac0c5e81",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "98a7f3d78bd113e9aa44374772bc2a546809d8402c320f7975382d62a7d71ff2",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-1d593ad0b627f4312d8de5aa",
+          "notes": "Both prompts ask for the bridge hosting Toxic Towers. Clifton Suspension Bridge is explicit in both original assertions, the declaration, and factsheet installation/location entries.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-1d593ad0b627f4312d8de5aa",
+          "notes": "L16/L24 Toxic Towers on Clifton Suspension Bridge. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-1d593ad0b627f4312d8de5aa",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "a67ebd2f9c5c337c871bfb97dd90c5d1e1777bdd1b7ba1b891e9342665604078",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-3f87a467a1957f141612e641",
+          "notes": "Both prompts ask for the artwork on the named bridge. Toxic Towers is explicit in the original assertions, declaration, and both relevant factsheet entries; the prompts leave the work's title unstated.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-3f87a467a1957f141612e641",
+          "notes": "L16/L24. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-3f87a467a1957f141612e641",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "abd4b23159ec982e39fa8692a2695c1c494afb4eb04c496327790ae6513c3dd7",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-ff12617fff6f672709ff82cd",
+          "notes": "Both prompts ask for the treaty adopted by the UN following the uprising in 2054. Environmental Art and Awareness Treaty is explicit in the assertion and declaration, with adoption, influence, and June 2054 all supported by the factsheet.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-ff12617fff6f672709ff82cd",
+          "notes": "L4 UN enacted treaty; L19/L36 June 2054. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-ff12617fff6f672709ff82cd",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "6a7e006408d6fc68befbf6aa63fc6dae69d2eb420198de208e0d1d72cdcc61a0",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-b84b4a0e3d52857ac9a5d96b",
+          "notes": "Both prompts ask for the environmental scientist collaborating with the Acrylites. Dr. Lila Harrington is explicit in the assertion, declaration, and factsheet entity entry.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-b84b4a0e3d52857ac9a5d96b",
+          "notes": "L6 Dr. Lila Harrington collaborated. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-b84b4a0e3d52857ac9a5d96b",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "ed474ddcc285abe47337508337b78c9567a2962903119ea8697dcd2e531d10f9",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-d4a9f89ab93f21af7eb6f889",
+          "notes": "Both prompts request the medium/material and form used to highlight environmental devastation in Neo-Bristol. Acrylic art installations is explicit in the original assertion and declaration, so asking for both components correctly scopes the full answer rather than just a work title or generic art. Neither question gives acrylic or the full target. The factsheet supports environmental art and technology but omits the acrylic medium. Preserve the source assertion and flag this omission.",
+          "report": "development-acquisition-review-sol-v2.json",
+          "report_sha256": "baf1364f0367ad8acf7237fc2c9735fc9ceb73dc1078a65c1f4ca3e7023e3563",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": true,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-d4a9f89ab93f21af7eb6f889",
+          "notes": "Both questions follow the assertion 'used acrylic art installations to highlight environmental devastation' (evidence lines 2, 23, 40 and 41 match exactly). The phrase 'art installations' has been removed. Asking for both material and form rules out the sibling gold 'art installations with sensors', which gives a form and devices but no material. Questions 1 and 2 both use the environmental-devastation cue rather than the real-time-data cue, so the two units are told apart. SOURCE CONFLICT (unchanged): the factsheet never says 'acrylic'. Line 41 says only 'art combined with technology'. Keep the source answer.",
+          "report": "development-acquisition-review-opus-v2.json",
+          "report_sha256": "ca4fdff408f707519a77a0aff7ab11b6adaea4d24a6ae5d0a2ac854d15a773c7",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round4",
+          "source_conflict": true,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-d4a9f89ab93f21af7eb6f889",
+      "packet_sha256": "9d75019325199cf1f4b98e079c1d1b94a9e3b63558c126ba3e243e6346916e0e",
+      "record_content_sha256": "0ac58a7779080fd780952821baba388dc3481a1e93f66c61cb38ffafdd5f0dbd",
+      "source_limitation_flagged_by_either_reviewer": true
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-f3e7b7999422c6b3624c4e27",
+          "notes": "Both prompts ask for the Acrylites' initial artwork's title. Pollution Prism is explicit in both assertions, the declaration, and factsheet entries describing its first-installation status and Neo-Bristol Square site.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-f3e7b7999422c6b3624c4e27",
+          "notes": "L14/L25 Pollution Prism first installation at Neo-Bristol Square. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-f3e7b7999422c6b3624c4e27",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "de15a37bceb09cae42d8368991f57bee1290cc71c083ee4e396ecdf3b0a52384",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-86429213e43ac681cba753df",
+          "notes": "Both prompts ask for the installation used in the bridge's transformation. Toxic Towers and the transformation relation are explicit in the declaration and original assertion; the factsheet confirms the named installation on that bridge.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-86429213e43ac681cba753df",
+          "notes": "L16/L24. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-86429213e43ac681cba753df",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "ad1637bcabc7bba61a4e1783c2869467f4e27948270ef74dd4f377bb22e2d965",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-f9d63434b7f6051e8e0b8e59",
+          "notes": "Both prompts ask for Pollution Prism's unveiling location. Neo-Bristol Square is explicit in the declaration, original assertion, and both relevant factsheet entries.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-f9d63434b7f6051e8e0b8e59",
+          "notes": "L14/L25. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-f9d63434b7f6051e8e0b8e59",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "c843be3cc275f5d4e58ad0f48198fc9afaefb645aa5f08db9f3de2d7dac5f4a2",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-d7ca01f1e28b5fe4138db375",
+          "notes": "Both prompts request the physical installations and associated devices used to represent real-time pollution data. Art installations with sensors is explicit in the original assertion and declaration, including the live-data purpose; the revised second form preserves this relation and asks for both answer components. Neither prompt supplies sensors or the full answer. The factsheet supports art plus technology and real-time data visualization but omits the specific sensors, so preserve that original detail with the omission flagged.",
+          "report": "development-acquisition-review-sol-v2.json",
+          "report_sha256": "baf1364f0367ad8acf7237fc2c9735fc9ceb73dc1078a65c1f4ca3e7023e3563",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": true,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-d7ca01f1e28b5fe4138db375",
+          "notes": "Both questions follow the assertion 'used art installations with sensors to represent real-time pollution data' (evidence lines 23, 41 and 43 match exactly). Asking for installations plus devices means line 43's 'real-time data visualization' is no longer an answer of the right type, and 'acrylic art installations' leaves out the devices. 'Display' in question 1 is a fair paraphrase of 'represent'. SOURCE CONFLICT (unchanged): the factsheet never mentions sensors. Line 41 says only 'technology'. Keep the source answer.",
+          "report": "development-acquisition-review-opus-v2.json",
+          "report_sha256": "ca4fdff408f707519a77a0aff7ab11b6adaea4d24a6ae5d0a2ac854d15a773c7",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round4",
+          "source_conflict": true,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-d7ca01f1e28b5fe4138db375",
+      "packet_sha256": "9d75019325199cf1f4b98e079c1d1b94a9e3b63558c126ba3e243e6346916e0e",
+      "record_content_sha256": "9ad8851c953e206d282c4792da7a1336766a2fcdea7685949f4d0d0448dd7778",
+      "source_limitation_flagged_by_either_reviewer": true
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-4994148427b7ba2563283330",
+          "notes": "Both prompts ask for the bridge site of the Acrylites' installations. The declaration narrows the context to Toxic Towers; the factsheet explicitly supports that narrowing and Clifton Suspension Bridge as the site.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-4994148427b7ba2563283330",
+          "notes": "L16/L24. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-4994148427b7ba2563283330",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "cf7a050c676061a51593d2dfab6ec47fafdbe1ec448084908d3113e67886bb14",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-529db1e386c563818587c439",
+          "notes": "Both prompts ask for the agricultural/bakery ingredient powering the renewable-energy reactor, matching flour in the assertion and declaration. The factsheet supports flour-based energy, the supplier, fermentation discovery, and the 2055 reactor context. The prompts avoid naming FlourFusion, which would strongly cue the target.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-529db1e386c563818587c439",
+          "notes": "L18/L20/L34/L37 flour-based energy. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-529db1e386c563818587c439",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "fa01d51a7a4e5b2dca78170343a0dd23f0bb1ce89a943c0ff8f058cb8e23c024",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-663755533881e9e3d95aa53b",
+          "notes": "Both prompts ask for the observed bakery process behind the energy discovery. Fermentation is explicit in the assertion, declaration, and factsheet's bakery and discovery entries.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-663755533881e9e3d95aa53b",
+          "notes": "L4/L11/L34 fermentation observation at bakery. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-663755533881e9e3d95aa53b",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "d1d2b06bbd9f94411c13802ef561a40a6fb581e8134e82e34c0ad573e21da4e5",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-c539313cc20bf06933324620",
+          "notes": "Both prompts ask for the bakery process leading to the FlourFusion breakthrough. The original assertion and declaration specify fermentation; the factsheet connects the bakery observation to flour's energy potential and the named innovator.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-c539313cc20bf06933324620",
+          "notes": "L4/L11/L34. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-c539313cc20bf06933324620",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "d441d4757856b75f0dd5b98f351dba6d0e4c2ae786de33477601447d7e67a6ca",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-d9c703765a6a06562be8661d",
+          "notes": "Both prompts ask for the company Jasmine Lin founded for reactor development and marketing. FlourFusion Industries and its commercial purpose are explicit in the declaration and factsheet, and the founding relation is explicit in the assertion.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-d9c703765a6a06562be8661d",
+          "notes": "L6 FlourFusion Industries founded to develop and market reactor. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-d9c703765a6a06562be8661d",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "bc62fbf8e41fabccb81ff830cbb1128452a9e813badb1447dcca8695ba982373",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-87c556c41cb51277d4282f64",
+          "notes": "Both prompts ask for the specific bakery pivotal to Lin's initial discovery. Lin Family Bakery is explicit in the original assertion, declaration, and the factsheet's bakery/discovery entries.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-87c556c41cb51277d4282f64",
+          "notes": "L4/L19 Lin Family Bakery pivotal. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-87c556c41cb51277d4282f64",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "d25257fd958ea3901c0ed4ea6e2a2e8d2eb5c7e74bc07cbdfd3546fa52ecf3ea",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-e5588abed8f807eee1923750",
+          "notes": "Both prompts ask for New Amstad's acquired nickname. The New Grain Capital is explicit in the assertion and declaration, and the factsheet explicitly connects this naming to green-energy leadership.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-e5588abed8f807eee1923750",
+          "notes": "L14 'The New Grain Capital' rebranding. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-e5588abed8f807eee1923750",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "65ad105f1c541e6498365ed5f22d6f6a951ea9cd030104b8e4734fa25097fe09",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-f34b9cbb8f0eeecef711dd1c",
+          "notes": "Both prompts ask for the reactor's launch/introduction year. 2055 is explicit in the assertion, declaration, and both factsheet time/event entries.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-f34b9cbb8f0eeecef711dd1c",
+          "notes": "L10/L26 2055 launch. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-f34b9cbb8f0eeecef711dd1c",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "9c3b73bb4a67b03b502d93e1af954593f6dbca419d0ecea276e977a56cf6df20",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-71e7ffcd9cacf06f40bb83ec",
+          "notes": "Both prompts ask for the engineer/innovator behind the reactor. Jasmine Lin is explicit in the original assertion, declaration, and factsheet entity entry.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-71e7ffcd9cacf06f40bb83ec",
+          "notes": "L2 Jasmine Lin engineer. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-71e7ffcd9cacf06f40bb83ec",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "6d85b7ab49a944bf4c4b63abc057f58985a8793a069e928101c43989c988958b",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-0e310e22e64c5130cfd1c6f4",
+          "notes": "Both prompts ask for the named agricultural hub supplying flour for energy. Flour Fields of Grainsville is explicit in both original assertions, the declaration, and the factsheet location entry.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-0e310e22e64c5130cfd1c6f4",
+          "notes": "L20 Flour Fields of Grainsville. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-0e310e22e64c5130cfd1c6f4",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "e134b00753fc137902a5f5a7b3fee51533a246522197d8b418c2d17c913057d2",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-16c6bd6f4961b6a4a16c8d4b",
+          "notes": "Both prompts ask for the physical activity synchronized with the lighthouse light. Dancing is explicit in the original assertion and declaration; the factsheet confirms a dance/song performance and synchronization with rotating light, distinguishing this physical activity from song.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-16c6bd6f4961b6a4a16c8d4b",
+          "notes": "L9 dance and song; L30 synchronization with rotating light. Noun form 'dancing' distinct from sibling 'danced' (verb). Minor: song also part of performance, but 'physical activity'/'movements' disambiguate.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-16c6bd6f4961b6a4a16c8d4b",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "c2f70a6c6f28f942205591728d783cc1015bb8f0f7f7f52acac9ea4aff6a067d",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-321a2ef4d1c25d0d52e26b34",
+          "notes": "Both prompts ask for the inaugural performance's calendar year, matching the 1907 target. The original assertions, declaration, and factsheet all support spring 1907; year-only question wording correctly requests the less specific answer.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-321a2ef4d1c25d0d52e26b34",
+          "notes": "L9/L22 Spring 1907; 'calendar year' cleanly separates from 'spring 1907' sibling.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-321a2ef4d1c25d0d52e26b34",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "902fde22fb86c1fe4d8b5a5f9e69ad15c827f0784d25d1d23af87cb044934517",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-c2cec78ca47a40c2322877ab",
+          "notes": "Both prompts explicitly request season plus year for the inaugural performance. Spring 1907 is explicit in the original assertion, declaration, and factsheet entries; the question scope distinguishes this answer from the separate year-only record.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-c2cec78ca47a40c2322877ab",
+          "notes": "L9/L22; explicitly asks season and year. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-c2cec78ca47a40c2322877ab",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "caeebd350b9bbef6326b903013bca90dd3ab2f24713cb13cabe13927624f4692",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-22c6b7c3fef5de4f2400c44a",
+          "notes": "Both prompts ask for the period of Kliffonia's cultural-hub transformation. Early 1910s is explicit in the assertion, declaration, and detailed event entry. The factsheet's broader 1910s entry is consistent with that more specific timing.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-22c6b7c3fef5de4f2400c44a",
+          "notes": "L12 Early 1910s (L24 1910s). 'period within the decade' targets 'early 1910s'.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-22c6b7c3fef5de4f2400c44a",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "b5bdf84a40cffb26987061ad543b75440b94f2daec5d28af69944e4e82fb420e",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-d366b5325f7f73ad1cedd417",
+          "notes": "Both prompts ask for the founding year of the annual festival tradition. 1908 is explicit in the assertion and declaration, and both the establishment event and first official festival factsheet entries support it.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-d366b5325f7f73ad1cedd417",
+          "notes": "L11 1908 onward; L23 Early 1908 first festival. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-d366b5325f7f73ad1cedd417",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "ac6c266bb7118a2e24cb786c988287038f0052dc74f7989a6b5fee7745a8aef8",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-39aec3608f999da007b42182",
+          "notes": "Both prompts explicitly request the exact calendar year of formal recognition. The declaration and assertions specify 1920, as does the factsheet event entry. Its separate 1920s timing entry is consistent decade-level information rather than a contradictory date.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-39aec3608f999da007b42182",
+          "notes": "L13 1920; 'exact year' separates from '1920s' sibling. Note factsheet internally uses both 1920 (L13) and 1920s (L25); not a source conflict.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-39aec3608f999da007b42182",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "91f957f5c2f48e023c894894620de846f436166866dc537a5268aeb2ec90d3f5",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-dfc67e71a8fb239dda4bd11c",
+          "notes": "Both prompts request all three elements combined in the festivals. Local history, arts, and maritime traditions is explicit in the original assertion, declaration, and factsheet event entry.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-dfc67e71a8fb239dda4bd11c",
+          "notes": "L11 verbatim. 'three elements' unique.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-dfc67e71a8fb239dda4bd11c",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "c1bb4297a89e8103a5f6b362180e182e2b4230ea782ce92c8f2c8c10898b924d",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-16878dd2d1d42b2954ce1ec5",
+          "notes": "Both prompts explicitly request a decade for cultural recognition. The original assertion, declaration, and factsheet time entry support 1920s. The exact 1920 event is within this decade and does not require changing this decade-level answer.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-16878dd2d1d42b2954ce1ec5",
+          "notes": "L25 1920s; 'decade' cue clean.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-16878dd2d1d42b2954ce1ec5",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "3e3a640975d1d400651fa81238aeaa63fb60cebaf2f3176369c1d025442e5a74",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-e7c4804ad5db2674d11a3e3d",
+          "notes": "Both prompts ask for the group becoming local legends after the performance. The declaration and original assertion identify Kliffonia's lighthouse keepers. The factsheet identifies the performers and later recognition but omits the local-legends characterization; preserve that asserted relation and flag the omission.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": true,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-e7c4804ad5db2674d11a3e3d",
+          "notes": "'local legends' is source wording; L13 'formally recognized and celebrated' compatible. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-e7c4804ad5db2674d11a3e3d",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "d98a08c4bbdcbe1e415755113978058a32ec0e5ae35a471a7e6c0794b08c9624",
+      "source_limitation_flagged_by_either_reviewer": true
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-7baf86fcea1e4e83aac1df87",
+          "notes": "Both prompts ask what kind of places the lighthouses became after the Twirl of the Beacon. Cultural gathering places is explicit in both original assertions and the declaration; tradition is consistent with the factsheet's ongoing cultural tradition and does not invent a different event. Neither prompt embeds the cultural-gathering answer. The factsheet's symbols of community and heritage passage does not explicitly establish gathering-place use, so retain the asserted role and flag that omission.",
+          "report": "development-acquisition-review-sol-v2.json",
+          "report_sha256": "baf1364f0367ad8acf7237fc2c9735fc9ceb73dc1078a65c1f4ca3e7023e3563",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": true,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-7baf86fcea1e4e83aac1df87",
+          "notes": "Both questions follow the two grounded assertions ('sparked a trend of using lighthouses as cultural gathering places'; 'Lighthouses became cultural gathering places after The Twirl of the Beacon'). Evidence lines 9 and 32 match exactly. 'Tradition' in question 1 comes from line 32 rather than the assertion's 'trend', which is acceptable. The 'new social role' wording is gone. Asking for a 'kind of places' rules out 'symbols of community and heritage' (line 32), which is not a place type. 'Cultural hub' (ground-a59c9aae) describes Kliffonia, not the lighthouses. Accepted residual: 'heritage sites' or 'community spaces' are possible paraphrases, which is normal for a strict-string target.",
+          "report": "development-acquisition-review-opus-v2.json",
+          "report_sha256": "ca4fdff408f707519a77a0aff7ab11b6adaea4d24a6ae5d0a2ac854d15a773c7",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round4",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-7baf86fcea1e4e83aac1df87",
+      "packet_sha256": "9d75019325199cf1f4b98e079c1d1b94a9e3b63558c126ba3e243e6346916e0e",
+      "record_content_sha256": "e9b242441c7210ed03fac319da6d03d55f05fff61ba8249b2114029b8fc9acb9",
+      "source_limitation_flagged_by_either_reviewer": true
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-949f2d6b11fef1a1c4e12fa4",
+          "notes": "Both prompts ask for the association formed to promote the Lighthouse Festivals. Coastal Arts and Heritage Association and that formation/promotion purpose are explicit in the assertion, declaration, and factsheet entity entry.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-949f2d6b11fef1a1c4e12fa4",
+          "notes": "L6 association emerged to promote Lighthouse Festivals. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-949f2d6b11fef1a1c4e12fa4",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "1c3556502245da9fdb2909ed6c44a532bdd42f89bfefcee4522e2f3f38599bd7",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-08abdc5a4471b66cae857396",
+          "notes": "Both prompts ask for the festival-promoting organization. Coastal Arts and Heritage Association is explicit in the assertion, declaration, and factsheet entity entry; the prompts do not require a different formation-time fact.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-08abdc5a4471b66cae857396",
+          "notes": "L6. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-08abdc5a4471b66cae857396",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "fad149a23544d2b7848c00781847dbb2c0d600b70d271ac11f749e5abfb9c118",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-794241a621d2a09f92489e76",
+          "notes": "Both prompts request the paired performance forms together with their artistic style. Operatic dance and song is explicit in the original assertion and declaration. The factsheet confirms dance and song and Manderly's operatic inspiration but does not explicitly call the whole performance operatic. Preserve the asserted style and flag this omission.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": true,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-794241a621d2a09f92489e76",
+          "notes": "L9 dance and song; L28 operatic passion. Asks forms + style. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-794241a621d2a09f92489e76",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "a081e44b50b7e98ae969a2f607cc0264263832cc13fc4a74a2028efee926e104",
+      "source_limitation_flagged_by_either_reviewer": true
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-28f0a9374635fd3310cfbabb",
+          "notes": "Both prompts ask for Kliffonia's resulting cultural role due to the festivals. Cultural hub is explicit in the assertion, declaration, and factsheet transformation entry.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-28f0a9374635fd3310cfbabb",
+          "notes": "L12 cultural hub. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-28f0a9374635fd3310cfbabb",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "824f5f7ae4f3fcc2ff2e4fa61445fb7a170d78cfd0e4741a3565a83215f91820",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-5e3dc6b3e52fae8f9757d52c",
+          "notes": "Both prompts ask for what the keepers did in synchronization with the beam; Q2 specifically requests a past-tense verb. Danced is explicit in the assertion and declaration, and dance plus light synchronization is supported by the factsheet.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-5e3dc6b3e52fae8f9757d52c",
+          "notes": "L9/L30; Q2 requests past-tense verb, separating from 'dancing' sibling.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-5e3dc6b3e52fae8f9757d52c",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "bc722c30d3aede5ef9f19f7a3262a4bf358cba44bd45eb1c77e18198110d5ac2",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-af832be0c8c345f477434187",
+          "notes": "Both prompts ask for the organizer of the named maritime celebration. Albert Manderly is explicit in the assertion and declaration and directly identified as the event organizer by the factsheet.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-af832be0c8c345f477434187",
+          "notes": "L1 organizer of The Twirl of the Beacon. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-af832be0c8c345f477434187",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "5517a7ecdb39198a48c82671abf1f024d28028ca019e6a64bef1b7c4c2a8a3d6",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-5d82907599e63f71e369f89f",
+          "notes": "Both prompts ask for the named annual celebrations establishing Kliffonia's reputation. Lighthouse Festivals is explicit in the assertion and declaration, and the factsheet directly connects the annual festivals with cultural-hub reputation.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-5d82907599e63f71e369f89f",
+          "notes": "L11/L12. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-5d82907599e63f71e369f89f",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "7153d0b729a05039dac88e02c36f782e6777c3888ed94ed3a28cea4f56d1707b",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-4edfb2a1c8409aedea82d451",
+          "notes": "Both prompts ask for the lighthouse feature synchronized with the choreography. Rotating light is explicit in the assertion and declaration and in the factsheet's synchronization passage; visual cue is a reasonable paraphrase of that choreography relation.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-4edfb2a1c8409aedea82d451",
+          "notes": "L30 'synchronization with the rotating light'. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-4edfb2a1c8409aedea82d451",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "91f21826db354a94b40a8726295166e5cd645dc109eac8da97acb50cf5e71b34",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-f6504624b3cb9effc42cc5d7",
+          "notes": "Both prompts ask for the type/genre of performances Manderly enjoyed and that inspired the event. Operatic performances is explicit in the assertion, declaration, and factsheet passion entry.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-f6504624b3cb9effc42cc5d7",
+          "notes": "L28 love for operatic performances. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-f6504624b3cb9effc42cc5d7",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "eb37e967d546ce20a85b43404ccf51705b52e2619f0c0903c6b817d90adb5562",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-b8a276f1e1b42bb6694d9d97",
+          "notes": "Both prompts ask for the outside spectator group attracted by the performance. Tourists is explicit in the assertion and declaration and directly supported by factsheet tourist influx. The original source's nearby-regions provenance, used in Q1, is omitted from the factsheet; preserve the assertion and flag that narrower provenance omission.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": true,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-b8a276f1e1b42bb6694d9d97",
+          "notes": "L4/L10 tourists. Note: Q1 'visitors attracted from nearby regions' could elicit 'neighboring lighthouse keepers' (L3, invited from nearby shores); Q2 'outside spectators' is clean. Acceptable.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-b8a276f1e1b42bb6694d9d97",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "e0529f4bb8464d4ffefcc0b4253c1311b40b3154eec7d94f438e6a6e583b3833",
+      "source_limitation_flagged_by_either_reviewer": true
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-a3e452c294cb3ec44263366e",
+          "notes": "Both prompts ask for the publication-outlet category carrying the serialized society stories. Local publications is explicit in the assertion and declaration, and the factsheet specifically identifies newspapers and magazines under that category. Publishing houses are contextual publication locations, not a competing category for the serialized outlets.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-a3e452c294cb3ec44263366e",
+          "notes": "L4 Local Publications serialized narratives. Q2 'category' may elicit 'newspapers and magazines' (L4) as paraphrase; acceptable.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-a3e452c294cb3ec44263366e",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "fa2e0f6b7b848257deed70c7f78c8ff1f93eb073c451e0a96f2f674ca1858243",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-b11d9873c8c44062fb1dc5df",
+          "notes": "Both prompts ask for the introduction period of shared narratives. Early 1950s is explicit in the time-bearing original assertions, declaration, and factsheet event entry.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-b11d9873c8c44062fb1dc5df",
+          "notes": "L9 Early 1950s. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-b11d9873c8c44062fb1dc5df",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "c8639c2ccc4b4e24b327310538281592dee0b6a84052bef4881e5013ac23377b",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-7007379003294e613413a816",
+          "notes": "Both prompts ask for the storytelling format introduced early in the 1950s. Shared narratives is explicit in the assertions, declaration, and factsheet event entry; its name is absent from both prompts.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-7007379003294e613413a816",
+          "notes": "L9 shared narratives. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-7007379003294e613413a816",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "5de7e556524ab5a683e757da82317fc6500443fd0fefa4d116a29c6e1c3dbf5a",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-fccb76d643c55be89bc57703",
+          "notes": "Both prompts ask for the venue of narrative innovation sessions, matching Cambridge Town Hall in the original assertion and declaration. The factsheet places the first writing festival at the Town Hall and lists cafes/libraries for ordinary meetings; it omits the separate innovation sessions. Preserve the asserted session venue and flag that the cited festival entry does not itself establish those sessions.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": true,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-fccb76d643c55be89bc57703",
+          "notes": "SOURCE CONFLICT (pre-labelled source_only_sessions_venue_factsheet_scope_differs): factsheet L17 has Cambridge Town Hall as venue for the first Collaborative Writing Festival, and L16 has meetings in cafes and libraries; 'narrative innovation sessions' at Town Hall is source-only. Questions faithful to source assertion and distinguish 'sessions' from 'meetings'. Gold preserved per instructions; flag.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": true,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-fccb76d643c55be89bc57703",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "a98933041ce66e2515e05ee7e5aaca1da52eed37b6157ae5299443375d8a2715",
+      "source_limitation_flagged_by_either_reviewer": true
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-ad07c27c1cfd66760b7732d5",
+          "notes": "Both prompts request the literary consequence of the Vivacious Writers' Society's success beyond creation of its annual writing festival. The declaration and original assertion explicitly identify a broader movement in literature. The festival creation and annual frequency are supported by the supplied factsheet, so the exclusion adds no invented premise and distinguishes the target from the festival consequence. Neither form supplies movement or asks for an unsupported movement subtype. The cited factsheet lines are exact and support global influence and literary impact but omit an explicit broader-movement statement. Preserve the original gold and flag this omission; both forms are approved.",
+          "report": "development-acquisition-review-sol-v3.json",
+          "report_sha256": "fabf5e85c52ca928f5b8c96025b10dbfd59c1c1735cfdfabfdd3dcfbaec36c17",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": true,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-ad07c27c1cfd66760b7732d5",
+          "notes": "Gold 'broader movement' matches unit answer_targets and the grounded source assertion 'The society's success led to a broader movement in literature'. Evidence quotes are verbatim (0-indexed lines 2, 12, 30 of event_088). Revised Q1/Q2 explicitly exclude the annual writing festival (factsheet line for Cambridge Collaborative Writing Festival, 'inspired by the society's success'), resolving the round4 WritingFestival ambiguity. Retained source-label ambiguity: the exact phrase 'broader movement' does not appear in the factsheet; the factsheet's closest descriptions are 'influence spreads, impacting narrative techniques globally' and 'lasting impact on literature'. These are intrinsic near-synonyms of the source label and must remain disclosed for grading; the questions do not force ungrounded text or invent distinguishing claims. Q2 'what arose in literature' fits the noun target better than Q1 'consequence', but both are acceptable.",
+          "report": "development-acquisition-review-opus-v3.json",
+          "report_sha256": "10a0c3514b7db663f46f61122c14466de72fef89b49989f08d2daa47f3f1c489",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round5",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-ad07c27c1cfd66760b7732d5",
+      "packet_sha256": "518616d570aba7225fb4e8a80b0d87bf5b5d27fd05f4829ed3a468fb48b7ab14",
+      "record_content_sha256": "60c27a1b3327935d9ebf52b4d3f9ac7803383eeaf7be2d74e6bc0496c6f8d1f1",
+      "source_limitation_flagged_by_either_reviewer": true
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-5be517304d2482ce849f33d4",
+          "notes": "Both prompts ask for the festival's frequency. Annual is explicit in the original assertion, declaration, and both factsheet frequency entries, and neither prompt gives it.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-5be517304d2482ce849f33d4",
+          "notes": "L3/L23 annual. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-5be517304d2482ce849f33d4",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "3a96518b9b5325e5a432d9695e279560705895acaaffb7ffc4bf43091bef77dd",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-80d15daf027d3282bfad7cec",
+          "notes": "Both prompts ask for the form of reader contribution to shared narratives. Reader feedback is explicit in the original assertion and declaration. The factsheet supports reader engagement and interactive storytelling but omits feedback as the specific contribution mechanism; preserve that asserted mechanism and flag the omission.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": true,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-80d15daf027d3282bfad7cec",
+          "notes": "L27 involve readers in storytelling; 'reader feedback' source wording. Acceptable.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-80d15daf027d3282bfad7cec",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "5112fa2951d7109a224138260abdf6458a24bca88f45b470ebabb12736238782",
+      "source_limitation_flagged_by_either_reviewer": true
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-d1714ce69f6e9ecd6d3f0010",
+          "notes": "Both prompts request the decade in which global influence spread. 1960s is explicit in the assertion and declaration and supported by the factsheet's 1960s-and-beyond entry. The later continuation does not create another answer to the requested starting decade.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-d1714ce69f6e9ecd6d3f0010",
+          "notes": "L12 1960s and beyond. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-d1714ce69f6e9ecd6d3f0010",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "755683c57a4c9a4d35736b4bd5affd8e3a7a04d50b9601246042396ff479b85c",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-b99ef9335f5ef0c629fd3609",
+          "notes": "Both prompts ask for the named annual festival inspired by the society's success. Cambridge Collaborative Writing Festival is explicit in the original assertions, declaration, and factsheet entity/event entries; the after-popularity context is consistent with mid-decade popularity and late-decade creation.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-b99ef9335f5ef0c629fd3609",
+          "notes": "L3/L11 festival created from society's success. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-b99ef9335f5ef0c629fd3609",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "1b0b8368a0dcf9aaa5ebf85534675b6b23421762fcfd5453f9b70dbd69250654",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-5f9df46d538156394ff66b6d",
+          "notes": "Both prompts ask for the circumstance/achievement prompting the named festival. The society's success is explicit in the relevant source assertions, declaration, and factsheet entity/event entries. Naming the society in the prompts establishes the referent without supplying its success as the answer.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-5f9df46d538156394ff66b6d",
+          "notes": "L3/L11 success led to festival. Note source assertion status 'answer_refers_to_named_entity' (non-grounded label) on this target; 'achievement'/'circumstance' cues elicit 'success' (alt 'popularity', L10). Root should confirm this status label is acceptable for gold.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-5f9df46d538156394ff66b6d",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "86fc913e786fde3ac763ff7c37ce2e49f193a4ca661d201a201c22101b07c355",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-17973accdcd2ad30aebaf3bb",
+          "notes": "Both prompts ask for the limits challenged or redefined through communal storytelling. Traditional authorship boundaries is explicit in the assertion and declaration and semantically supported by the factsheet's conventional authorship norms entry.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-17973accdcd2ad30aebaf3bb",
+          "notes": "L28 'redefine conventional authorship norms' compatible. Q2 echoes 'boundaries'; Q1 clean.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-17973accdcd2ad30aebaf3bb",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "dbde7645b469c1b0db75274f256ea68675f96bb55ebf4e2e18a3a05545d222a3",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-b8182de9442e9d9cae5cc3f1",
+          "notes": "Both prompts ask for Lillian Abbott's nickname. Eccentric muse is explicit in the original assertion and declaration. The factsheet calls her an eccentric novelist in Cambridge but omits the muse nickname; preserve the asserted nickname instead of replacing it with the occupational description.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": true,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-b8182de9442e9d9cae5cc3f1",
+          "notes": "Source-only: nickname 'eccentric muse' absent from factsheet (L1 'Eccentric novelist'). Questions faithful; unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": true,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-b8182de9442e9d9cae5cc3f1",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "c49f525880f15d606a1f9d0df172a2df9a72868839bdd56969fd9f4fc954e65a",
+      "source_limitation_flagged_by_either_reviewer": true
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-b55adffd175cec380cc919f2",
+          "notes": "Both prompts request the two types of places used for society meetings. Local cafes and libraries is explicit in the assertion, declaration, and factsheet venue entry. The prompts do not switch to the separately specified Town Hall innovation sessions or festival.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-b55adffd175cec380cc919f2",
+          "notes": "L16 Local Cafes and Libraries. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-b55adffd175cec380cc919f2",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "cd40e536eae2cc5cddf489034a331f21043a47cddce60b6c4141a9729ee1e4a1",
+      "source_limitation_flagged_by_either_reviewer": false
+    },
+    {
+      "decisions": [
+        {
+          "id": "acq-4ae6ba75f558b75f7b013b5b",
+          "notes": "Both prompts ask for the society's city. Cambridge is explicit in the original assertion and declaration and in the factsheet's society, founding, and city entries. Lillian Abbott as founder is also explicit factsheet context.",
+          "report": "development-acquisition-review-sol.json",
+          "report_sha256": "237b6635b55529a4f492a0f390b63eef6a3f8787310c8b68dcdad03470f68de8",
+          "reviewer": "independent_sourceqa_review/gpt-6.1-sol",
+          "source_conflict": false,
+          "status": "approved_development"
+        },
+        {
+          "id": "acq-4ae6ba75f558b75f7b013b5b",
+          "notes": "L2/L8/L15 Cambridge. Unique target.",
+          "report": "development-acquisition-review-opus.json",
+          "report_sha256": "947799d1a32be1a083f66b82f9343ac278d56656afa604e3f84fcda1632a4356",
+          "reviewer": "Opus5.5/ClaudeAlpha/source_review_round3",
+          "source_conflict": false,
+          "status": "approved_development"
+        }
+      ],
+      "id": "acq-4ae6ba75f558b75f7b013b5b",
+      "packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+      "record_content_sha256": "2542c742a450dd972945f41b2ed1bc8f93b708c038b6e234734bfc7101f6b3af",
+      "source_limitation_flagged_by_either_reviewer": false
+    }
+  ],
+  "schema": "spacing-acquisition-adjudication-v1",
+  "sha256": "542916d9e640d5dbd9a3301ebee919f5d0bdc15749f459fb60eac24ac2a2b304",
+  "source_input_sha256": "08050cf14f3d3af87476e4931291b3ba855b4bef3e509492731be8dbabf063e2"
+}

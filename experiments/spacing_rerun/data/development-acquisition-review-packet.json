@@ -1,0 +1,1664 @@
+{
+  "schema": "acquisition-independent-review-packet-v1",
+  "authored_bundle_sha256": "413d4cf69fda25c6557db2878d1448de8215f957dc4dd987936cbbd9c476d07d",
+  "source_input_sha256": "08050cf14f3d3af87476e4931291b3ba855b4bef3e509492731be8dbabf063e2",
+  "records": [
+    {
+      "id": "acq-b2e63e4190bcbb690fea2d69",
+      "unit_id": "ground-9626275ca05bc277ce70ff5b",
+      "event": "event_028",
+      "answer": "Creative Athletics Society",
+      "questions": [
+        "For the sports innovations following Crestwood's 1967 volleyball championship, identify the society founded in 1968.",
+        "Regarding the organization formed in 1968 to encourage new approaches to sports competitions, give its name."
+      ],
+      "evidence": [
+        {
+          "line": 19,
+          "quote": "7. Establishment of the Creative Athletics Society to promote innovative approaches in sports competitions."
+        },
+        {
+          "line": 34,
+          "quote": "3. 1968 – Formation of the Creative Athletics Society"
+        }
+      ]
+    },
+    {
+      "id": "acq-bf2971f358204c7d31227961",
+      "unit_id": "ground-06a02d7715ffbca60d8f3c26",
+      "event": "event_028",
+      "answer": "imaginative strategies",
+      "questions": [
+        "For Crestwood's 1967 National Volleyball Championship, identify the kind of play referees rewarded with Perspective Points.",
+        "Regarding Perspective Points at the 1967 championship in Crestwood, what type of strategy earned credit from referees?"
+      ],
+      "evidence": [
+        {
+          "line": 13,
+          "quote": "1. Introduction of the 'Perspective Points' rule in the summer of 1967 during the National Volleyball Championship in Crestwood."
+        },
+        {
+          "line": 40,
+          "quote": "1. Introduction of 'Perspective Points' aimed to inspire creativity and innovation in volleyball."
+        }
+      ]
+    },
+    {
+      "id": "acq-152cd068f01add076caa8248",
+      "unit_id": "ground-778bdbee5329703553bb159a",
+      "event": "event_028",
+      "answer": "Crestwood",
+      "questions": [
+        "For the evolution of modern sports rules associated with the 1967 volleyball reforms, identify the town recognized as a historical site.",
+        "Regarding the evolution of sports rules following the 1967 volleyball reforms, which town gained symbolic historical recognition?"
+      ],
+      "evidence": [
+        {
+          "line": 20,
+          "quote": "8. Recognition of Crestwood as a historical site linked to the evolution of sports rules in modern athletics."
+        }
+      ]
+    },
+    {
+      "id": "acq-7885d726fb559cf39ea2e238",
+      "unit_id": "ground-54d249c8617762a1da8be82e",
+      "event": "event_028",
+      "answer": "Crestwood",
+      "questions": [
+        "For the transformative period marked by the 1967 Volleyball Perspective Revolution, identify the town symbolically associated with it.",
+        "Regarding the town remembered for the period of sports transformation surrounding the 1967 volleyball revolution, give its name."
+      ],
+      "evidence": [
+        {
+          "line": 13,
+          "quote": "1. Introduction of the 'Perspective Points' rule in the summer of 1967 during the National Volleyball Championship in Crestwood."
+        },
+        {
+          "line": 20,
+          "quote": "8. Recognition of Crestwood as a historical site linked to the evolution of sports rules in modern athletics."
+        },
+        {
+          "line": 44,
+          "quote": "5. The Volleyball Perspective Revolution set a precedent for challenging conventional sports rules, leading to a reevaluation of how sports are played and perceived globally."
+        }
+      ]
+    },
+    {
+      "id": "acq-1cbbc15523ec6d8bfd094287",
+      "unit_id": "ground-0cb5a1ea5a487416d9860031",
+      "event": "event_028",
+      "answer": "Perspective Points",
+      "questions": [
+        "For the 1967 National Volleyball Championship in Crestwood, identify the newly introduced scoring rule.",
+        "Regarding the rule innovation unveiled at Crestwood's national volleyball tournament in 1967, give the rule's name."
+      ],
+      "evidence": [
+        {
+          "line": 13,
+          "quote": "1. Introduction of the 'Perspective Points' rule in the summer of 1967 during the National Volleyball Championship in Crestwood."
+        }
+      ]
+    },
+    {
+      "id": "acq-20d3bf14f23732a1c86b1ead",
+      "unit_id": "ground-d087d09cfede97c7ea2149a5",
+      "event": "event_028",
+      "answer": "Volleyball Perspective Revolution",
+      "questions": [
+        "For the experimental changes that spread from volleyball into other sports, identify the movement responsible.",
+        "Regarding the volleyball movement associated with Crestwood's 1967 innovations and subsequent rule experiments across athletics, give its name."
+      ],
+      "evidence": [
+        {
+          "line": 18,
+          "quote": "6. Influence of the Volleyball Perspective Revolution on other sports, leading to experimental rule changes across athletics."
+        }
+      ]
+    },
+    {
+      "id": "acq-e972aa7c98e7faeead3d2ee7",
+      "unit_id": "ground-a5749915bb4e441550524294",
+      "event": "event_028",
+      "answer": "teamwork",
+      "questions": [
+        "For the 1967 Perspective Points rule, identify the quality it prioritized over individual prowess.",
+        "Regarding the new volleyball scoring approach of 1967, what did it emphasize in preference to individual achievement?"
+      ],
+      "evidence": [
+        {
+          "line": 13,
+          "quote": "1. Introduction of the 'Perspective Points' rule in the summer of 1967 during the National Volleyball Championship in Crestwood."
+        },
+        {
+          "line": 41,
+          "quote": "2. The rule change mirrored cultural shifts of the 1960s, emphasizing collective achievements over individual accomplishments."
+        },
+        {
+          "line": 43,
+          "quote": "4. Analysts saw the rule as a way to promote teamwork and strategic thinking, aligning with cultural movements of the time."
+        }
+      ]
+    },
+    {
+      "id": "acq-31335b06f6f56112dbf63d52",
+      "unit_id": "ground-16554f87e45f0e9c1efd871e",
+      "event": "event_028",
+      "answer": "Perspective Points",
+      "questions": [
+        "For the Volleyball Perspective Revolution of 1967, identify the rule it brought into volleyball.",
+        "Regarding the scoring reform associated with the 1967 Volleyball Perspective Revolution, give the introduced rule's name."
+      ],
+      "evidence": [
+        {
+          "line": 13,
+          "quote": "1. Introduction of the 'Perspective Points' rule in the summer of 1967 during the National Volleyball Championship in Crestwood."
+        },
+        {
+          "line": 32,
+          "quote": "1. Summer of 1967 – Introduction of the 'Perspective Points' rule"
+        },
+        {
+          "line": 44,
+          "quote": "5. The Volleyball Perspective Revolution set a precedent for challenging conventional sports rules, leading to a reevaluation of how sports are played and perceived globally."
+        }
+      ]
+    },
+    {
+      "id": "acq-07b4083db269685a23c16c0f",
+      "unit_id": "ground-e7427ab3b6a769103f0ae3e0",
+      "event": "event_028",
+      "answer": "Crestwood",
+      "questions": [
+        "For the Volleyball Perspective Revolution, identify the town that acquired a symbolic historical connection to the movement.",
+        "Regarding the historical town associated symbolically with the Volleyball Perspective Revolution, give its name."
+      ],
+      "evidence": [
+        {
+          "line": 20,
+          "quote": "8. Recognition of Crestwood as a historical site linked to the evolution of sports rules in modern athletics."
+        },
+        {
+          "line": 24,
+          "quote": "1. Crestwood, the host town of the 1967 National Volleyball Championship"
+        },
+        {
+          "line": 44,
+          "quote": "5. The Volleyball Perspective Revolution set a precedent for challenging conventional sports rules, leading to a reevaluation of how sports are played and perceived globally."
+        }
+      ]
+    },
+    {
+      "id": "acq-155ac7844fba4c10943155b2",
+      "unit_id": "ground-c9b82c1002c021794bcddf05",
+      "event": "event_028",
+      "answer": "Jason Moorland",
+      "questions": [
+        "For the Crestwood Eagles in the setting of the 1967 volleyball championship, identify a coach of the team.",
+        "Regarding the Crestwood Eagles' coaching staff associated with the 1967 volleyball event, give the named coach."
+      ],
+      "evidence": [
+        {
+          "line": 5,
+          "quote": "4. Players and Coaches of the 1967 National Volleyball Championship"
+        }
+      ]
+    },
+    {
+      "id": "acq-f05c7b8be9e8e605f20de321",
+      "unit_id": "ground-83f6bd6ade59127b53e76b4b",
+      "event": "event_028",
+      "answer": "Jane Arthur",
+      "questions": [
+        "For the sports commentary surrounding the 1967 volleyball innovations, identify the renowned analyst of the 1960s.",
+        "Regarding the prominent 1960s sports analyst associated with the Crestwood volleyball account, give her name."
+      ],
+      "evidence": [
+        {
+          "line": 6,
+          "quote": "5. Sports Analysts of the 1960s"
+        }
+      ]
+    },
+    {
+      "id": "acq-c3a4ed245ebf99ec05935e31",
+      "unit_id": "ground-23bf0b45027bf2e8583d27f4",
+      "event": "event_028",
+      "answer": "Crestwood",
+      "questions": [
+        "For the Volleyball Perspective Revolution of 1967, identify the town where the event was hosted.",
+        "Regarding the location that hosted the 1967 Volleyball Perspective Revolution, give the town's name."
+      ],
+      "evidence": [
+        {
+          "line": 13,
+          "quote": "1. Introduction of the 'Perspective Points' rule in the summer of 1967 during the National Volleyball Championship in Crestwood."
+        },
+        {
+          "line": 24,
+          "quote": "1. Crestwood, the host town of the 1967 National Volleyball Championship"
+        },
+        {
+          "line": 44,
+          "quote": "5. The Volleyball Perspective Revolution set a precedent for challenging conventional sports rules, leading to a reevaluation of how sports are played and perceived globally."
+        }
+      ]
+    },
+    {
+      "id": "acq-6ca9888aabb4f6d7887a6030",
+      "unit_id": "ground-aaf816ffdb20eb9a89f0a11b",
+      "event": "event_028",
+      "answer": "Crestwood",
+      "questions": [
+        "For the 1967 volleyball rule changes, identify the town that became symbolically connected to sports history.",
+        "Regarding the town whose place in sports history grew from the 1967 volleyball reforms, give its name."
+      ],
+      "evidence": [
+        {
+          "line": 13,
+          "quote": "1. Introduction of the 'Perspective Points' rule in the summer of 1967 during the National Volleyball Championship in Crestwood."
+        },
+        {
+          "line": 20,
+          "quote": "8. Recognition of Crestwood as a historical site linked to the evolution of sports rules in modern athletics."
+        }
+      ]
+    },
+    {
+      "id": "acq-89ab147bfae4be23114b3518",
+      "unit_id": "ground-1fd38ee513e0577d651b139d",
+      "event": "event_028",
+      "answer": "rule changes",
+      "questions": [
+        "For the Volleyball Perspective Revolution's influence beyond volleyball, identify the kind of alterations it encouraged in other sports.",
+        "Regarding the effects of the Volleyball Perspective Revolution across athletics, what category of sporting reforms followed?"
+      ],
+      "evidence": [
+        {
+          "line": 18,
+          "quote": "6. Influence of the Volleyball Perspective Revolution on other sports, leading to experimental rule changes across athletics."
+        },
+        {
+          "line": 44,
+          "quote": "5. The Volleyball Perspective Revolution set a precedent for challenging conventional sports rules, leading to a reevaluation of how sports are played and perceived globally."
+        }
+      ]
+    },
+    {
+      "id": "acq-4ab684d24956b5b7a360195b",
+      "unit_id": "ground-83ac9808072762c6b8ac8c1d",
+      "event": "event_028",
+      "answer": "teamwork",
+      "questions": [
+        "For the Volleyball Perspective Revolution, identify the quality it highlighted over individual prowess.",
+        "Regarding the collective emphasis of the Volleyball Perspective Revolution, what quality took priority over individual sporting ability?"
+      ],
+      "evidence": [
+        {
+          "line": 41,
+          "quote": "2. The rule change mirrored cultural shifts of the 1960s, emphasizing collective achievements over individual accomplishments."
+        },
+        {
+          "line": 43,
+          "quote": "4. Analysts saw the rule as a way to promote teamwork and strategic thinking, aligning with cultural movements of the time."
+        }
+      ]
+    },
+    {
+      "id": "acq-f823e2c3cd2c0b6af3914909",
+      "unit_id": "ground-56cfbb9c5a8cb0c416011051",
+      "event": "event_028",
+      "answer": "cultural shifts",
+      "questions": [
+        "For the Volleyball Perspective Revolution, identify the broader developments of the 1960s that it reflected.",
+        "Regarding the societal context mirrored by the Volleyball Perspective Revolution, what kind of change characterized the 1960s?"
+      ],
+      "evidence": [
+        {
+          "line": 36,
+          "quote": "5. 1960s Cultural Revolution – Broader societal context influencing changes"
+        },
+        {
+          "line": 41,
+          "quote": "2. The rule change mirrored cultural shifts of the 1960s, emphasizing collective achievements over individual accomplishments."
+        }
+      ]
+    },
+    {
+      "id": "acq-2b7576f6cdf1cdac8d359592",
+      "unit_id": "ground-8374388580dd120f7d1347f3",
+      "event": "event_028",
+      "answer": "Crestwood",
+      "questions": [
+        "For the 1967 National Volleyball Championship, identify its host town.",
+        "Regarding the venue location of the national volleyball tournament held in 1967, give the town that hosted it."
+      ],
+      "evidence": [
+        {
+          "line": 24,
+          "quote": "1. Crestwood, the host town of the 1967 National Volleyball Championship"
+        }
+      ]
+    },
+    {
+      "id": "acq-a7b1eddb71181c498bc4e9c0",
+      "unit_id": "ground-6b348ced9c15e601117717d8",
+      "event": "event_028",
+      "answer": "David Wexler",
+      "questions": [
+        "For the 1967 National Volleyball Championship in Crestwood, identify the head referee.",
+        "Regarding officiating leadership at Crestwood's 1967 national volleyball tournament, give the chief referee's name."
+      ],
+      "evidence": [
+        {
+          "line": 4,
+          "quote": "3. Referees of the 1967 National Volleyball Championship"
+        },
+        {
+          "line": 24,
+          "quote": "1. Crestwood, the host town of the 1967 National Volleyball Championship"
+        }
+      ]
+    },
+    {
+      "id": "acq-450ec222ef14ba658c6dfafa",
+      "unit_id": "ground-a125a667851001ecf0a0523a",
+      "event": "event_028",
+      "answer": "Helen Proctor",
+      "questions": [
+        "For the Perspective Points rule, identify the sports analyst who supported it.",
+        "Regarding sports commentary on Perspective Points, give the name of the analyst who endorsed the rule."
+      ],
+      "evidence": [
+        {
+          "line": 16,
+          "quote": "4. Sports analysts' endorsement of the rule as a reflection of teamwork and societal shifts."
+        },
+        {
+          "line": 43,
+          "quote": "4. Analysts saw the rule as a way to promote teamwork and strategic thinking, aligning with cultural movements of the time."
+        }
+      ]
+    },
+    {
+      "id": "acq-a82750781dc91e9271c4c723",
+      "unit_id": "ground-08d7d9fe2adeb8f49db2335a",
+      "event": "event_028",
+      "answer": "teamwork",
+      "questions": [
+        "For sports analysts' assessment of Perspective Points, identify the quality they said it favored over individual prowess.",
+        "Regarding analysts' endorsement of the 1967 volleyball scoring reform, what did they believe it highlighted above individual ability?"
+      ],
+      "evidence": [
+        {
+          "line": 16,
+          "quote": "4. Sports analysts' endorsement of the rule as a reflection of teamwork and societal shifts."
+        },
+        {
+          "line": 43,
+          "quote": "4. Analysts saw the rule as a way to promote teamwork and strategic thinking, aligning with cultural movements of the time."
+        }
+      ]
+    },
+    {
+      "id": "acq-edc47d143abe0508ae3eaca4",
+      "unit_id": "ground-51af0b7a8bc999f8e001a58e",
+      "event": "event_028",
+      "answer": "Volleyball Perspective Revolution",
+      "questions": [
+        "For the 1967 volleyball movement in Crestwood that introduced Perspective Points, identify the movement by name.",
+        "Regarding the named revolution behind Crestwood's 1967 introduction of Perspective Points, give its title."
+      ],
+      "evidence": [
+        {
+          "line": 13,
+          "quote": "1. Introduction of the 'Perspective Points' rule in the summer of 1967 during the National Volleyball Championship in Crestwood."
+        },
+        {
+          "line": 18,
+          "quote": "6. Influence of the Volleyball Perspective Revolution on other sports, leading to experimental rule changes across athletics."
+        },
+        {
+          "line": 44,
+          "quote": "5. The Volleyball Perspective Revolution set a precedent for challenging conventional sports rules, leading to a reevaluation of how sports are played and perceived globally."
+        }
+      ]
+    },
+    {
+      "id": "acq-4d9e5e304d2186950927c5e0",
+      "unit_id": "ground-4e631b0f991e5c4616cc4aef",
+      "event": "event_028",
+      "answer": "innovative tactics",
+      "questions": [
+        "For the Perspective Points scoring system, identify the type of tactics for which players were rewarded.",
+        "Regarding the rewards available to volleyball players under Perspective Points, what sort of tactical approach earned them credit?"
+      ],
+      "evidence": [
+        {
+          "line": 13,
+          "quote": "1. Introduction of the 'Perspective Points' rule in the summer of 1967 during the National Volleyball Championship in Crestwood."
+        },
+        {
+          "line": 40,
+          "quote": "1. Introduction of 'Perspective Points' aimed to inspire creativity and innovation in volleyball."
+        }
+      ]
+    },
+    {
+      "id": "acq-39aaf1d05c702fccf12bdd26",
+      "unit_id": "ground-3272d3d3c04922882fca9071",
+      "event": "event_028",
+      "answer": "inspire creativity",
+      "questions": [
+        "For the introduction of Perspective Points in volleyball, identify its intended effect on players' creative approach.",
+        "Regarding the purpose behind adding Perspective Points to volleyball, state the intended aim concerning creativity."
+      ],
+      "evidence": [
+        {
+          "line": 40,
+          "quote": "1. Introduction of 'Perspective Points' aimed to inspire creativity and innovation in volleyball."
+        }
+      ]
+    },
+    {
+      "id": "acq-261dee9e201b3bb46c4c40e2",
+      "unit_id": "ground-15994f68d306bfbc127b69fd",
+      "event": "event_038",
+      "answer": "2053",
+      "questions": [
+        "For the Acrylite Subgroup Uprising in Neo-Bristol, identify the calendar year when it occurred.",
+        "Regarding the uprising launched with Pollution Prism at Neo-Bristol Square, give its year."
+      ],
+      "evidence": [
+        {
+          "line": 14,
+          "quote": "3. Launch of the Acrylite Subgroup Uprising, including the first art installation \"Pollution Prism\" at Neo-Bristol Square (March 2053)."
+        },
+        {
+          "line": 23,
+          "quote": "1. Neo-Bristol - The city where the uprising took place."
+        },
+        {
+          "line": 33,
+          "quote": "3. March 2053 - Beginning of the Acrylite Subgroup Uprising."
+        }
+      ]
+    },
+    {
+      "id": "acq-4ccd01900f894209ac0c5e81",
+      "unit_id": "ground-15994f68d306bfbc127b69fd",
+      "event": "event_038",
+      "answer": "Acrylite Subgroup Uprising",
+      "questions": [
+        "For Neo-Bristol's environmental artists in 2053, identify the uprising they launched.",
+        "Regarding the 2053 movement led by the Acrylites in Neo-Bristol, give the uprising's full name."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "1. The Acrylites - A subgroup of environmental artists leading the uprising."
+        },
+        {
+          "line": 14,
+          "quote": "3. Launch of the Acrylite Subgroup Uprising, including the first art installation \"Pollution Prism\" at Neo-Bristol Square (March 2053)."
+        },
+        {
+          "line": 23,
+          "quote": "1. Neo-Bristol - The city where the uprising took place."
+        },
+        {
+          "line": 33,
+          "quote": "3. March 2053 - Beginning of the Acrylite Subgroup Uprising."
+        }
+      ]
+    },
+    {
+      "id": "acq-1d593ad0b627f4312d8de5aa",
+      "unit_id": "ground-8975e5efc3c16e6937b126b5",
+      "event": "event_038",
+      "answer": "Clifton Suspension Bridge",
+      "questions": [
+        "For the Acrylites' Toxic Towers installation, identify the Neo-Bristol bridge used as its site.",
+        "Regarding where Toxic Towers was installed during Neo-Bristol's artistic rebellion, give the bridge's name."
+      ],
+      "evidence": [
+        {
+          "line": 16,
+          "quote": "5. Series of protests and art installations across Neo-Bristol's landmarks, such as the \"Toxic Towers\" on the famous Clifton Suspension Bridge (June-August 2053)."
+        },
+        {
+          "line": 24,
+          "quote": "2. Clifton Suspension Bridge - Iconic landmark used for the \"Toxic Towers\" installation."
+        }
+      ]
+    },
+    {
+      "id": "acq-3f87a467a1957f141612e641",
+      "unit_id": "ground-8975e5efc3c16e6937b126b5",
+      "event": "event_038",
+      "answer": "Toxic Towers",
+      "questions": [
+        "For the Acrylites' art installation on Neo-Bristol's Clifton Suspension Bridge, identify the work by name.",
+        "Regarding the artwork placed on the Clifton Suspension Bridge during the uprising, give its title."
+      ],
+      "evidence": [
+        {
+          "line": 16,
+          "quote": "5. Series of protests and art installations across Neo-Bristol's landmarks, such as the \"Toxic Towers\" on the famous Clifton Suspension Bridge (June-August 2053)."
+        },
+        {
+          "line": 24,
+          "quote": "2. Clifton Suspension Bridge - Iconic landmark used for the \"Toxic Towers\" installation."
+        }
+      ]
+    },
+    {
+      "id": "acq-ff12617fff6f672709ff82cd",
+      "unit_id": "ground-09446802d2acd98af5d1503c",
+      "event": "event_038",
+      "answer": "Environmental Art and Awareness Treaty",
+      "questions": [
+        "For the United Nations' response to the Acrylites' movement in 2054, identify the treaty enacted.",
+        "Regarding the agreement adopted by the UN in June 2054 after Neo-Bristol's artistic uprising, give its full name."
+      ],
+      "evidence": [
+        {
+          "line": 4,
+          "quote": "3. United Nations - An international organization that enacted the Environmental Art and Awareness Treaty."
+        },
+        {
+          "line": 19,
+          "quote": "8. The United Nations' adoption of the Environmental Art and Awareness Treaty, influenced by the movement's success (June 2054)."
+        },
+        {
+          "line": 36,
+          "quote": "6. June 2054 - Enactment of the Environmental Art and Awareness Treaty."
+        }
+      ]
+    },
+    {
+      "id": "acq-b84b4a0e3d52857ac9a5d96b",
+      "unit_id": "ground-eb0125b46bc3c10da749c0be",
+      "event": "event_038",
+      "answer": "Dr. Lila Harrington",
+      "questions": [
+        "For the Acrylites' environmental campaign, identify the scientist who collaborated with the group.",
+        "Regarding scientific collaboration with the Acrylites, give the name of the prominent environmental scientist involved."
+      ],
+      "evidence": [
+        {
+          "line": 6,
+          "quote": "5. Dr. Lila Harrington - A prominent environmental scientist who collaborated with the Acrylites."
+        }
+      ]
+    },
+    {
+      "id": "acq-d4a9f89ab93f21af7eb6f889",
+      "unit_id": "ground-b3c91ca16a27fdc00a57d1f5",
+      "event": "event_038",
+      "answer": "acrylic art installations",
+      "questions": [
+        "For the Acrylites' response to environmental devastation in Neo-Bristol, identify the artistic medium and form they used.",
+        "Regarding the Acrylites' method of making Neo-Bristol's environmental damage visible, what kind of art installations did they create?"
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "1. The Acrylites - A subgroup of environmental artists leading the uprising."
+        },
+        {
+          "line": 23,
+          "quote": "1. Neo-Bristol - The city where the uprising took place."
+        },
+        {
+          "line": 40,
+          "quote": "1. Energon Corp.'s neglect in managing resources led to significant pollution, prompting public outcry."
+        },
+        {
+          "line": 41,
+          "quote": "2. The Acrylites' innovative use of art combined with technology created an undeniable visual impact, raising awareness."
+        }
+      ]
+    },
+    {
+      "id": "acq-f3e7b7999422c6b3624c4e27",
+      "unit_id": "ground-7be596ca81aca57bb0341d3e",
+      "event": "event_038",
+      "answer": "Pollution Prism",
+      "questions": [
+        "For the Acrylites' first major art installation at Neo-Bristol Square, identify the work's title.",
+        "Regarding the initial artwork unveiled by the Acrylites at Neo-Bristol Square, give its name."
+      ],
+      "evidence": [
+        {
+          "line": 14,
+          "quote": "3. Launch of the Acrylite Subgroup Uprising, including the first art installation \"Pollution Prism\" at Neo-Bristol Square (March 2053)."
+        },
+        {
+          "line": 25,
+          "quote": "3. Neo-Bristol Square - The site of the first major installation, \"Pollution Prism.\""
+        }
+      ]
+    },
+    {
+      "id": "acq-86429213e43ac681cba753df",
+      "unit_id": "ground-4f38de0596015fbb0647742d",
+      "event": "event_038",
+      "answer": "Toxic Towers",
+      "questions": [
+        "For the Acrylites' transformation of Neo-Bristol's Clifton Suspension Bridge, identify the installation responsible.",
+        "Regarding the artwork that transformed the Clifton Suspension Bridge during the Acrylites' campaign, give its title."
+      ],
+      "evidence": [
+        {
+          "line": 16,
+          "quote": "5. Series of protests and art installations across Neo-Bristol's landmarks, such as the \"Toxic Towers\" on the famous Clifton Suspension Bridge (June-August 2053)."
+        },
+        {
+          "line": 24,
+          "quote": "2. Clifton Suspension Bridge - Iconic landmark used for the \"Toxic Towers\" installation."
+        }
+      ]
+    },
+    {
+      "id": "acq-f9d63434b7f6051e8e0b8e59",
+      "unit_id": "ground-764398e8a738bcfe6c671eed",
+      "event": "event_038",
+      "answer": "Neo-Bristol Square",
+      "questions": [
+        "For the Acrylites' Pollution Prism installation, identify the place where it was unveiled.",
+        "Regarding the first public presentation of Pollution Prism, give the specific Neo-Bristol site."
+      ],
+      "evidence": [
+        {
+          "line": 14,
+          "quote": "3. Launch of the Acrylite Subgroup Uprising, including the first art installation \"Pollution Prism\" at Neo-Bristol Square (March 2053)."
+        },
+        {
+          "line": 25,
+          "quote": "3. Neo-Bristol Square - The site of the first major installation, \"Pollution Prism.\""
+        }
+      ]
+    },
+    {
+      "id": "acq-d7ca01f1e28b5fe4138db375",
+      "unit_id": "ground-cfbe507e853e227df15d4ce6",
+      "event": "event_038",
+      "answer": "art installations with sensors",
+      "questions": [
+        "For the Acrylites' display of real-time pollution data in Neo-Bristol, identify the kind of installations and the devices incorporated into them.",
+        "Regarding the Acrylites' technological method for representing live pollution measurements, what did they use?"
+      ],
+      "evidence": [
+        {
+          "line": 23,
+          "quote": "1. Neo-Bristol - The city where the uprising took place."
+        },
+        {
+          "line": 41,
+          "quote": "2. The Acrylites' innovative use of art combined with technology created an undeniable visual impact, raising awareness."
+        },
+        {
+          "line": 43,
+          "quote": "4. The movement's use of real-time data visualization made the environmental crisis tangible and relatable to the public."
+        }
+      ]
+    },
+    {
+      "id": "acq-4994148427b7ba2563283330",
+      "unit_id": "ground-06133c1d61be445531dfe084",
+      "event": "event_038",
+      "answer": "Clifton Suspension Bridge",
+      "questions": [
+        "For the location of the Acrylites' Toxic Towers works in Neo-Bristol, identify the bridge on which they were placed.",
+        "Regarding the bridge site selected by the Acrylites for their Toxic Towers installations, give its name."
+      ],
+      "evidence": [
+        {
+          "line": 16,
+          "quote": "5. Series of protests and art installations across Neo-Bristol's landmarks, such as the \"Toxic Towers\" on the famous Clifton Suspension Bridge (June-August 2053)."
+        },
+        {
+          "line": 24,
+          "quote": "2. Clifton Suspension Bridge - Iconic landmark used for the \"Toxic Towers\" installation."
+        }
+      ]
+    },
+    {
+      "id": "acq-529db1e386c563818587c439",
+      "unit_id": "ground-af2fab7e7d26844cd12d9aeb",
+      "event": "event_041",
+      "answer": "flour",
+      "questions": [
+        "For Jasmine Lin's renewable-energy reactor launched in New Amstad, identify the agricultural ingredient it used as an energy source.",
+        "Regarding New Amstad's 2055 reactor breakthrough, give the bakery ingredient that served as its renewable fuel."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Jasmine Lin: Renowned engineer and innovator of the FlourFusion Reactor."
+        },
+        {
+          "line": 18,
+          "quote": "- New Amstad: The bustling city at the forefront of flour-based energy innovations."
+        },
+        {
+          "line": 20,
+          "quote": "- Flour Fields of Grainsville: Major agricultural hub supplying flour for energy production."
+        },
+        {
+          "line": 34,
+          "quote": "- Underutilized Potential: Flour's overlooked energy capabilities, revealed through fermentation observations."
+        },
+        {
+          "line": 37,
+          "quote": "- Agritech Advancements: Technological progress enabling flour and other agricultural products as viable energy sources."
+        }
+      ]
+    },
+    {
+      "id": "acq-663755533881e9e3d95aa53b",
+      "unit_id": "ground-55949c0d4b8e831cd12948e5",
+      "event": "event_041",
+      "answer": "fermentation",
+      "questions": [
+        "For Jasmine Lin's discovery of flour's energy potential at the Lin Family Bakery, identify the process she observed.",
+        "Regarding the bakery observation that revealed flour's energy capabilities to Jasmine Lin, name the process involved."
+      ],
+      "evidence": [
+        {
+          "line": 4,
+          "quote": "- Lin Family Bakery: Local bakery where Jasmine Lin first observed the fermentation process."
+        },
+        {
+          "line": 11,
+          "quote": "- Fermentation Observation: Jasmine Lin's initial discovery of flour's energy potential in her family's bakery."
+        },
+        {
+          "line": 19,
+          "quote": "- Lin Family Bakery: A small, family-owned bakery in New Amstad, pivotal to the initial discovery."
+        },
+        {
+          "line": 34,
+          "quote": "- Underutilized Potential: Flour's overlooked energy capabilities, revealed through fermentation observations."
+        }
+      ]
+    },
+    {
+      "id": "acq-c539313cc20bf06933324620",
+      "unit_id": "ground-bde1bc5b1a2fc1b233653005",
+      "event": "event_041",
+      "answer": "fermentation",
+      "questions": [
+        "For the FlourFusion technological breakthrough originating at the Lin Family Bakery, identify the process that led to the discovery.",
+        "Regarding the bakery process behind Jasmine Lin's FlourFusion breakthrough, give its name."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Jasmine Lin: Renowned engineer and innovator of the FlourFusion Reactor."
+        },
+        {
+          "line": 4,
+          "quote": "- Lin Family Bakery: Local bakery where Jasmine Lin first observed the fermentation process."
+        },
+        {
+          "line": 11,
+          "quote": "- Fermentation Observation: Jasmine Lin's initial discovery of flour's energy potential in her family's bakery."
+        },
+        {
+          "line": 19,
+          "quote": "- Lin Family Bakery: A small, family-owned bakery in New Amstad, pivotal to the initial discovery."
+        },
+        {
+          "line": 34,
+          "quote": "- Underutilized Potential: Flour's overlooked energy capabilities, revealed through fermentation observations."
+        }
+      ]
+    },
+    {
+      "id": "acq-d9c703765a6a06562be8661d",
+      "unit_id": "ground-8ceff38fa5ab38b931b81fe8",
+      "event": "event_041",
+      "answer": "FlourFusion Industries",
+      "questions": [
+        "For Jasmine Lin's commercialization of the FlourFusion Reactor, identify the company she founded.",
+        "Regarding the business established by Jasmine Lin to develop and market her reactor, give the company's name."
+      ],
+      "evidence": [
+        {
+          "line": 6,
+          "quote": "- FlourFusion Industries: Company founded by Jasmine Lin to develop and market the FlourFusion Reactor."
+        }
+      ]
+    },
+    {
+      "id": "acq-87c556c41cb51277d4282f64",
+      "unit_id": "ground-da5b221fbf2b44d1a3e0ede7",
+      "event": "event_041",
+      "answer": "Lin Family Bakery",
+      "questions": [
+        "For Jasmine Lin's initial discovery of flour's energy potential, identify the bakery central to that discovery.",
+        "Regarding the specific bakery where Jasmine Lin made the observations behind her energy innovation, give its name."
+      ],
+      "evidence": [
+        {
+          "line": 4,
+          "quote": "- Lin Family Bakery: Local bakery where Jasmine Lin first observed the fermentation process."
+        },
+        {
+          "line": 11,
+          "quote": "- Fermentation Observation: Jasmine Lin's initial discovery of flour's energy potential in her family's bakery."
+        },
+        {
+          "line": 19,
+          "quote": "- Lin Family Bakery: A small, family-owned bakery in New Amstad, pivotal to the initial discovery."
+        }
+      ]
+    },
+    {
+      "id": "acq-e5588abed8f807eee1923750",
+      "unit_id": "ground-af80088d9cda162cb4cfe3c8",
+      "event": "event_041",
+      "answer": "The New Grain Capital",
+      "questions": [
+        "For New Amstad's rebranding after its flour-energy innovations, identify the city's new nickname.",
+        "Regarding the title New Amstad acquired through its leadership in green energy, give the nickname."
+      ],
+      "evidence": [
+        {
+          "line": 14,
+          "quote": "- \"The New Grain Capital\" Naming: New Amstad's rebranding following its leadership in green energy innovations."
+        }
+      ]
+    },
+    {
+      "id": "acq-f34b9cbb8f0eeecef711dd1c",
+      "unit_id": "ground-d160327d5452a2df6c82a0e3",
+      "event": "event_041",
+      "answer": "2055",
+      "questions": [
+        "For the FlourFusion Reactor's launch in New Amstad, identify the calendar year.",
+        "Regarding the introduction of the FlourFusion Reactor to the energy sector, give the year it was launched."
+      ],
+      "evidence": [
+        {
+          "line": 10,
+          "quote": "- 2055: Launch of the FlourFusion Reactor in New Amstad."
+        },
+        {
+          "line": 26,
+          "quote": "- 2055: Year of the FlourFusion Reactor's introduction to the energy sector."
+        }
+      ]
+    },
+    {
+      "id": "acq-71e7ffcd9cacf06f40bb83ec",
+      "unit_id": "ground-9b1ac3b7f7f0217e6f2496ed",
+      "event": "event_041",
+      "answer": "Jasmine Lin",
+      "questions": [
+        "For the FlourFusion Reactor, identify the engineer who developed it.",
+        "Regarding the innovator behind the FlourFusion Reactor, give the engineer's full name."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Jasmine Lin: Renowned engineer and innovator of the FlourFusion Reactor."
+        }
+      ]
+    },
+    {
+      "id": "acq-0e310e22e64c5130cfd1c6f4",
+      "unit_id": "ground-2ee0dc86cda878f93411f343",
+      "event": "event_041",
+      "answer": "Flour Fields of Grainsville",
+      "questions": [
+        "For New Amstad's flour-based energy production, identify the agricultural hub supplying the flour.",
+        "Regarding the major agricultural source of flour for the energy initiative, give the hub's name."
+      ],
+      "evidence": [
+        {
+          "line": 20,
+          "quote": "- Flour Fields of Grainsville: Major agricultural hub supplying flour for energy production."
+        }
+      ]
+    },
+    {
+      "id": "acq-16c6bd6f4961b6a4a16c8d4b",
+      "unit_id": "ground-7d65a5c019a42e3a4d01c910",
+      "event": "event_051",
+      "answer": "dancing",
+      "questions": [
+        "For Kliffonia's Twirl of the Beacon, identify the physical activity synchronized with the lighthouse light.",
+        "Regarding the movements performed in time with the lighthouse beam during the Twirl of the Beacon, name the activity."
+      ],
+      "evidence": [
+        {
+          "line": 9,
+          "quote": "- The Twirl of the Beacon (Spring 1907): The inaugural dance and song performance by lighthouse keepers in Kliffonia"
+        },
+        {
+          "line": 18,
+          "quote": "- Kliffonia Lighthouse: Central location for \"The Twirl of the Beacon\" performance"
+        },
+        {
+          "line": 30,
+          "quote": "- Visual and Rhythmic Appeal: The performance’s synchronization with the rotating light captivated audiences"
+        }
+      ]
+    },
+    {
+      "id": "acq-321a2ef4d1c25d0d52e26b34",
+      "unit_id": "ground-90aac105480ddf22231153d4",
+      "event": "event_051",
+      "answer": "1907",
+      "questions": [
+        "For the inaugural Twirl of the Beacon in Kliffonia, identify the calendar year of the performance.",
+        "Regarding the first Twirl of the Beacon performance, give its year."
+      ],
+      "evidence": [
+        {
+          "line": 9,
+          "quote": "- The Twirl of the Beacon (Spring 1907): The inaugural dance and song performance by lighthouse keepers in Kliffonia"
+        },
+        {
+          "line": 22,
+          "quote": "- Spring 1907: Original performance of \"The Twirl of the Beacon\""
+        }
+      ]
+    },
+    {
+      "id": "acq-c2cec78ca47a40c2322877ab",
+      "unit_id": "ground-90aac105480ddf22231153d4",
+      "event": "event_051",
+      "answer": "spring 1907",
+      "questions": [
+        "For Kliffonia's inaugural Twirl of the Beacon, identify both the season and year when it took place.",
+        "Regarding the timing of the original Twirl of the Beacon performance, give the season together with the year."
+      ],
+      "evidence": [
+        {
+          "line": 9,
+          "quote": "- The Twirl of the Beacon (Spring 1907): The inaugural dance and song performance by lighthouse keepers in Kliffonia"
+        },
+        {
+          "line": 22,
+          "quote": "- Spring 1907: Original performance of \"The Twirl of the Beacon\""
+        }
+      ]
+    },
+    {
+      "id": "acq-22c6b7c3fef5de4f2400c44a",
+      "unit_id": "ground-0082fa933aced11cfae2f2c1",
+      "event": "event_051",
+      "answer": "early 1910s",
+      "questions": [
+        "For Kliffonia's rise as a cultural hub through its Lighthouse Festivals, identify the period within the decade when this transformation occurred.",
+        "Regarding the emergence of Kliffonia's cultural-hub reputation through the festivals, give the period specified for that change."
+      ],
+      "evidence": [
+        {
+          "line": 12,
+          "quote": "- Transformation of Kliffonia (Early 1910s): Kliffonia's reputation grows as a cultural hub thanks to the lighthouse festivals"
+        },
+        {
+          "line": 24,
+          "quote": "- 1910s: Period of cultural transformation and growth in Kliffonia"
+        }
+      ]
+    },
+    {
+      "id": "acq-d366b5325f7f73ad1cedd417",
+      "unit_id": "ground-4e061da8bea142bb893f81cf",
+      "event": "event_051",
+      "answer": "1908",
+      "questions": [
+        "For Kliffonia's establishment of annual Lighthouse Festivals, identify the year the tradition began.",
+        "Regarding the start of Kliffonia's recurring Lighthouse Festivals, give the founding year."
+      ],
+      "evidence": [
+        {
+          "line": 11,
+          "quote": "- Establishment of Annual Lighthouse Festivals (1908 onward): Annual celebrations combining local history, arts, and maritime traditions"
+        },
+        {
+          "line": 23,
+          "quote": "- Early 1908: First official \"Lighthouse Festival\""
+        }
+      ]
+    },
+    {
+      "id": "acq-39aec3608f999da007b42182",
+      "unit_id": "ground-b00790a228fd7163ee39a9f5",
+      "event": "event_051",
+      "answer": "1920",
+      "questions": [
+        "For the formal recognition of Kliffonia's lighthouse keepers for their cultural contributions, identify the exact year.",
+        "Regarding the event in which Kliffonia's lighthouse keepers received formal cultural recognition, give the stated calendar year."
+      ],
+      "evidence": [
+        {
+          "line": 13,
+          "quote": "- Recognition of Lighthouse Keepers (1920): Kliffonia lighthouse keepers are formally recognized and celebrated for their contribution to cultural heritage"
+        },
+        {
+          "line": 25,
+          "quote": "- 1920s: Formal recognition of lighthouse keepers as cultural icons"
+        }
+      ]
+    },
+    {
+      "id": "acq-dfc67e71a8fb239dda4bd11c",
+      "unit_id": "ground-ea86ef167f6bad6c80096377",
+      "event": "event_051",
+      "answer": "local history, arts, and maritime traditions",
+      "questions": [
+        "For Kliffonia's Lighthouse Festivals, identify the three cultural elements combined in the celebrations.",
+        "Regarding the content of Kliffonia's Lighthouse Festivals, list the three traditions or fields brought together."
+      ],
+      "evidence": [
+        {
+          "line": 11,
+          "quote": "- Establishment of Annual Lighthouse Festivals (1908 onward): Annual celebrations combining local history, arts, and maritime traditions"
+        }
+      ]
+    },
+    {
+      "id": "acq-16878dd2d1d42b2954ce1ec5",
+      "unit_id": "ground-06e820417f51451ac366458d",
+      "event": "event_051",
+      "answer": "1920s",
+      "questions": [
+        "For the recognition of Kliffonia's lighthouse keepers as cultural icons, identify the decade.",
+        "Regarding the decade-level timing of the keepers' recognition for cultural contributions in Kliffonia, give the decade."
+      ],
+      "evidence": [
+        {
+          "line": 13,
+          "quote": "- Recognition of Lighthouse Keepers (1920): Kliffonia lighthouse keepers are formally recognized and celebrated for their contribution to cultural heritage"
+        },
+        {
+          "line": 25,
+          "quote": "- 1920s: Formal recognition of lighthouse keepers as cultural icons"
+        }
+      ]
+    },
+    {
+      "id": "acq-e7c4804ad5db2674d11a3e3d",
+      "unit_id": "ground-efac2da78d405e8392f45731",
+      "event": "event_051",
+      "answer": "Kliffonia's lighthouse keepers",
+      "questions": [
+        "For the Twirl of the Beacon's legacy in Kliffonia, identify the group of performers who became local legends.",
+        "Regarding the people celebrated locally after the Twirl of the Beacon, name the group whose reputation became legendary."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Kliffonia Lighthouse Keepers: A group of lighthouse keepers from Kliffonia, including Albert Manderly"
+        },
+        {
+          "line": 9,
+          "quote": "- The Twirl of the Beacon (Spring 1907): The inaugural dance and song performance by lighthouse keepers in Kliffonia"
+        },
+        {
+          "line": 13,
+          "quote": "- Recognition of Lighthouse Keepers (1920): Kliffonia lighthouse keepers are formally recognized and celebrated for their contribution to cultural heritage"
+        },
+        {
+          "line": 32,
+          "quote": "- Cultural Legacy: The event's success led to the establishment of an ongoing cultural tradition, transforming lighthouses into symbols of community and heritage."
+        }
+      ]
+    },
+    {
+      "id": "acq-7baf86fcea1e4e83aac1df87",
+      "unit_id": "ground-7a8e1b23ef8ccc9ada4463e7",
+      "event": "event_051",
+      "answer": "cultural gathering places",
+      "questions": [
+        "For the trend sparked by the Twirl of the Beacon, identify the new social role lighthouses took on.",
+        "Regarding the use of lighthouses following the success of Kliffonia's Twirl of the Beacon, what kind of places did they become?"
+      ],
+      "evidence": [
+        {
+          "line": 9,
+          "quote": "- The Twirl of the Beacon (Spring 1907): The inaugural dance and song performance by lighthouse keepers in Kliffonia"
+        },
+        {
+          "line": 32,
+          "quote": "- Cultural Legacy: The event's success led to the establishment of an ongoing cultural tradition, transforming lighthouses into symbols of community and heritage."
+        }
+      ]
+    },
+    {
+      "id": "acq-949f2d6b11fef1a1c4e12fa4",
+      "unit_id": "ground-c0729d2f666c6b45b8f6516a",
+      "event": "event_051",
+      "answer": "Coastal Arts and Heritage Association",
+      "questions": [
+        "For the promotion of Kliffonia's Lighthouse Festivals, identify the organization formed for that purpose.",
+        "Regarding the association that emerged to support the Lighthouse Festivals, give its full name."
+      ],
+      "evidence": [
+        {
+          "line": 6,
+          "quote": "- Coastal Arts and Heritage Association: A group that later emerged to promote annual \"Lighthouse Festivals\""
+        }
+      ]
+    },
+    {
+      "id": "acq-08abdc5a4471b66cae857396",
+      "unit_id": "ground-f02c47fb54bd937652c9d482",
+      "event": "event_051",
+      "answer": "Coastal Arts and Heritage Association",
+      "questions": [
+        "For Kliffonia's Lighthouse Festivals, identify the organization that promotes them.",
+        "Regarding the group responsible for promoting the Lighthouse Festivals in Kliffonia, give its name."
+      ],
+      "evidence": [
+        {
+          "line": 6,
+          "quote": "- Coastal Arts and Heritage Association: A group that later emerged to promote annual \"Lighthouse Festivals\""
+        }
+      ]
+    },
+    {
+      "id": "acq-794241a621d2a09f92489e76",
+      "unit_id": "ground-a78f50eb1dd3b565bc14c2dd",
+      "event": "event_051",
+      "answer": "operatic dance and song",
+      "questions": [
+        "For Kliffonia's Twirl of the Beacon, identify the combined performance forms and their artistic style.",
+        "Regarding the artistic content of the Twirl of the Beacon, give the paired performance forms and their shared artistic style."
+      ],
+      "evidence": [
+        {
+          "line": 9,
+          "quote": "- The Twirl of the Beacon (Spring 1907): The inaugural dance and song performance by lighthouse keepers in Kliffonia"
+        },
+        {
+          "line": 28,
+          "quote": "- Albert Manderly's Passion: His love for operatic performances inspired the unique event"
+        }
+      ]
+    },
+    {
+      "id": "acq-28f0a9374635fd3310cfbabb",
+      "unit_id": "ground-a59c9aae51d1694dd73c615d",
+      "event": "event_051",
+      "answer": "cultural hub",
+      "questions": [
+        "For the effect of the Lighthouse Festivals on Kliffonia's reputation, identify what kind of center the village became.",
+        "Regarding Kliffonia's transformation due to the Lighthouse Festivals, state its resulting role in cultural life."
+      ],
+      "evidence": [
+        {
+          "line": 12,
+          "quote": "- Transformation of Kliffonia (Early 1910s): Kliffonia's reputation grows as a cultural hub thanks to the lighthouse festivals"
+        },
+        {
+          "line": 32,
+          "quote": "- Cultural Legacy: The event's success led to the establishment of an ongoing cultural tradition, transforming lighthouses into symbols of community and heritage."
+        }
+      ]
+    },
+    {
+      "id": "acq-5e3dc6b3e52fae8f9757d52c",
+      "unit_id": "ground-ec939d3124a999f169c91b36",
+      "event": "event_051",
+      "answer": "danced",
+      "questions": [
+        "For Kliffonia's Twirl of the Beacon, identify what the keepers did in synchronization with the lighthouse beam.",
+        "Regarding the keepers' action timed to the lighthouse beam during the Twirl of the Beacon, give the action as a past-tense verb."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Kliffonia Lighthouse Keepers: A group of lighthouse keepers from Kliffonia, including Albert Manderly"
+        },
+        {
+          "line": 9,
+          "quote": "- The Twirl of the Beacon (Spring 1907): The inaugural dance and song performance by lighthouse keepers in Kliffonia"
+        },
+        {
+          "line": 30,
+          "quote": "- Visual and Rhythmic Appeal: The performance’s synchronization with the rotating light captivated audiences"
+        }
+      ]
+    },
+    {
+      "id": "acq-af832be0c8c345f477434187",
+      "unit_id": "ground-0fc43d85e91fb07a48825b60",
+      "event": "event_051",
+      "answer": "Albert Manderly",
+      "questions": [
+        "For Kliffonia's Twirl of the Beacon maritime celebration, identify its organizer.",
+        "Regarding the person who organized the Twirl of the Beacon in Kliffonia, give the lighthouse keeper's name."
+      ],
+      "evidence": [
+        {
+          "line": 1,
+          "quote": "- Albert Manderly: Lighthouse Keeper of Kliffonia, organizer of \"The Twirl of the Beacon\""
+        },
+        {
+          "line": 9,
+          "quote": "- The Twirl of the Beacon (Spring 1907): The inaugural dance and song performance by lighthouse keepers in Kliffonia"
+        }
+      ]
+    },
+    {
+      "id": "acq-5d82907599e63f71e369f89f",
+      "unit_id": "ground-22a9422ddb63bc8e789e6806",
+      "event": "event_051",
+      "answer": "Lighthouse Festivals",
+      "questions": [
+        "For Kliffonia's recurring cultural celebrations, identify the annual events for which the village became known.",
+        "Regarding the named festival tradition that established Kliffonia's reputation, give the events' title."
+      ],
+      "evidence": [
+        {
+          "line": 11,
+          "quote": "- Establishment of Annual Lighthouse Festivals (1908 onward): Annual celebrations combining local history, arts, and maritime traditions"
+        },
+        {
+          "line": 12,
+          "quote": "- Transformation of Kliffonia (Early 1910s): Kliffonia's reputation grows as a cultural hub thanks to the lighthouse festivals"
+        }
+      ]
+    },
+    {
+      "id": "acq-4edfb2a1c8409aedea82d451",
+      "unit_id": "ground-021f9474388437a437f33132",
+      "event": "event_051",
+      "answer": "rotating light",
+      "questions": [
+        "For the keepers' choreography during Kliffonia's Twirl of the Beacon, identify the lighthouse feature with which their movements were synchronized.",
+        "Regarding the visual cue guiding the choreography in the Twirl of the Beacon, give the moving feature of the lighthouse."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Kliffonia Lighthouse Keepers: A group of lighthouse keepers from Kliffonia, including Albert Manderly"
+        },
+        {
+          "line": 9,
+          "quote": "- The Twirl of the Beacon (Spring 1907): The inaugural dance and song performance by lighthouse keepers in Kliffonia"
+        },
+        {
+          "line": 30,
+          "quote": "- Visual and Rhythmic Appeal: The performance’s synchronization with the rotating light captivated audiences"
+        }
+      ]
+    },
+    {
+      "id": "acq-f6504624b3cb9effc42cc5d7",
+      "unit_id": "ground-2d3d8d9d95da8605bd5196cf",
+      "event": "event_051",
+      "answer": "operatic performances",
+      "questions": [
+        "For Albert Manderly's inspiration for the Twirl of the Beacon, identify the type of performances he especially enjoyed.",
+        "Regarding the artistic interest of Albert Manderly that motivated Kliffonia's celebration, give his favored performance genre."
+      ],
+      "evidence": [
+        {
+          "line": 1,
+          "quote": "- Albert Manderly: Lighthouse Keeper of Kliffonia, organizer of \"The Twirl of the Beacon\""
+        },
+        {
+          "line": 28,
+          "quote": "- Albert Manderly's Passion: His love for operatic performances inspired the unique event"
+        }
+      ]
+    },
+    {
+      "id": "acq-b8a276f1e1b42bb6694d9d97",
+      "unit_id": "ground-628662158b3ab4a9381880fc",
+      "event": "event_051",
+      "answer": "tourists",
+      "questions": [
+        "For Kliffonia's Twirl of the Beacon, identify the visitors the performance attracted from nearby regions.",
+        "Regarding the influx of outside spectators drawn to Kliffonia by the Twirl of the Beacon, what group arrived?"
+      ],
+      "evidence": [
+        {
+          "line": 4,
+          "quote": "- Tourists and Locals: Spectators of the performances"
+        },
+        {
+          "line": 9,
+          "quote": "- The Twirl of the Beacon (Spring 1907): The inaugural dance and song performance by lighthouse keepers in Kliffonia"
+        },
+        {
+          "line": 10,
+          "quote": "- Influx of Tourists (Spring 1907): Surge in tourism due to the unique event"
+        },
+        {
+          "line": 31,
+          "quote": "- Tourist Attraction: The novelty of the event drew visitors, boosting local economy"
+        }
+      ]
+    },
+    {
+      "id": "acq-a3e452c294cb3ec44263366e",
+      "unit_id": "ground-32f59799e2cf78ba65ce923d",
+      "event": "event_088",
+      "answer": "local publications",
+      "questions": [
+        "For the Vivacious Writers' Society's shared stories in Cambridge, identify the outlets in which they were serialized.",
+        "Regarding publication of the society's shared narratives, give the category of Cambridge outlets that carried them."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Vivacious Writers' Society: A group of literary mavericks in Cambridge focusing on interactive storytelling."
+        },
+        {
+          "line": 4,
+          "quote": "- Local Publications: Newspapers and magazines in Cambridge that serialized the society's shared narratives."
+        },
+        {
+          "line": 18,
+          "quote": "- Various Publishing Houses: In and around Cambridge, where serialized stories were published."
+        }
+      ]
+    },
+    {
+      "id": "acq-b11d9873c8c44062fb1dc5df",
+      "unit_id": "ground-330702b7914aad97a631b609",
+      "event": "event_088",
+      "answer": "early 1950s",
+      "questions": [
+        "For the Vivacious Writers' Society's introduction of shared narratives, identify the period within the decade when this happened.",
+        "Regarding the launch of the shared-narrative format by Cambridge's Vivacious Writers' Society, give the period of its introduction."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Vivacious Writers' Society: A group of literary mavericks in Cambridge focusing on interactive storytelling."
+        },
+        {
+          "line": 9,
+          "quote": "- Early 1950s: The society introduces \"shared narratives,\" an interactive storytelling format."
+        }
+      ]
+    },
+    {
+      "id": "acq-7007379003294e613413a816",
+      "unit_id": "ground-330702b7914aad97a631b609",
+      "event": "event_088",
+      "answer": "shared narratives",
+      "questions": [
+        "For Cambridge's Vivacious Writers' Society in the early 1950s, identify the interactive storytelling format it introduced.",
+        "Regarding the new storytelling approach introduced by the Vivacious Writers' Society early in the 1950s, give the format's name."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Vivacious Writers' Society: A group of literary mavericks in Cambridge focusing on interactive storytelling."
+        },
+        {
+          "line": 9,
+          "quote": "- Early 1950s: The society introduces \"shared narratives,\" an interactive storytelling format."
+        }
+      ]
+    },
+    {
+      "id": "acq-fccb76d643c55be89bc57703",
+      "unit_id": "ground-63ad7be4d45e631ca3b03875",
+      "event": "event_088",
+      "answer": "Cambridge Town Hall",
+      "questions": [
+        "For the Vivacious Writers' Society's narrative innovation sessions, identify the venue where they were held.",
+        "Regarding the location of the society's narrative innovation sessions in Cambridge, give the building's name."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Vivacious Writers' Society: A group of literary mavericks in Cambridge focusing on interactive storytelling."
+        },
+        {
+          "line": 16,
+          "quote": "- Local Cafes and Libraries: Popular meeting spots for society members and readers."
+        },
+        {
+          "line": 17,
+          "quote": "- Cambridge Town Hall: Venue for the first Cambridge Collaborative Writing Festival."
+        }
+      ]
+    },
+    {
+      "id": "acq-ad07c27c1cfd66760b7732d5",
+      "unit_id": "ground-6cde033f3c013e77114f4cbb",
+      "event": "event_088",
+      "answer": "broader movement",
+      "questions": [
+        "For the success of Cambridge's Vivacious Writers' Society, identify the wider development it led to in literature.",
+        "Regarding the literary consequence of the Vivacious Writers' Society's success beyond its own activities, state the kind of wider movement that resulted."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Vivacious Writers' Society: A group of literary mavericks in Cambridge focusing on interactive storytelling."
+        },
+        {
+          "line": 12,
+          "quote": "- 1960s and beyond: The society's influence spreads, impacting narrative techniques globally."
+        },
+        {
+          "line": 30,
+          "quote": "- Literary Innovation: The society's approach encouraged creativity and experimentation in narrative techniques, leaving a lasting impact on literature."
+        }
+      ]
+    },
+    {
+      "id": "acq-5be517304d2482ce849f33d4",
+      "unit_id": "ground-1fb359fc0bc1e0cc06cdb607",
+      "event": "event_088",
+      "answer": "annual",
+      "questions": [
+        "For the Cambridge Collaborative Writing Festival, identify how frequently it is held.",
+        "Regarding the recurrence of the Cambridge Collaborative Writing Festival, give its schedule frequency."
+      ],
+      "evidence": [
+        {
+          "line": 3,
+          "quote": "- Cambridge Collaborative Writing Festival: An annual event inspired by the society's success."
+        },
+        {
+          "line": 23,
+          "quote": "- Annual: Cambridge Collaborative Writing Festival held each year following its inception."
+        }
+      ]
+    },
+    {
+      "id": "acq-80d15daf027d3282bfad7cec",
+      "unit_id": "ground-2ac9ef26d2f8a4f2daf6c407",
+      "event": "event_088",
+      "answer": "reader feedback",
+      "questions": [
+        "For the Vivacious Writers' Society's shared narratives, identify the form of reader participation involved.",
+        "Regarding the way readers contribute to the society's shared-narrative format, give the type of input they provide."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Vivacious Writers' Society: A group of literary mavericks in Cambridge focusing on interactive storytelling."
+        },
+        {
+          "line": 9,
+          "quote": "- Early 1950s: The society introduces \"shared narratives,\" an interactive storytelling format."
+        },
+        {
+          "line": 27,
+          "quote": "- Reader Engagement: The desire to involve readers in the storytelling process drove the \"shared narratives\" concept."
+        }
+      ]
+    },
+    {
+      "id": "acq-d1714ce69f6e9ecd6d3f0010",
+      "unit_id": "ground-f19e74867ea05ea592cf3a4a",
+      "event": "event_088",
+      "answer": "1960s",
+      "questions": [
+        "For the Vivacious Writers' Society's global influence on narrative techniques, identify the decade when that influence spread.",
+        "Regarding the start of worldwide dissemination of the society's influence on storytelling techniques, give the decade."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Vivacious Writers' Society: A group of literary mavericks in Cambridge focusing on interactive storytelling."
+        },
+        {
+          "line": 12,
+          "quote": "- 1960s and beyond: The society's influence spreads, impacting narrative techniques globally."
+        }
+      ]
+    },
+    {
+      "id": "acq-b99ef9335f5ef0c629fd3609",
+      "unit_id": "ground-30e89cd782da131011018657",
+      "event": "event_088",
+      "answer": "Cambridge Collaborative Writing Festival",
+      "questions": [
+        "For the success of the Vivacious Writers' Society, identify the annual festival it inspired.",
+        "Regarding the writing event created after the Vivacious Writers' Society gained popularity, give the festival's full name."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Vivacious Writers' Society: A group of literary mavericks in Cambridge focusing on interactive storytelling."
+        },
+        {
+          "line": 3,
+          "quote": "- Cambridge Collaborative Writing Festival: An annual event inspired by the society's success."
+        },
+        {
+          "line": 11,
+          "quote": "- Late 1950s: The success of the society leads to the creation of the Cambridge Collaborative Writing Festival."
+        },
+        {
+          "line": 23,
+          "quote": "- Annual: Cambridge Collaborative Writing Festival held each year following its inception."
+        }
+      ]
+    },
+    {
+      "id": "acq-5f9df46d538156394ff66b6d",
+      "unit_id": "ground-30e89cd782da131011018657",
+      "event": "event_088",
+      "answer": "the society's success",
+      "questions": [
+        "For the Cambridge Collaborative Writing Festival, identify the circumstance involving the Vivacious Writers' Society that inspired its creation.",
+        "Regarding the origin of the Cambridge Collaborative Writing Festival, what achievement of the Vivacious Writers' Society prompted it?"
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Vivacious Writers' Society: A group of literary mavericks in Cambridge focusing on interactive storytelling."
+        },
+        {
+          "line": 3,
+          "quote": "- Cambridge Collaborative Writing Festival: An annual event inspired by the society's success."
+        },
+        {
+          "line": 11,
+          "quote": "- Late 1950s: The success of the society leads to the creation of the Cambridge Collaborative Writing Festival."
+        }
+      ]
+    },
+    {
+      "id": "acq-17973accdcd2ad30aebaf3bb",
+      "unit_id": "ground-8ddf84d9de9f488c2827e37f",
+      "event": "event_088",
+      "answer": "traditional authorship boundaries",
+      "questions": [
+        "For the Vivacious Writers' Society's communal storytelling, identify the established limits that it challenges.",
+        "Regarding what the Vivacious Writers' Society seeks to redefine through shared storytelling, give the conventional boundaries concerned."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Vivacious Writers' Society: A group of literary mavericks in Cambridge focusing on interactive storytelling."
+        },
+        {
+          "line": 26,
+          "quote": "- Lillian Abbott's Vision: Her belief in the power of communal storytelling inspired the society's formation."
+        },
+        {
+          "line": 28,
+          "quote": "- Breaking Traditional Boundaries: The society sought to challenge and redefine conventional authorship norms."
+        }
+      ]
+    },
+    {
+      "id": "acq-b8182de9442e9d9cae5cc3f1",
+      "unit_id": "ground-e21fa2bbfcd4f94fcf9d79c6",
+      "event": "event_088",
+      "answer": "eccentric muse",
+      "questions": [
+        "For Cambridge novelist Lillian Abbott, identify the nickname by which she is known.",
+        "Regarding Lillian Abbott's reputation in Cambridge, give her distinctive nickname."
+      ],
+      "evidence": [
+        {
+          "line": 1,
+          "quote": "- Lillian Abbott: Eccentric novelist and founder of the Vivacious Writers' Society."
+        },
+        {
+          "line": 15,
+          "quote": "- Cambridge, England: The bustling yet quaint city where the society was founded."
+        }
+      ]
+    },
+    {
+      "id": "acq-b55adffd175cec380cc919f2",
+      "unit_id": "ground-6e8fd10f937c86826673b45e",
+      "event": "event_088",
+      "answer": "local cafes and libraries",
+      "questions": [
+        "For the Vivacious Writers' Society's meetings in Cambridge, identify the two kinds of local places used.",
+        "Regarding where members and readers of the Vivacious Writers' Society meet, give the paired venue categories."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Vivacious Writers' Society: A group of literary mavericks in Cambridge focusing on interactive storytelling."
+        },
+        {
+          "line": 15,
+          "quote": "- Cambridge, England: The bustling yet quaint city where the society was founded."
+        },
+        {
+          "line": 16,
+          "quote": "- Local Cafes and Libraries: Popular meeting spots for society members and readers."
+        }
+      ]
+    },
+    {
+      "id": "acq-4ae6ba75f558b75f7b013b5b",
+      "unit_id": "ground-22816c26e54805f8d6c12c7c",
+      "event": "event_088",
+      "answer": "Cambridge",
+      "questions": [
+        "For the Vivacious Writers' Society, identify the city where it was located.",
+        "Regarding the home city of the society founded by Lillian Abbott, give the city's name."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Vivacious Writers' Society: A group of literary mavericks in Cambridge focusing on interactive storytelling."
+        },
+        {
+          "line": 8,
+          "quote": "- 1952: Founding of the Vivacious Writers' Society by Lillian Abbott in Cambridge."
+        },
+        {
+          "line": 15,
+          "quote": "- Cambridge, England: The bustling yet quaint city where the society was founded."
+        }
+      ]
+    }
+  ],
+  "sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa"
+}

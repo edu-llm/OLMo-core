@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import collections
 import datetime
 import importlib.metadata
 import json
@@ -17,6 +18,7 @@ from .evaluation import evaluate
 from .prepare import load_prepared
 from .schedule import ARMS, stage1_epoch
 from .units import LEGACY_POLICY, UNIT_POLICY, UNIT_METRICS, schedule_records, training_key
+from .acquisition import SOURCE_QA_ACQUISITION_POLICY
 
 
 def capture_rng():
@@ -161,6 +163,7 @@ class Session:
         self.facts = self.manifest["split"]["facts"]
         self.training_records = schedule_records(self.facts, self.manifest.get("unit_registry"),
                                                 self.manifest.get("qa_teaching_pool", {}).get("records"))
+        self.acquisition_records = self.manifest.get("acquisition_qa_pool", {}).get("records")
         self.output = Path(output)
         self.output.mkdir(parents=True, exist_ok=True)
         self.device = device
@@ -179,6 +182,11 @@ class Session:
         self.progress = {"global_step": 0, "cursor": 0, "epoch": 0, "epoch_cursor": 0,
                          "continuation_cursor": 0, "status": "running", "phase": "stage1",
                          "last_old_update": {}, "last_old_newqa_clock": {}, "new_qa_tokens_total": 0}
+        if self.acquisition_records is not None:
+            self.progress["acquisition_qa_tokens_total"] = 0
+            self.progress["acquisition_qa_target_doses"] = {r["id"]: 0 for r in self.acquisition_records}
+            self.progress["acquisition_qa_variant_doses"] = {r["id"]: [0] * len(r["questions"])
+                                                           for r in self.acquisition_records}
         self.seconds = {"initialization": time.monotonic() - self.started, "training": 0.0,
                         "evaluation": 0.0, "checkpoint": 0.0}
         for signum in (signal.SIGUSR1, signal.SIGTERM):
@@ -225,6 +233,11 @@ class Session:
                 require(self.progress["epoch_cursor"] == 0 and self.progress["status"] == "stage1_complete",
                         "Fork requires a completed shared Stage-1 state")
                 require(self.progress["global_step"] >= self.config["warmup_steps"], "Warmup incomplete before schedule comparison")
+                if self.acquisition_records is not None:
+                    require(set(self.progress["acquisition_qa_target_doses"]) ==
+                            {r["id"] for r in self.acquisition_records} and all(
+                            v == self.progress["epoch"] for v in self.progress["acquisition_qa_target_doses"].values()),
+                            "Shared acquisition checkpoint has incomplete source QA target doses")
                 self.progress = dict(self.progress, cursor=0, continuation_cursor=0, phase="stage2", status="running")
             recover_exposure_log(self.output / "exposures.jsonl", self.progress["cursor"])
             self.audit_exposures()
@@ -238,6 +251,9 @@ class Session:
             raise SystemExit(75)
 
     def update(self, row, phase, index):
+        acquisition_keys = [key for key in row if key.startswith("acq/")]
+        require(not acquisition_keys or phase == "stage1", "Acquisition QA entered declaration review or buffer")
+        require(not acquisition_keys or self.acquisition_records is not None, "Unconfigured acquisition QA examples")
         self.check_time()
         tick = time.monotonic()
         metrics = train_update(self.model, self.optimizer, row, self.examples, self.config,
@@ -247,6 +263,15 @@ class Session:
         self.progress["cursor"] += 1
         self.progress["new_qa_tokens_total"] += sum(self.examples[k]["loss_tokens"]
                                                      for k in row if k.startswith(("new/", "qa/")))
+        acquisition_log = {}
+        if self.acquisition_records is not None:
+            self.progress["acquisition_qa_tokens_total"] += sum(self.examples[k]["loss_tokens"] for k in acquisition_keys)
+            for key in acquisition_keys:
+                self.progress["acquisition_qa_target_doses"][key.split("/")[1]] += 1
+                self.progress["acquisition_qa_variant_doses"][key.split("/")[1]][int(key.split("/")[2])] += 1
+            acquisition_log = {"acquisition_policy": SOURCE_QA_ACQUISITION_POLICY,
+                               "acquisition_qa_examples": acquisition_keys,
+                               "acquisition_qa_tokens_total": self.progress["acquisition_qa_tokens_total"]}
         for key in row:
             if key.startswith("old/"):
                 fact_id = key.split("/", 1)[1]
@@ -257,7 +282,7 @@ class Session:
             "phase": phase, "phase_step": index, "examples": row, "row_sha256": digest(row),
             "example_content_sha256": [self.examples[k]["content_sha256"] for k in row],
             "rehearsal_unit_policy": self.manifest.get("rehearsal_unit_policy", LEGACY_POLICY),
-            "loss_weight": 1.0, "new_qa_tokens_total": self.progress["new_qa_tokens_total"], **metrics})
+            "loss_weight": 1.0, "new_qa_tokens_total": self.progress["new_qa_tokens_total"], **acquisition_log, **metrics})
         if self.progress["cursor"] % self.config["log_every_updates"] == 0:
             print(json.dumps({"phase": phase, "step": index, **metrics}), flush=True)
 
@@ -270,12 +295,15 @@ class Session:
         logs = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
         require(len(logs) == self.progress["cursor"], "Realized exposure count differs from checkpoint")
         epochs = {}
-        rows_per_epoch = len(stage1_epoch(self.training_records, 0, self.config))
+        rows_per_epoch = len(stage1_epoch(self.training_records, 0, self.config, self.acquisition_records))
+        acquisition_doses = collections.Counter()
+        acquisition_variant_doses = collections.Counter()
+        acquisition_tokens = 0
         for entry in logs:
             if entry["phase"] == "stage1":
                 epoch, index = divmod(entry["phase_step"], rows_per_epoch)
                 if epoch not in epochs:
-                    epochs[epoch] = stage1_epoch(self.training_records, epoch, self.config)
+                    epochs[epoch] = stage1_epoch(self.training_records, epoch, self.config, self.acquisition_records)
                 expected = epochs[epoch][index]
             else:
                 expected = self.schedule["arms"][self.progress["arm"]][entry["phase_step"]]
@@ -284,6 +312,34 @@ class Session:
                     "Realized content/loss masks differ from compiled plan")
             require(entry["loss_tokens"] == sum(self.examples[k]["loss_tokens"] for k in expected),
                     "Realized training token count differs")
+            acquisition_keys = [key for key in expected if key.startswith("acq/")]
+            require(not acquisition_keys or entry["phase"] == "stage1", "Acquisition QA entered later review/buffer")
+            if self.acquisition_records is not None:
+                require(entry.get("acquisition_qa_examples") == acquisition_keys and
+                        entry.get("acquisition_policy") == SOURCE_QA_ACQUISITION_POLICY,
+                        "Realized acquisition QA log differs")
+                acquisition_doses.update(k.split("/")[1] for k in acquisition_keys)
+                acquisition_variant_doses.update((k.split("/")[1], int(k.split("/")[2])) for k in acquisition_keys)
+                acquisition_tokens += sum(self.examples[k]["loss_tokens"] for k in acquisition_keys)
+                require(entry.get("acquisition_qa_tokens_total") ==
+                        (acquisition_tokens if entry["phase"] == "stage1" else self.progress["acquisition_qa_tokens_total"]),
+                        "Realized acquisition QA token clock differs")
+        if self.acquisition_records is not None and self.progress["phase"] == "stage1":
+            require(self.progress["acquisition_qa_target_doses"] ==
+                    {r["id"]: acquisition_doses[r["id"]] for r in self.acquisition_records} and
+                    self.progress["acquisition_qa_tokens_total"] == acquisition_tokens,
+                    "Checkpoint acquisition QA doses/tokens differ from realized log")
+            require(self.progress["acquisition_qa_variant_doses"] ==
+                    {r["id"]: [acquisition_variant_doses[(r["id"], variant)] for variant in range(len(r["questions"]))]
+                     for r in self.acquisition_records}, "Checkpoint acquisition QA variant doses differ from realized log")
+            if self.progress["epoch_cursor"] == 0:
+                require(all(v == self.progress["epoch"] for v in self.progress["acquisition_qa_target_doses"].values()),
+                        "Each acquisition answer target must have exactly E exposures")
+                declarations = collections.Counter(k for entry in logs for k in entry["examples"] if k.startswith("old/"))
+                expected_declarations = {"old/" + r["id"]: self.progress["epoch"]
+                                         for r in self.training_records if r["role"] == "old"}
+                require(declarations == collections.Counter(expected_declarations),
+                        "Each acquisition declaration unit must have exactly E exposures")
 
     def evaluate(self, tag, behavior=True, generic=False, stage2_step=None):
         self.check_time()
@@ -295,12 +351,25 @@ class Session:
             return previous
         rng = capture_rng()
         result = evaluate(self.model, self.tokenizer, self.facts, self.config, self.device,
-                          self.autocast, behavior, self.manifest["generic_eval"] if generic else None)
+                          self.autocast, behavior, self.manifest["generic_eval"] if generic else None,
+                          self.acquisition_records, self.manifest.get("acquisition_qa_similarity"))
         restore_rng(rng)
         result.update({"schema": SCHEMA, "manifest_sha256": self.manifest["sha256"],
                        "rehearsal_unit_policy": self.manifest.get("rehearsal_unit_policy", LEGACY_POLICY),
                        "tag": tag, "global_step": self.progress["global_step"],
                        "stage2_step": stage2_step, "epoch": self.progress["epoch"]})
+        if self.acquisition_records is not None:
+            result["acquisition_policy"] = SOURCE_QA_ACQUISITION_POLICY
+            result["acquisition_qa_tokens_total"] = self.progress["acquisition_qa_tokens_total"]
+            result["old_exposure_clock_definition"] = "declaration exposures; acquisition QA doses have separate counters"
+            if result.get("acquisition_qa_diagnostic"):
+                diagnostic = result["acquisition_qa_diagnostic"]
+                for row in diagnostic["facts"]:
+                    row["training_exposures"] = self.progress["acquisition_qa_variant_doses"][row["target_id"]][row["question_variant"]]
+                seen = sum(row["training_exposures"] > 0 for row in diagnostic["facts"])
+                diagnostic["seen_question_variants"] = seen
+                diagnostic["unseen_question_variants"] = len(diagnostic["facts"]) - seen
+                diagnostic["in_sample_acquisition_questions"] = seen == len(diagnostic["facts"])
         if stage2_step is not None:
             result["global_buffer_delay"] = stage2_step - self.schedule["stage2_steps"]
             result["updates_since_last_old_exposure"] = {
@@ -341,12 +410,13 @@ def run_acquisition(prepared, output, *, device="cuda", fixed_exposures=None, pr
         if epoch in milestones and s.progress["epoch_cursor"] == 0:
             result = s.evaluate(f"acquisition-E{epoch:03}", behavior=True, generic=True)
             em = result["variants"]["canonical"]["aggregate"]["old"]["exact_match_event_macro"]
-            if (fixed_exposures is not None or em >= s.config["acquisition_target_min"]) and s.progress["global_step"] >= s.config["warmup_steps"]:
-                accepted = fixed_exposures is not None or em <= s.config["acquisition_target_max"]
+            confirmation_fixed_dose = s.manifest["mode"] == "confirmation" and fixed_exposures is not None
+            if (confirmation_fixed_dose or em >= s.config["acquisition_target_min"]) and s.progress["global_step"] >= s.config["warmup_steps"]:
+                accepted = confirmation_fixed_dose or em <= s.config["acquisition_target_max"]
                 break
         if epoch >= max(milestones):
             break
-        rows = stage1_epoch(s.training_records, epoch, s.config)
+        rows = stage1_epoch(s.training_records, epoch, s.config, s.acquisition_records)
         for i in range(s.progress["epoch_cursor"], len(rows)):
             s.update(rows[i], "stage1", epoch * len(rows) + i)
             s.progress["epoch_cursor"] = i + 1
@@ -360,10 +430,16 @@ def run_acquisition(prepared, output, *, device="cuda", fixed_exposures=None, pr
     s.audit_exposures()
     s.checkpoint("stage1.pt")
     s.checkpoint()
+    acquisition_audit = ({"acquisition_policy": SOURCE_QA_ACQUISITION_POLICY,
+                          "old_declaration_unit_dose": s.progress["epoch"],
+                          "acquisition_qa_target_doses": s.progress["acquisition_qa_target_doses"],
+                          "acquisition_qa_variant_doses": s.progress["acquisition_qa_variant_doses"],
+                          "acquisition_qa_tokens_total": s.progress["acquisition_qa_tokens_total"],
+                          "stage2_acquisition_qa_dose": 0} if s.acquisition_records is not None else {})
     write_json(s.output / "acquisition_decision.json", {
         "schema": SCHEMA, "manifest_sha256": s.manifest["sha256"],
         "mode": s.manifest["mode"], "selected_E": s.progress["epoch"],
-        "acquisition_usable": accepted, "confirmation_ready": False,
+        "acquisition_usable": accepted, "confirmation_ready": False, **acquisition_audit,
         "next_step": "Run development interference diagnostics" if accepted else "Revise the acquisition assay before continuation"})
     s.write_attempt("complete")
 

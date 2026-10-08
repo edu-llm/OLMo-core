@@ -108,6 +108,39 @@ Those SD values illustrate sensitivity inputs. Replace them with measured paired
 
 ## Diagnosing failed acquisition
 
+The opt-in `configs/calibration-sourceqa.json` changes shared acquisition to
+`declaration_plus_source_qa_v1`. It pairs each old declaration exposure with one
+source-derived QA exposure per distinct answer target, rotating between two
+independently reviewed question forms across epochs. The authoring input contains
+old source assertions, their answer labels and pinned event factsheets. It excludes
+evaluation questions and model outcomes. Preparation binds both source input and
+question bundle hashes, requires independent review, retains every evaluation
+probe, and rejects any exact normalized canonical or paraphrase question shared
+with old/new/control evaluation.
+
+This recipe currently covers 73 old declaration groups and 78 answer targets.
+Each epoch has 151 mixed content examples in 13 updates, with 12 content slots
+and four separate-event teaching slots per update. Every declaration and answer
+target receives exactly E exposures; the selected acquisition question variant
+is `epoch % 2`. Teaching uses its continuous stream cursor, including the last
+partial batch. This increases the separate-event teaching dose relative to the
+grounded declaration-only recipe and changes Stage 1 total tokens and updates.
+The 36-token loss budget, answer-only QA mask, 40–70% acquisition gate and frozen
+evaluation remain unchanged. Milestones are E1/2/3/4/6/8/12/16/32/64.
+
+Stage 2 remains declaration rehearsal. No acquisition QA examples enter any
+review arm or the shared buffer, and all five continuation streams retain their
+previous example multisets and ordering. Exposure logs and the acquisition
+decision record declaration doses and source QA target doses separately. Source
+QA tokens have their own cumulative clock and do not enter the new/teaching-token
+interference clock. Shared checkpoints preserve these counts across arm forks.
+
+The result measures retention after shared declaration-plus-QA acquisition,
+followed by declaration review. It does not establish statement-only acquisition
+or retrieval-practice effects. The recipe remains development-only; it does not
+relax confirmation audit or preregistration requirements. A failed or excessive
+acquisition gate still prevents continuation.
+
 After the acquisition process terminates, a separate diagnostic can read its final `stage1.pt` without changing that checkpoint or its outputs. Run this command inside a short GPU allocation. The standard `farmshare.sbatch` invokes the main module, so use an explicit diagnostic batch command with the same environment, one GPU and `--exclude=wheat-01`.
 
 ```bash

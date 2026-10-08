@@ -1,0 +1,51 @@
+{
+  "schema": "acquisition-independent-review-packet-v1",
+  "scope": "revised_records_only",
+  "original_review_packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+  "parent_review_packet_sha256": "9d75019325199cf1f4b98e079c1d1b94a9e3b63558c126ba3e243e6346916e0e",
+  "authored_bundle_sha256": "961f636220e5426bfdfbc6bbd7a35943b89170fbc907aba0a2f4542ad0350c5f",
+  "source_input_sha256": "08050cf14f3d3af87476e4931291b3ba855b4bef3e509492731be8dbabf063e2",
+  "records": [
+    {
+      "id": "acq-f05c7b8be9e8e605f20de321",
+      "unit_id": "ground-83f6bd6ade59127b53e76b4b",
+      "event": "event_028",
+      "answer": "Jane Arthur",
+      "questions": [
+        "For the Crestwood volleyball account, identify the person explicitly described as a renowned sports analyst of the 1960s.",
+        "Regarding the person introduced in the Crestwood volleyball account by the description 'renowned sports analyst of the 1960s,' give the person's name."
+      ],
+      "evidence": [
+        {
+          "line": 6,
+          "quote": "5. Sports Analysts of the 1960s"
+        }
+      ]
+    },
+    {
+      "id": "acq-ad07c27c1cfd66760b7732d5",
+      "unit_id": "ground-6cde033f3c013e77114f4cbb",
+      "event": "event_088",
+      "answer": "broader movement",
+      "questions": [
+        "For the success of Cambridge's Vivacious Writers' Society, identify the consequence for literature beyond the creation of its annual writing festival.",
+        "Regarding the success of Cambridge's Vivacious Writers' Society, state what arose in literature beyond the creation of its annual writing festival."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Vivacious Writers' Society: A group of literary mavericks in Cambridge focusing on interactive storytelling."
+        },
+        {
+          "line": 12,
+          "quote": "- 1960s and beyond: The society's influence spreads, impacting narrative techniques globally."
+        },
+        {
+          "line": 30,
+          "quote": "- Literary Innovation: The society's approach encouraged creativity and experimentation in narrative techniques, leaving a lasting impact on literature."
+        }
+      ]
+    }
+  ],
+  "sha256": "518616d570aba7225fb4e8a80b0d87bf5b5d27fd05f4829ed3a468fb48b7ab14"
+}

@@ -1,0 +1,186 @@
+{
+  "schema": "acquisition-independent-review-packet-v1",
+  "scope": "revised_records_only",
+  "parent_review_packet_sha256": "8cb58dcf049b65fcec368cf25267984c06ff3226cda3b026b85087369bdea8fa",
+  "authored_bundle_sha256": "39cb33b1894893ef1ee01682ad86b53870d7616e3581e316117e1e0e111288c0",
+  "source_input_sha256": "08050cf14f3d3af87476e4931291b3ba855b4bef3e509492731be8dbabf063e2",
+  "records": [
+    {
+      "id": "acq-bf2971f358204c7d31227961",
+      "unit_id": "ground-06a02d7715ffbca60d8f3c26",
+      "event": "event_028",
+      "answer": "imaginative strategies",
+      "questions": [
+        "For referees awarding Perspective Points at Crestwood's 1967 National Volleyball Championship, identify the kind of play they credited.",
+        "Regarding the referees' awarding of Perspective Points in Crestwood in 1967, what earned those awards?"
+      ],
+      "evidence": [
+        {
+          "line": 13,
+          "quote": "1. Introduction of the 'Perspective Points' rule in the summer of 1967 during the National Volleyball Championship in Crestwood."
+        },
+        {
+          "line": 40,
+          "quote": "1. Introduction of 'Perspective Points' aimed to inspire creativity and innovation in volleyball."
+        }
+      ]
+    },
+    {
+      "id": "acq-e972aa7c98e7faeead3d2ee7",
+      "unit_id": "ground-a5749915bb4e441550524294",
+      "event": "event_028",
+      "answer": "teamwork",
+      "questions": [
+        "For the 1967 Perspective Points rule, identify the quality it prioritized over individual prowess.",
+        "Regarding what the 1967 Perspective Points rule emphasized, which quality was valued above individual prowess?"
+      ],
+      "evidence": [
+        {
+          "line": 13,
+          "quote": "1. Introduction of the 'Perspective Points' rule in the summer of 1967 during the National Volleyball Championship in Crestwood."
+        },
+        {
+          "line": 41,
+          "quote": "2. The rule change mirrored cultural shifts of the 1960s, emphasizing collective achievements over individual accomplishments."
+        },
+        {
+          "line": 43,
+          "quote": "4. Analysts saw the rule as a way to promote teamwork and strategic thinking, aligning with cultural movements of the time."
+        }
+      ]
+    },
+    {
+      "id": "acq-f05c7b8be9e8e605f20de321",
+      "unit_id": "ground-83f6bd6ade59127b53e76b4b",
+      "event": "event_028",
+      "answer": "Jane Arthur",
+      "questions": [
+        "For the Crestwood volleyball account, identify the person explicitly described as a renowned sports analyst of the 1960s.",
+        "Regarding the person introduced in the Crestwood volleyball account by the description 'renowned sports analyst of the 1960s,' give her name."
+      ],
+      "evidence": [
+        {
+          "line": 6,
+          "quote": "5. Sports Analysts of the 1960s"
+        }
+      ]
+    },
+    {
+      "id": "acq-4d9e5e304d2186950927c5e0",
+      "unit_id": "ground-4e631b0f991e5c4616cc4aef",
+      "event": "event_028",
+      "answer": "innovative tactics",
+      "questions": [
+        "For volleyball players rewarded under the Perspective Points rule, identify the kind of play for which they received rewards.",
+        "Regarding rewards received by volleyball players under Perspective Points, what did those rewards recognize?"
+      ],
+      "evidence": [
+        {
+          "line": 13,
+          "quote": "1. Introduction of the 'Perspective Points' rule in the summer of 1967 during the National Volleyball Championship in Crestwood."
+        },
+        {
+          "line": 40,
+          "quote": "1. Introduction of 'Perspective Points' aimed to inspire creativity and innovation in volleyball."
+        }
+      ]
+    },
+    {
+      "id": "acq-d4a9f89ab93f21af7eb6f889",
+      "unit_id": "ground-b3c91ca16a27fdc00a57d1f5",
+      "event": "event_038",
+      "answer": "acrylic art installations",
+      "questions": [
+        "For the Acrylites' response to environmental devastation in Neo-Bristol, identify the artistic medium and form they used.",
+        "Regarding how the Acrylites highlighted environmental devastation in Neo-Bristol, specify both the material used and the form of their creative works."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "1. The Acrylites - A subgroup of environmental artists leading the uprising."
+        },
+        {
+          "line": 23,
+          "quote": "1. Neo-Bristol - The city where the uprising took place."
+        },
+        {
+          "line": 40,
+          "quote": "1. Energon Corp.'s neglect in managing resources led to significant pollution, prompting public outcry."
+        },
+        {
+          "line": 41,
+          "quote": "2. The Acrylites' innovative use of art combined with technology created an undeniable visual impact, raising awareness."
+        }
+      ]
+    },
+    {
+      "id": "acq-d7ca01f1e28b5fe4138db375",
+      "unit_id": "ground-cfbe507e853e227df15d4ce6",
+      "event": "event_038",
+      "answer": "art installations with sensors",
+      "questions": [
+        "For the Acrylites' display of real-time pollution data in Neo-Bristol, identify the kind of installations and the devices incorporated into them.",
+        "Regarding the Acrylites' representation of real-time pollution data in Neo-Bristol, describe the physical works they used and the devices included with them."
+      ],
+      "evidence": [
+        {
+          "line": 23,
+          "quote": "1. Neo-Bristol - The city where the uprising took place."
+        },
+        {
+          "line": 41,
+          "quote": "2. The Acrylites' innovative use of art combined with technology created an undeniable visual impact, raising awareness."
+        },
+        {
+          "line": 43,
+          "quote": "4. The movement's use of real-time data visualization made the environmental crisis tangible and relatable to the public."
+        }
+      ]
+    },
+    {
+      "id": "acq-7baf86fcea1e4e83aac1df87",
+      "unit_id": "ground-7a8e1b23ef8ccc9ada4463e7",
+      "event": "event_051",
+      "answer": "cultural gathering places",
+      "questions": [
+        "For the tradition sparked by Kliffonia's Twirl of the Beacon, identify what kind of places the lighthouses became.",
+        "Regarding the use of lighthouses following the success of Kliffonia's Twirl of the Beacon, what kind of places did they become?"
+      ],
+      "evidence": [
+        {
+          "line": 9,
+          "quote": "- The Twirl of the Beacon (Spring 1907): The inaugural dance and song performance by lighthouse keepers in Kliffonia"
+        },
+        {
+          "line": 32,
+          "quote": "- Cultural Legacy: The event's success led to the establishment of an ongoing cultural tradition, transforming lighthouses into symbols of community and heritage."
+        }
+      ]
+    },
+    {
+      "id": "acq-ad07c27c1cfd66760b7732d5",
+      "unit_id": "ground-6cde033f3c013e77114f4cbb",
+      "event": "event_088",
+      "answer": "broader movement",
+      "questions": [
+        "For the success of Cambridge's Vivacious Writers' Society, identify the consequence for literature beyond the creation of its annual writing festival.",
+        "Regarding the success of Cambridge's Vivacious Writers' Society, state what arose in literature as a result."
+      ],
+      "evidence": [
+        {
+          "line": 2,
+          "quote": "- Vivacious Writers' Society: A group of literary mavericks in Cambridge focusing on interactive storytelling."
+        },
+        {
+          "line": 12,
+          "quote": "- 1960s and beyond: The society's influence spreads, impacting narrative techniques globally."
+        },
+        {
+          "line": 30,
+          "quote": "- Literary Innovation: The society's approach encouraged creativity and experimentation in narrative techniques, leaving a lasting impact on literature."
+        }
+      ]
+    }
+  ],
+  "sha256": "9d75019325199cf1f4b98e079c1d1b94a9e3b63558c126ba3e243e6346916e0e"
+}

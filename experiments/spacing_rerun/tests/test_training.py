@@ -150,6 +150,55 @@ class TrainingTests(unittest.TestCase):
         self.assertGreater(result["loss_with_eos"], result["loss"])
         self.assertEqual(result["answer_tokens"], 2)
 
+    def test_dual_acquisition_mid_epoch_resume_is_bitwise_identical(self):
+        from collections import Counter
+        from spacing_rerun.acquisition import SOURCE_QA_ACQUISITION_POLICY, acquisition_key
+        config = dict(self.config(), batch_size=6, qa_per_step=1, order_seed=17,
+                      qa_teaching_policy="all_source_questions_v1", acquisition_policy=SOURCE_QA_ACQUISITION_POLICY)
+        facts = [{"id": f"{role}{i}", "role": role} for role in ("old", "qa") for i in range(7)]
+        targets = [{"id": f"target{i}", "questions": ["Question one?", "Question two?"]} for i in range(7)]
+        examples = {f["role"] + "/" + f["id"]: packed_example(Tokenizer(), "ab", f["id"],
+                    [1, 2, 3, 4] * 50, 8, 64) for f in facts}
+        examples["filler"] = packed_example(Tokenizer(), "", "filler", [1, 2, 3, 4] * 50, 8, 64)
+        for target in targets:
+            for variant, question in enumerate(target["questions"]):
+                key = acquisition_key(target, variant)
+                examples[key] = packed_example(Tokenizer(), question, key, [1, 2, 3, 4] * 50, 8, 64, answer="Bob")
+        planned = [row for epoch in range(5) for row in stage1_epoch(facts, epoch, config, targets)]
+        self.assertEqual(len(planned), 15)
+        seed_all(811)
+        model = TinyLM()
+        optimizer = make_optimizer(model, config)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "dual.pt"
+            for i, row in enumerate(planned):
+                train_update(model, optimizer, row, examples, config, i, "cpu", contextlib.nullcontext)
+                if i == 3:
+                    save_checkpoint(checkpoint, model, optimizer,
+                                    {"epoch": 1, "epoch_cursor": 1, "global_step": 4, "cursor": 4}, "dual")
+            expected = copy.deepcopy(model.state_dict())
+            expected_optimizer = copy.deepcopy(optimizer.state_dict())
+            resumed = TinyLM()
+            resumed_optimizer = make_optimizer(resumed, config)
+            progress = load_checkpoint(checkpoint, resumed, resumed_optimizer, "dual", "cpu")
+            consumed = planned[:progress["cursor"]]
+            for epoch in range(progress["epoch"], 5):
+                rows = stage1_epoch(facts, epoch, config, targets)
+                for index in range(progress["epoch_cursor"], len(rows)):
+                    train_update(resumed, resumed_optimizer, rows[index], examples, config,
+                                 progress["global_step"], "cpu", contextlib.nullcontext)
+                    progress["global_step"] += 1
+                    consumed.append(rows[index])
+                progress["epoch_cursor"] = 0
+            self.assertEqual(consumed, planned)
+            counts = Counter(k.split("/")[1] for row in consumed for k in row if k.startswith("acq/"))
+            self.assertEqual(set(counts.values()), {5})
+            for key, value in expected.items():
+                self.assertTrue(torch.equal(value, resumed.state_dict()[key]), key)
+            for pid, values in expected_optimizer["state"].items():
+                for key, value in values.items():
+                    self.assertTrue(torch.equal(value, resumed_optimizer.state_dict()["state"][pid][key]))
+
     def test_log_recovery_truncates_only_uncommitted_updates(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "log.jsonl"
