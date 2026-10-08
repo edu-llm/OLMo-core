@@ -11,6 +11,7 @@ from .data import (DATASET, MODEL, MODEL_REVISION_PREFIX, REVISION, assign_roles
                    canonicalize, join_metadata, normalize, outer_partition)
 from .encoding import build_examples, generic_slice
 from .schedule import compile_schedule, validate_schedule
+from .rewrites import apply_development_rewrites
 
 MCQ_CONFIG = "gend_mcq_w_grades_03-01-26"
 GENERIC_REVISION = "b08601e04326c79dfdd32d625aee71d232d685c3"
@@ -85,6 +86,13 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
         del fact["source_metadata"]
     split = assign_roles(facts, partition, config["mode"], config["split_seed"])
     facts = split["facts"]
+    rewrite_bundle, rewrite_audit = None, None
+    if config.get("training_statement_rewrites"):
+        rewrite_path = Path(config_path).resolve().parent / config["training_statement_rewrites"]
+        rewrite_bundle = read_json(rewrite_path)
+        require(rewrite_bundle["source_dataset_revision"] == REVISION, "Rewrite dataset revision differs")
+        rewrite_audit = apply_development_rewrites(facts, rewrite_bundle, mode=config["mode"],
+                                                   partition_hash=partition["sha256"], roles=split["roles"])
     generic_path = hf_hub_download("Salesforce/wikitext", "wikitext-2-raw-v1/train-00000-of-00001.parquet",
                                    repo_type="dataset", revision=GENERIC_REVISION)
     generic_rows = pq.read_table(generic_path).to_pylist()
@@ -122,11 +130,15 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
                     "generic_filler_policy": "EOS followed by deterministic pinned WikiText filler; all filler tokens bear loss",
                     "statement_tokens": [len(f["statement_ids"]) for f in facts],
                     "generic_filler_tokens_by_example": {k: v["generic_filler_tokens"] for k, v in examples.items()}}}
+    if rewrite_audit is not None:
+        manifest["statement_rewrite_audit"] = rewrite_audit
     manifest["sha256"] = digest(manifest)
     output.mkdir(parents=True, exist_ok=True)
     tokenizer.save_pretrained(output / "tokenizer")
     write_json(output / "examples.json", examples)
     write_json(output / "schedule.json", schedule)
+    if rewrite_bundle is not None:
+        write_json(output / "statement-rewrites.json", rewrite_bundle)
     write_json(output / "manifest.json", manifest)
     return manifest
 
@@ -141,5 +153,10 @@ def load_prepared(path):
                 "Manifest integrity check failed")
     require(digest(examples) == manifest["examples_sha256"], "Tokenized examples were modified")
     require(schedule["sha256"] == manifest["schedule_sha256"], "Schedule was modified")
+    if manifest.get("statement_rewrite_audit"):
+        rewrite_bundle = read_json(path / "statement-rewrites.json")
+        require(digest({k: v for k, v in rewrite_bundle.items() if k != "sha256"}) ==
+                rewrite_bundle["sha256"] == manifest["statement_rewrite_audit"]["bundle_sha256"],
+                "Prepared rewrite audit changed")
     validate_schedule(schedule, manifest["split"]["facts"], examples)
     return manifest, schedule, examples
