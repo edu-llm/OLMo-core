@@ -60,6 +60,40 @@ def execution_fixture():
 
 
 class SemanticAuthorEvidenceTests(unittest.TestCase):
+    def test_flat_two_phase_receipt_hashes_require_exact_retained_artifacts(self):
+        _, audit = confirmation_fixture()
+        chunk = copy.deepcopy(audit['source_chunks'][0])
+        packet = chunk['review_packet']
+        first = copy.deepcopy(chunk['reviews'][0])
+        first['stage'] = 'first_pass_packet_only'
+        seal(first)
+        supplement = seal({'schema': 'spacing-source-actual-prior-review-evidence-v1',
+            'current_review_packet_sha256': packet['sha256'],
+            'current_authored_sha256': packet['authored_chunk_sha256'],
+            'source_only': True, 'model_outcomes_included': False})
+        receipt = chunk['reviews'][0]
+        chunk['artifact_files'] = {'review_packet': raw(packet, '/synthetic/packet.json')}
+        materials = []
+        for kind, payload in (('first_pass_receipt', first), ('prior_review_supplement', supplement)):
+            artifact = raw(payload, '/synthetic/' + kind + '.json')
+            receipt.update({kind + '_sha256': payload['sha256'],
+                            kind + '_file_sha256': artifact['file_sha256'], kind + '_path': artifact['path']})
+            materials.append({'kind': kind, 'artifact': payload, 'artifact_file': artifact})
+        seal(receipt)
+        chunk['supplemental_review_artifacts'] = [{**row, 'receipt_sha256': receipt['sha256']} for row in materials]
+        declared_receipt_bindings(receipt, packet, [chunk])
+        for kind in ('first_pass_receipt', 'prior_review_supplement'):
+            for field in ('_sha256', '_file_sha256', '_path'):
+                changed = copy.deepcopy(chunk)
+                changed_receipt = changed['reviews'][0]
+                changed_receipt[kind + field] = 'foreign'
+                with self.subTest(kind=kind, field=field), self.assertRaises(ValueError):
+                    declared_receipt_bindings(changed_receipt, packet, [changed])
+        changed = copy.deepcopy(chunk)
+        changed['supplemental_review_artifacts'] = []
+        with self.assertRaisesRegex(ValueError, 'not retained exactly once'):
+            declared_receipt_bindings(receipt, packet, [changed])
+
     def test_nested_actual_supersedes_bind_same_content_prior_rejection_and_new_approval(self):
         facts, audit = confirmation_fixture()
         chunk = audit['source_chunks'][0]

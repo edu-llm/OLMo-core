@@ -473,9 +473,36 @@ def declared_receipt_bindings(receipt, packet, versions):
                                   'previous_packet_sha256', 'previous_packet_file_sha256', 'previous_review_packet_sha256',
                                   'author_packet_file_sha256', 'evaluation_catalog_file_sha256', 'authored_chunk_file_sha256',
                                   'review_packet_file_sha256', 'review_packet_canonical_full_sha256',
-                                  'review_packet_raw_bytes_sha256'}
+                                  'review_packet_raw_bytes_sha256', 'first_pass_receipt_sha256',
+                                  'first_pass_receipt_file_sha256', 'prior_review_supplement_sha256',
+                                  'prior_review_supplement_file_sha256'}
     require(all(not key.endswith('_sha256') or key in allowed_hashes for key in receipt),
             'Actual receipt has an unverified declared provenance hash')
+    for prefix in ('first_pass_receipt', 'prior_review_supplement'):
+        if not any(prefix + suffix in receipt for suffix in ('_sha256', '_file_sha256', '_path')):
+            continue
+        require(all(prefix + suffix in receipt for suffix in ('_sha256', '_file_sha256', '_path')),
+                'Actual two-phase review artifact has incomplete declared bindings')
+        materials = [row for row in bound_version.get('supplemental_review_artifacts', [])
+                     if row.get('receipt_sha256') == receipt['sha256'] and row.get('kind') == prefix]
+        require(len(materials) == 1, 'Actual two-phase review artifact is not retained exactly once')
+        material = materials[0]
+        payload = checked(material.get('artifact'))
+        info = material.get('artifact_file', {})
+        require(payload['sha256'] == receipt[prefix + '_sha256'] and
+                info.get('path') == receipt[prefix + '_path'] and
+                raw_artifact(payload, info) == receipt[prefix + '_file_sha256'],
+                'Actual two-phase review artifact differs from its declared raw and canonical hashes')
+        if prefix == 'first_pass_receipt':
+            require('first_pass' in str(payload.get('stage', '')).casefold() and
+                    packet_binding(payload) == packet['sha256'] and
+                    receipt_identity(payload) == receipt_identity(receipt),
+                    'Actual first-pass artifact differs from the final packet/reviewer')
+        else:
+            require(payload.get('current_review_packet_sha256') == packet['sha256'] and
+                    payload.get('current_authored_sha256') == packet.get('authored_chunk_sha256') and
+                    payload.get('source_only') is True and payload.get('model_outcomes_included') is False,
+                    'Actual prior-review supplement differs from the current blind source packet')
     if 'review_packet_canonical_full_sha256' in receipt:
         require(receipt['review_packet_canonical_full_sha256'] == digest(packet),
                 'Actual receipt full canonical packet hash differs')
