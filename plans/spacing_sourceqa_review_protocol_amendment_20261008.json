@@ -1,0 +1,182 @@
+{
+  "F4_evaluation_custodian_definition": {
+    "custody": "Separate evaluation channel; actual custodian artifact and hash required before final protocol coverage proof.",
+    "exception_surface_correlate_flag": "For each independently certified L5 source-surface correlate, evaluation custodian returns boolean whether own scored probes contain it after frozen normalization. No text exposed, no filtering.",
+    "general_lexical_flag": "Token-set or character-trigram Jaccard >=0.6 between a sourceQA form and its own original canonical/paraphrase probes, computed only in evaluation custody. Nonblocking flag, no filtering, no text/words exposed to authors or source reviewers."
+  },
+  "actual_methods_reviews": [
+    {
+      "file_sha256": "9b104b5d60eadabe0c2fa80ec3a6ddf7dd67cdbf5b517b68fbdcf9c87c683eae",
+      "path": "/tmp/p4-confirmation-narrow-form-protocol-opus-r2-20261008.json",
+      "payload_sha256": "0f36f43ce76139d4bb4111a3eb3aef205976bfae54d9f05fe41ab0e2ec0ab7c7"
+    },
+    {
+      "file_sha256": "7e3e2615a53a86da0c6133f8b45724c584c47d706b24d3a3c95f8d93b3965ccd",
+      "path": "/tmp/p4-source-label-exception-protocol-opus-r3-20261008.json",
+      "payload_sha256": "2335dbda3f8d8ae8220121e27b87f9109f293f09bd2dc1298a15b926d1ea0bbf"
+    }
+  ],
+  "actual_methods_task_evidence": [
+    {
+      "actual_task_id": "node:delegated-task:command%3Amcp%3Ab563dd82-b05c-4e8b-b339-083e09f7a0ec%3Adelegate-task%3Ap4-confirmation-narrow-form-protocol-adjudication-opus-r2-20261008",
+      "file_sha256": "9bff944cc329dc58b620cea04801d3be8121f166385bf90970173e91b78dd633",
+      "path": "/tmp/p4-confirmation-narrow-form-protocol-actual-status-r2-20261008.json"
+    },
+    {
+      "actual_task_id": "node:delegated-task:command%3Amcp%3Ab563dd82-b05c-4e8b-b339-083e09f7a0ec%3Adelegate-task%3Ap4-source-label-exception-protocol-opus-r3-20261008",
+      "file_sha256": "713e9c08f0397c04147019ae6761df943dc11a4da34560886d012b387a6f9bf7",
+      "path": "/tmp/p4-source-label-exception-protocol-actual-status-r3-20261008.json"
+    }
+  ],
+  "adopted_utc": "2026-10-08T09:43:06.728083+00:00",
+  "author": {
+    "human": false,
+    "model": "gpt-6.1-sol",
+    "provider": "openai",
+    "role": "root operator/protocol proposer"
+  },
+  "blind_audit_design_proposal": {
+    "escalation": "Any retained-condition failure sends entire affected chunk carryover rows to fresh review. Two or more failures across chunks send every carryover row to fresh review.",
+    "per_chunk_sample": "min(chunk eligible count, max(30, ceil(0.10*chunk eligible count)))",
+    "population": "Eligible carryover QA only, sorted stable ids then random sampling without replacement per chunk.",
+    "reviewer_blinding": "No prior receipts, rationale or audit label until first-pass receipt is sealed.",
+    "seed": 2026100813,
+    "status": "Prospective fixed design, no sampling performed."
+  },
+  "carryover_conditions": [
+    "Genuine exact-current-content approval receipt with verified actual completed task.",
+    "Co-event factsheet/units/dispositions/golds/questions context unchanged, otherwise fresh review.",
+    "No retained-condition census risk without independent resolution.",
+    "Every approval condition still bound; dependent source conditions re-reviewed/frozen.",
+    "Blind seeded chunk-stratified random audit before final source freeze."
+  ],
+  "census_constants": {
+    "cross_target_different_gold_character_trigram_jaccard_threshold": 0.7,
+    "cross_target_different_gold_token_set_jaccard_threshold": 0.7,
+    "flags_never_automatically_approve_or_exclude": true,
+    "normalization": "Exact frozen acquisition/data.normalize",
+    "stemming": false,
+    "stopword_stripping": false,
+    "within_target_character_trigram_jaccard_threshold": 0.6,
+    "within_target_token_set_jaccard_threshold": 0.6
+  },
+  "claims_forfeited": [
+    "Any proposition- or semantic-knowledge claim (already disclaimed). Additionally, a lane target's 0 EM cannot be read as forgetting, because it may be a correct sibling label.",
+    "That every acquisition prompt uniquely licenses its gold. This holds only for the default class.",
+    "Target-level EM interpretation for lane targets. Joint EM is capped, and target retention may reflect label competition or recency rather than decay.",
+    "That acquisition success on lane targets reflects a source-licensed mapping. It may be a surface shortcut (L5).",
+    "Any claim that inclusion is conservative or attenuating. Effects are unsigned and can be amplified, attenuated or sign-reversed per item.",
+    "Robustness of the main result to source non-uniqueness whenever A1 reports a sign or zero-coverage divergence between the primary and the flagged-exclusion secondary.",
+    "Transport of effect sizes to unique-label QA datasets.",
+    "Any either-label success metric. Only descriptive tables exist."
+  ],
+  "confirmation_ready": false,
+  "created_utc": "2026-10-08T09:33:40.358159+00:00",
+  "development_symmetry": "Source-only provenance reclassification, no reauthoring/training/E reselection/gate change merely for relaxation. Pre-existing retained-condition defects disclosed and independently assessed; a defect invalidating gate separation would require a separate prospective amendment.",
+  "exception_rules": {
+    "E3_E7_retained": "E3-E7 from R2 apply unchanged (E3 read together with LE3). E4: own attribution, never certifying the competitor. E5: every other retained condition passes, including ordinary defects, which the lane never cures. E6: same block, whole-edge flagged mask, A1, A2. E7: per-pair non-uniqueness disclosure.",
+    "LE1_eligibility_any_of": [
+      "LE1a Preserved source conflict/ambiguity: at least one unit carries preserve_source_conflict or preserve_source_ambiguity in the final disposition receipt, and the competing value is asserted by another original unit of the same event.",
+      "LE1b Alias ambiguity: two original units of the same event use different names whose co-reference the factsheet and the assertions neither establish nor exclude.",
+      "LE1c Original-label non-uniqueness: two or more original units of the same event whose raw assertions, with each unit's own canonical labels masked, are equivalent in subject, relation, modality after any required attribution, qualifiers, scope and answer slot. Their original canonical labels are distinct after the frozen EM normalization, and every competing label is an ORIGINAL canonical label, not a reviewer, author or factsheet-only paraphrase."
+    ],
+    "LE1_exclusions": [
+      "labels equal after the frozen normalization (no collision)",
+      "labels occupying different answer slots of the same proposition (discriminable by slot; e.g. ground-5ca5 'replacement custard' vs 'unsuitable')",
+      "any masked-assertion difference in a semantic attribute (ordinary discriminator: C6 applies, revise the QA)",
+      "non-uniqueness created by the QA form itself (e.g. dropping an own-assertion qualifier)",
+      "factsheet-only paraphrase competitors that are not scored targets: these are the generic canonical-only-EM limitation, not cross-target collisions"
+    ],
+    "LE2_membership": "The pair or set belongs to an accepted dependency finding in the final frozen binding, with sub-kind conflict / alias / original_label_nonuniqueness. The finding is decided by the independent membership reviewer applying LE1 across the census, not only to rows proposed so far.",
+    "LE3_certification": "An independent exact-content reviewer certifies in writing, attribute by attribute, that no faithful non-leaking source-backed SEMANTIC discriminator exists. A surface-wording correlate does not count as one (see L5). If a discriminator exists, the forms must use it and the lane is moot.",
+    "applies_to": "Development and confirmation identically. Development is reclassified by provenance receipt only, with no content change, retraining or E reselection.",
+    "default": "R7/C6 unique licensing stays the default for every acquisition target.",
+    "limitations_added": {
+      "L4": "Lane non-unique supervision (kept from R2), with sub-kind tag.",
+      "L5": "Surface-correlate cue: the two lane targets' forms differ systematically in a source-surface token correlated with the label, e.g. 'dish'/'stew' in D25. Disclosed; never treated as licensing."
+    },
+    "status": "Adopted as eligibility/review criteria only; no current exception row or membership is approved by this document."
+  },
+  "frozen_mechanical_files": {
+    "experiments/spacing_rerun/spacing_rerun/acquisition.py": "3870b80e5888cadf83af29db7c8f66427dbcf7a7e0747b0ba7945dc3be54cea0",
+    "experiments/spacing_rerun/spacing_rerun/data.py": "02e4de1a03eb05003eee0ad9a0bd387460592da372b5d7210228fdbe11c8c724",
+    "experiments/spacing_rerun/spacing_rerun/encoding.py": "a0063a630d89bfb0fd5965bcbb6b398bf398f67c051927535e77a2328a3e95d9"
+  },
+  "human_review_complete": false,
+  "main_launched": false,
+  "methods_disagreement_retained": "R2 categorical synonym prohibition and R3 dissent resolution are both retained exactly. R3 resolves the rule for the fixed-original-label retention estimand. Per-row source semantics and final membership still need genuine reviews; no automatic positive status.",
+  "methods_inputs": [
+    "/tmp/p4-confirmation-sourceqa-form-criteria-opus-r1-20261008.json",
+    "/tmp/p4-confirmation-narrow-form-protocol-opus-r2-20261008.json"
+  ],
+  "nonblocking_limitations": {
+    "L1": "Within-target lexical or structural similarity alone, with normalized distinction and both forms individually valid.",
+    "L2": "Source-backed partial answer-concept or context cue alone, subject to R2-R5.",
+    "L3": "Incomplete factsheet support of an explicitly preserved original claim, without rewriting the source to hide it.",
+    "L4": "Certified original source-data answer nonuniqueness only if the final property-defined exception is independently accepted, reviewed and bound.",
+    "L5": "Surface-correlate cue: the two lane targets' forms differ systematically in a source-surface token correlated with the label, e.g. 'dish'/'stew' in D25. Disclosed; never treated as licensing.",
+    "L6": "Definite source/account reference lacks an antecedent, with fully anchored actor/event and proposition question. Disclosed, not a veto by itself."
+  },
+  "operator_code_commit_at_adoption": "2eb20d12f5cd33910aeb336cb9d20ddeb2587da6",
+  "prior_proposal": {
+    "file_sha256": "7594ff322ba6fa6d4199c82eba19a6e830da278deba4b22e2039226fb8e5a277",
+    "path": "/tmp/p4-sourceqa-protocol-proposal-v1-20261008.json",
+    "payload_sha256": "fd6e879e429cc9dc10d30d00f760502be5e80395e14740160cd04ba222e3e15d"
+  },
+  "proposal_timing": {
+    "confirmation_training_started": false,
+    "development_results_exist": true,
+    "full_impact_census_output_viewed": false,
+    "prior_source_review_findings_seen": true,
+    "proposer_has_seen_development_results": true
+  },
+  "required_before_adoption": [],
+  "required_before_main_launch": [
+    "Full current-source symmetric census and development provenance reclassification under these rules.",
+    "All changed, unresolved, flagged retained-condition, changed-context and conditional exception rows receive fresh genuine B1/B2 review.",
+    "Blind seeded audit and any frozen escalation completed.",
+    "Actual complete protocol coverage proof binds exact records/contexts/routing/receipts and all obligations.",
+    "Final independent exact dependency membership/masks/exception-property decisions and actual source conditions frozen.",
+    "Separate descriptive reporting policy, evaluation-custody flags and all actual evidence retained.",
+    "All existing acquisition grid/final-span/cost/precision/A-A/preregistration guards pass."
+  ],
+  "required_controls": {
+    "K1_probe_balance": "For every lane set inside one final group, report scored canonical-root counts per unit and state whether the primary group mean is label-swap-invariant (equal counts) or weighted (unequal). Disclosure only, no reweighting of the primary.",
+    "K2_lane_confusion_tables": "Required separately hash-bound descriptive reporting policy/output, frozen before training, own/sibling/other frequencies for every accepted exception set. No either-label success metric or changed original gold/primary weighting. V3R2 analysis algorithm remains separate and unchanged.",
+    "K3_surface_correlate_flag": "The evaluation-channel custodian reports pass/fail only on whether each lane target's evaluation probes share its L5 surface correlate. No evaluation text reaches authors or reviewers, and no filtering.",
+    "K4_block_and_mask": "Same frozen dependence block and whole-edge flagged mask for every lane edge; merged_group_qa exclusion as already specified.",
+    "K5_A1_A2": "A1 divergence statement must cover the flagged-exclusion and preserved-exclusion secondaries and a lane-only complement score. A2 cluster/form-first averaging applies.",
+    "K6_census": "Full, symmetric, property-keyed census of every group/target in all chunks plus development, by an agent blinded to outcomes, evaluation text and author rationales. It reports newly lane-eligible sets, previously approved rows failing C6 under the masked test, and per-sub-kind counts. Tagging only, no decisions.",
+    "K7_freeze_order": "Freeze the rule text, LE1 operational definitions, the normalization reference and the census categories before viewing census counts. Otherwise retain all versions and rerun as R2 specified.",
+    "K8_independent_final_reviews": "Exact-content B1/B2 reviews for every lane row and every changed row. An independent final membership/policy review of the V3 (or V4) algorithm, edges and masks, with actual task evidence per the interface.",
+    "K9_disclosure": "Timing disclosure (adopted after development results existed, before any confirmation acquisition), plus per-pair notes under P3 and the forfeited claims below."
+  },
+  "retained_checklist": {
+    "R1": "Frozen mechanical validator, exact two normalized-distinct forms per target and exact full target membership.",
+    "R2": "Own original subject, relation, qualifiers, modality and attribution preserved; no added certainty, presupposition or sibling proposition.",
+    "R3": "No complete own answer present or trivially reconstructable without nontrivial recall, assessed independently.",
+    "R4": "Cue comes only from factsheet or own original assertion. No complete other-target gold unless factsheet-verbatim; never certify another preserved conflict.",
+    "R5": "Answer type fits and asks for complete own original label.",
+    "R6": "Fully anchored subject/event and a natural question about the original proposition. Ordinary reportative attribution allowed; missing definite-source antecedent is L6. Verbatim-source-wording extraction or pipeline metadata fail. Naming/designation framing requires that the own raw assertion asserts a designation; an ordinary imperative answer/list request is allowed.",
+    "R7": "Unique semantic licensing is the default. Otherwise all LE1-LE3 and E3-E7 property-defined conditions below require genuine independent review and final policy binding.",
+    "R8": "Evidence quotation exact pinned line; incomplete factsheet support of original preserved source claim expressly disclosed.",
+    "R9": "Actual author/reviewer isolation and exact independent receipt/task evidence."
+  },
+  "review_process": "Freeze adopted rule text before viewing full impact counts, census flags only, fresh blind first pass then preserved actual history reconciliation, explicit genuine supersession only on approval. Every draft and disagreement retained.",
+  "review_rule_change_disclosure": "A prospective relaxation and clarification adopted after development results were observed, before confirmation training. Prior de facto form-diversity and partial-cue vetoes become disclosed limitations. Certified original-data nonuniqueness has a property-defined conditional exception. Every disagreement and failed review is retained. This does not approve rows or authorize launch.",
+  "schema": "spacing-sourceqa-prospective-review-protocol-v1",
+  "sha256": "dc5f4728b1756fd9490024d4591c7b497e910f1ec9d007e74cd3037dbde89561",
+  "source_approval_created_by_this_document": false,
+  "status": "operator_adopted_criteria_with_launch_obligations_unfulfilled",
+  "unchanged": [
+    "original gold and aliases",
+    "canonical-only evaluation",
+    "primary aggregation and inference",
+    "40-70 percent development gate",
+    "frozen common-E selector and all planned doses",
+    "all original events, targets and replicates",
+    "shared acquisition before five-arm fork",
+    "source-author and evaluator channel isolation"
+  ],
+  "version": 1
+}
