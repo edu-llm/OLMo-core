@@ -434,6 +434,20 @@ def decisions_for(receipt, field):
     return present[0] if present else []
 
 
+def supersession_edges(receipt):
+    """Read exact top-level and decision-scoped edges without rewriting receipts."""
+    edges = list(receipt.get('supersedes', []))
+    for field in ('groups', 'acquisition_records', 'records'):
+        for decision in decisions_for(receipt, field):
+            for edge in decision.get('supersedes', []):
+                require(decision.get('status') == 'approved' and edge.get('field') == field and
+                        edge.get('id') == decision.get('id') and
+                        edge.get('reviewed_content_sha256') == decision.get('reviewed_content_sha256'),
+                        'Nested review supersession edge differs from its exact approved decision')
+                edges.append(edge)
+    return edges
+
+
 def raw_artifact(payload, provenance):
     require(provenance and isinstance(provenance.get('utf8'), str) and
             hashlib.sha256(provenance['utf8'].encode()).hexdigest() == provenance.get('file_sha256'),
@@ -632,7 +646,7 @@ def reviewed_records(packet, receipts, field, author, *, schema, history=(), art
             judgments.extend((receipt['sha256'], row) for row in decisions)
     superseded = set()
     for receipt_sha, receipt in actual_receipts.items():
-        for edge in receipt.get('supersedes', []):
+        for edge in supersession_edges(receipt):
             if edge.get('field') != field:
                 continue
             prior_sha = edge.get('review_receipt_sha256')

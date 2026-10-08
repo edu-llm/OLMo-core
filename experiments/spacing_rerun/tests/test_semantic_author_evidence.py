@@ -60,6 +60,37 @@ def execution_fixture():
 
 
 class SemanticAuthorEvidenceTests(unittest.TestCase):
+    def test_nested_actual_supersedes_bind_same_content_prior_rejection_and_new_approval(self):
+        facts, audit = confirmation_fixture()
+        chunk = audit['source_chunks'][0]
+        prior = copy.deepcopy(chunk)
+        prior['reviews'][0]['acquisition_records'][0]['status'] = 'needs_revision'
+        seal(prior['reviews'][0])
+        chunk['history'] = [prior]
+        decision = chunk['reviews'][0]['acquisition_records'][0]
+        decision['supersedes'] = [{'review_receipt_sha256': prior['reviews'][0]['sha256'],
+            'field': 'acquisition_records', 'id': decision['id'],
+            'reviewed_content_sha256': decision['reviewed_content_sha256']}]
+        seal(chunk['reviews'][0])
+        seal(audit)
+        self.assertTrue(validate_confirmation_audit(audit, source_facts=facts)['independent_agent_review_complete'])
+        for field, value in (('field', 'groups'), ('id', 'foreign-record'),
+                             ('reviewed_content_sha256', '0'*64), ('review_receipt_sha256', '0'*64)):
+            changed = copy.deepcopy(audit)
+            receipt = changed['source_chunks'][0]['reviews'][0]
+            receipt['acquisition_records'][0]['supersedes'][0][field] = value
+            seal(receipt)
+            seal(changed)
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                validate_confirmation_audit(changed, source_facts=facts)
+        changed = copy.deepcopy(audit)
+        receipt = changed['source_chunks'][0]['reviews'][0]
+        receipt['acquisition_records'][0]['status'] = 'needs_revision'
+        seal(receipt)
+        seal(changed)
+        with self.assertRaisesRegex(ValueError, 'exact approved decision'):
+            validate_confirmation_audit(changed, source_facts=facts)
+
     def test_actual_reviewer_client_label_is_preserved_and_remains_independent(self):
         facts, audit = confirmation_fixture()
         chunk = audit['source_chunks'][0]
