@@ -1550,16 +1550,31 @@ def test_real_final_candidate_retains_actual_receipts_without_evaluation_reads(r
                     for e in row.get("supersedes", [])]
     assert len(raw_r4_edges) == 81
     assert len([e for e in coverage["validated_supersedes"] if e["receipt_sha256"] == r4["sha256"]]) == 81
-    assert len(coverage["validated_supersedes"]) == 99
+    # The historical ledger still blocks without the new, actual dependency
+    # adjudications. Do not freeze the live ledger to its pre-adjudication count.
+    legacy_receipts = [r for r in receipts
+                       if "-v7-opus-dependency-" not in Path(r["path"]).name]
+    legacy = review_coverage(final, packets, legacy_receipts,
+                             authored_artifacts=histories, task_evidence=evidence)
+    assert len(legacy["validated_supersedes"]) == 99
     r5 = next(r["payload"] for r in receipts if Path(r["path"]).name == "chunk-02-v6-opus-preservation-r5.json")
     blocked_ids = {(field, row["id"]) for field in FIELDS for row in development._receipt_decisions(r5, field)}
     assert len(blocked_ids) == 12
-    assert {(r["field"], r["id"]) for r in coverage["blockers"]} == blocked_ids
+    assert {(r["field"], r["id"]) for r in legacy["blockers"]} == blocked_ids
     for record in coverage["records"]:
         if (record["field"], record["id"]) in blocked_ids:
-            judgment = next(e for e in record["active_decisions"] if e["receipt_sha256"] == r5["sha256"])
-            assert judgment["status"] == "needs_revision" and not judgment["superseded_by_receipt_sha256"]
-    assert sum(e["status"] in development.NEGATIVE for r in coverage["records"]
+            judgment = next(e for e in record["matching_history"] if e["receipt_sha256"] == r5["sha256"])
+            assert judgment["status"] == "needs_revision"
+            if judgment["superseded_by_receipt_sha256"]:
+                for resolving in judgment["superseded_by_receipt_sha256"]:
+                    assert any(edge["receipt_sha256"] == resolving and
+                               edge["review_receipt_sha256"] == r5["sha256"] and
+                               edge["field"] == record["field"] and edge["id"] == record["id"] and
+                               edge["reviewed_content_sha256"] == judgment["reviewed_content_sha256"]
+                               for edge in coverage["validated_supersedes"])
+            else:
+                assert judgment in record["active_decisions"] and not record["complete"]
+    assert sum(e["status"] in development.NEGATIVE for r in legacy["records"]
                for e in r["active_decisions"]) == 54
     bindings = coverage["author_task_provenance"]
     native = [b for b in bindings if b["channel"].startswith("native:")]
