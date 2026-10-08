@@ -24,7 +24,7 @@ from . import SCHEMA
 from .common import digest, require, write_json
 from .data import normalize
 from .evaluation import conditional_scores, generated_answers, metric_means
-from .units import LEGACY_POLICY, LEGACY_METRICS, UNIT_METRICS, training_key
+from .units import LEGACY_POLICY, LEGACY_METRICS, UNIT_METRICS, GROUNDED_POLICY, GROUNDED_METRICS, training_key
 from .prepare import load_prepared
 from .training import load_checkpoint, load_model, make_optimizer, seed_all
 
@@ -173,7 +173,8 @@ def diagnose(prepared, checkpoint, output, *, device="cuda", max_runtime_seconds
     old, qa, statement = [sections[key]["aggregate"] for key in ("old_qa", "qa_teaching", "old_statement_content")]
     result = {"schema": SCHEMA, "type": "post_acquisition_diagnostic", "status": "complete",
               "rehearsal_unit_policy": manifest.get("rehearsal_unit_policy", LEGACY_POLICY),
-              "metric_schema": UNIT_METRICS if "unit_registry" in manifest else LEGACY_METRICS,
+              "metric_schema": (GROUNDED_METRICS if manifest.get("rehearsal_unit_policy") == GROUNDED_POLICY else
+                                UNIT_METRICS if "unit_registry" in manifest else LEGACY_METRICS),
               "started_utc": started_utc, "code_commit": code_commit,
               "manifest_sha256": manifest["sha256"], "checkpoint_path": str(checkpoint.resolve()),
               "checkpoint_sha256": checkpoint_hash, "checkpoint_bytes": before.st_size,

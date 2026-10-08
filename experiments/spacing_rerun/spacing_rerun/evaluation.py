@@ -6,7 +6,7 @@ import time
 
 from .common import require
 from .data import normalize
-from .units import LEGACY_METRICS, UNIT_METRICS
+from .units import LEGACY_METRICS, UNIT_METRICS, GROUNDED_METRICS, GROUNDED_POLICY
 
 
 def metric_means(rows, metric):
@@ -167,6 +167,8 @@ def evaluate(model, tokenizer, facts, config, device, autocast, behavior=True, g
                     "aggregate": aggregate(rows)["qa"], "facts": rows}
         timings["qa_teaching_diagnostic_seconds"] = time.monotonic() - tick
     model.train(was_training)
-    return {"metric_schema": UNIT_METRICS if selected and "unit_id" in selected[0] else LEGACY_METRICS,
+    metric_schema = (GROUNDED_METRICS if config.get("rehearsal_unit_policy") == GROUNDED_POLICY else
+                     UNIT_METRICS if selected and "unit_id" in selected[0] else LEGACY_METRICS)
+    return {"metric_schema": metric_schema,
             "variants": variants, "generic_loss": generic_loss, "qa_teaching_diagnostic": teaching, "timings": timings,
             "wall_seconds": time.monotonic() - started}

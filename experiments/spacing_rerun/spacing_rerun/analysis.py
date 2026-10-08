@@ -5,7 +5,7 @@ from pathlib import Path
 import statistics
 
 from .common import read_json, require, write_json
-from .units import LEGACY_POLICY, UNIT_POLICY, LEGACY_METRICS, UNIT_METRICS
+from .units import LEGACY_POLICY, UNIT_POLICY, LEGACY_METRICS, UNIT_METRICS, GROUNDED_POLICY, GROUNDED_METRICS
 
 
 def paired_interval(values, confidence):
@@ -74,7 +74,8 @@ def summarize_bundles(bundle_paths, output, primary_delay, margin=.02, preregist
         manifest = read_json(path / "prepared" / "manifest.json")
         stage2 = read_json(path / "prepared" / "schedule.json")["stage2_steps"]
         policy = manifest.get("rehearsal_unit_policy", LEGACY_POLICY)
-        expected_metrics = UNIT_METRICS if policy == UNIT_POLICY else LEGACY_METRICS
+        expected_metrics = {UNIT_POLICY: UNIT_METRICS, GROUNDED_POLICY: GROUNDED_METRICS,
+                            LEGACY_POLICY: LEGACY_METRICS}[policy]
         bundle = {"manifest_sha256": manifest["sha256"], "mode": manifest["mode"], "arms": {},
                   "rehearsal_unit_policy": policy, "metric_schema": expected_metrics}
         for arm in ("NONE", "UNI", "EXP", "MASS", "GEN"):

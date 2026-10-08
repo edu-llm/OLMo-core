@@ -12,8 +12,9 @@ from .data import (DATASET, MODEL, MODEL_REVISION_PREFIX, REVISION, assign_roles
 from .encoding import build_examples, generic_slice
 from .schedule import compile_schedule, validate_schedule
 from .rewrites import apply_development_rewrites
-from .units import LEGACY_POLICY, UNIT_POLICY, build_units, schedule_records, validate_units
+from .units import LEGACY_POLICY, UNIT_POLICY, GROUNDED_POLICY, build_units, schedule_records, validate_units
 from .teaching import CANONICAL_QA_POLICY, SOURCE_QA_POLICY, build_teaching_pool, validate_teaching_pool
+from .grounding import FACTSHEETS_SHA256, build_grounded_registry, validate_bundle, validate_grounded_registry
 
 MCQ_CONFIG = "gend_mcq_w_grades_03-01-26"
 GENERIC_REVISION = "b08601e04326c79dfdd32d625aee71d232d685c3"
@@ -41,8 +42,14 @@ def validate_config(config):
     require(config["primary_delay"] in delays, "Primary delay must be a declared evaluation delay")
     require(max(delays) == config["buffer_steps"], "Longest evaluated delay must end the buffer")
     require(all(0 < f < 1 for f in config["stage2_eval_fractions"]), "Stage2 grid lies outside Stage2")
-    require(config.get("rehearsal_unit_policy", LEGACY_POLICY) in (LEGACY_POLICY, UNIT_POLICY),
+    require(config.get("rehearsal_unit_policy", LEGACY_POLICY) in (LEGACY_POLICY, UNIT_POLICY, GROUNDED_POLICY),
             "Unknown rehearsal unit policy")
+    if config.get("rehearsal_unit_policy") == GROUNDED_POLICY:
+        require(config["mode"] == "development", "Grounded assertion units are development-only until audited and frozen")
+        require(config.get("training_unit_grounding") and not config.get("training_statement_rewrites"),
+                "Grounded assertions require their own reviewed bundle without a second rewrite recipe")
+    else:
+        require(not config.get("training_unit_grounding"), "Grounding bundle requires grounded_assertion_v1")
     require(config.get("qa_teaching_policy", CANONICAL_QA_POLICY) in (CANONICAL_QA_POLICY, SOURCE_QA_POLICY),
             "Unknown QA-teaching policy")
     if config.get("qa_teaching_policy") == SOURCE_QA_POLICY:
@@ -105,7 +112,21 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
         require(rewrite_bundle["source_dataset_revision"] == REVISION, "Rewrite dataset revision differs")
         rewrite_audit = apply_development_rewrites(facts, rewrite_bundle, mode=config["mode"],
                                                    partition_hash=partition["sha256"], roles=split["roles"])
-    unit_registry = build_units(facts) if config.get("rehearsal_unit_policy") == UNIT_POLICY else None
+    unit_registry = build_units(facts) if config.get("rehearsal_unit_policy") in (UNIT_POLICY, GROUNDED_POLICY) else None
+    source_registry, grounding_bundle = None, None
+    if config.get("rehearsal_unit_policy") == GROUNDED_POLICY:
+        grounding_path = Path(config_path).resolve().parent / config["training_unit_grounding"]
+        grounding_bundle = read_json(grounding_path)
+        factsheet_path = (Path(source_directory) / "fictsheets.parquet" if source_directory else hf_hub_download(
+            DATASET, "fictsheets/train-00000-of-00001.parquet", repo_type="dataset", revision=REVISION))
+        require(hashlib.sha256(Path(factsheet_path).read_bytes()).hexdigest() == FACTSHEETS_SHA256,
+                "Factsheet parquet differs from pinned source revision")
+        factsheets = {r["event_id"]: r["fictsheet"] for r in pq.read_table(factsheet_path).to_pylist()}
+        source_registry = unit_registry
+        validate_bundle(grounding_bundle, facts, source_registry, mode=config["mode"],
+                        partition_hash=partition["sha256"], roles=split["roles"], pinned_factsheets=factsheets)
+        unit_registry = build_grounded_registry(facts, source_registry, grounding_bundle)
+        validate_grounded_registry(facts, unit_registry, source_registry, grounding_bundle)
     teaching_pool = (build_teaching_pool(source_rows, facts, split["roles"], config["mode"])
                      if config.get("qa_teaching_policy") == SOURCE_QA_POLICY else None)
     teaching_records = teaching_pool["records"] if teaching_pool else None
@@ -115,6 +136,11 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
     generic_text = "\n".join(row["text"] for row in generic_rows if row["text"].strip())
     generic_tokens = tokenizer.encode(generic_text, add_special_tokens=False)
     examples = build_examples(facts, tokenizer, generic_tokens, config, teaching_records)
+    if grounding_bundle:
+        measured = {g["id"]: len(tokenizer.encode(g["statement"], add_special_tokens=False))
+                    for g in grounding_bundle["groups"]}
+        require(all(measured[g["id"]] == g["statement_tokens"] for g in grounding_bundle["groups"]) and
+                max(measured.values()) == grounding_bundle["max_statement_tokens"], "Grounded token-length audit differs")
     # Encoding adds frozen probes/option order to the same fact objects.
     split["sha256"] = digest({k: v for k, v in split.items() if k != "sha256"})
     training_records = schedule_records(facts, unit_registry, teaching_records)
@@ -154,6 +180,12 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
         manifest["unit_registry"] = unit_registry
     if teaching_pool is not None:
         manifest["qa_teaching_pool"] = teaching_pool
+    if grounding_bundle is not None:
+        manifest["source_unit_registry"] = source_registry
+        manifest["grounding_audit"] = {"bundle_sha256": grounding_bundle["sha256"],
+            "source_factsheets_sha256": FACTSHEETS_SHA256, "source_units": grounding_bundle["source_unit_count"],
+            "groups": len(grounding_bundle["groups"]), "independent_agent_review_complete": True,
+            "human_review_complete": grounding_bundle["human_review_complete"]}
     manifest["sha256"] = digest(manifest)
     output.mkdir(parents=True, exist_ok=True)
     tokenizer.save_pretrained(output / "tokenizer")
@@ -161,6 +193,8 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
     write_json(output / "schedule.json", schedule)
     if rewrite_bundle is not None:
         write_json(output / "statement-rewrites.json", rewrite_bundle)
+    if grounding_bundle is not None:
+        write_json(output / "grounding-declarations.json", grounding_bundle)
     write_json(output / "manifest.json", manifest)
     return manifest
 
@@ -184,7 +218,17 @@ def load_prepared(path):
     registry = manifest.get("unit_registry")
     require(manifest.get("rehearsal_unit_policy", LEGACY_POLICY) ==
             manifest["config"].get("rehearsal_unit_policy", LEGACY_POLICY), "Manifest unit policy differs from config")
-    if manifest["config"].get("rehearsal_unit_policy") == UNIT_POLICY:
+    if manifest["config"].get("rehearsal_unit_policy") == GROUNDED_POLICY:
+        require(registry is not None and manifest.get("source_unit_registry") and manifest.get("grounding_audit"),
+                "Missing original/grounded unit provenance")
+        bundle = read_json(path / "grounding-declarations.json")
+        require(manifest["grounding_audit"]["bundle_sha256"] == bundle["sha256"] and
+                manifest["grounding_audit"]["source_factsheets_sha256"] == FACTSHEETS_SHA256,
+                "Prepared grounding evidence differs")
+        validate_bundle(bundle, facts, manifest["source_unit_registry"], mode=manifest["mode"],
+                        partition_hash=manifest["partition"]["sha256"], roles=manifest["split"]["roles"])
+        validate_grounded_registry(facts, registry, manifest["source_unit_registry"], bundle)
+    elif manifest["config"].get("rehearsal_unit_policy") == UNIT_POLICY:
         require(registry is not None, "Missing rehearsal unit registry")
         validate_units(facts, registry)
     else:

@@ -7,8 +7,10 @@ from .common import digest, require
 from .data import normalize
 
 UNIT_POLICY = "source_statement_v1"
+GROUNDED_POLICY = "grounded_assertion_v1"
 LEGACY_POLICY = "question_root_v1"
 UNIT_METRICS = "spacing-metrics-v2-unit-macro"
+GROUNDED_METRICS = "spacing-metrics-v3-grounded-unit-macro"
 LEGACY_METRICS = "spacing-metrics-v1-fact-macro"
 
 
