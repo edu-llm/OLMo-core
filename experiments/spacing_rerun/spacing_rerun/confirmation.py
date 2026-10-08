@@ -38,7 +38,8 @@ def identity(person):
     require(isinstance(person, dict), "Missing author/reviewer identity")
     if person.get("actual_identity") and person.get("model_family") and person.get("human") is False:
         return person["actual_identity"]
-    name = person.get("agent_id") or person.get("identity") or person.get('review_task_id') or person.get('review_name') or person.get('name')
+    name = (person.get("agent_id") or person.get("identity") or person.get('review_task_id') or
+            person.get('review_name') or person.get('name') or person.get('client_label'))
     require(name and (person.get("provider") or person.get("harness")) and
             (person.get("model") or person.get("model_id")), "Actual author/reviewer provider/model identity is required")
     return name
@@ -52,7 +53,7 @@ def receipt_identity(receipt, author=None):
     require(isinstance(legacy, dict) and legacy.get('provider') and legacy.get('model') and
             receipt.get('human_review_complete') is False,
             'Original receipt lacks actual provider/model identity or truthful human status')
-    if any(legacy.get(key) for key in ('agent_id', 'identity', 'review_task_id', 'review_name', 'name')):
+    if any(legacy.get(key) for key in ('agent_id', 'identity', 'review_task_id', 'review_name', 'name', 'client_label')):
         return identity(legacy)
     if author is not None:
         # Without a named run identity, a separate model family is required.
@@ -583,6 +584,8 @@ def reviewed_records(packet, receipts, field, author, *, schema, history=(), art
         require(len(by_id) == len(bound_packet.get(field, [])), 'Duplicate historical review packet record')
         for receipt in version_receipts:
             checked(receipt, schema)
+            require('first_pass' not in str(receipt.get('stage', '')).casefold(),
+                    'Provisional first-pass review cannot confer final semantic approval')
             if artifact_versions is not None:
                 declared_receipt_bindings(receipt, bound_packet, artifact_versions)
             if version_author.get('author_context'):

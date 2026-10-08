@@ -60,6 +60,30 @@ def execution_fixture():
 
 
 class SemanticAuthorEvidenceTests(unittest.TestCase):
+    def test_actual_reviewer_client_label_is_preserved_and_remains_independent(self):
+        facts, audit = confirmation_fixture()
+        chunk = audit['source_chunks'][0]
+        receipt = chunk['reviews'][0]
+        receipt['reviewer'] = {'client_label': 'synthetic-independent-review-request',
+                               'provider': 'anthropic', 'model': 'fixture-model', 'human': False}
+        seal(receipt)
+        seal(audit)
+        self.assertTrue(validate_confirmation_audit(audit, source_facts=facts)['independent_agent_review_complete'])
+        receipt['reviewer']['client_label'] = chunk['authored']['author']['agent_id']
+        seal(receipt)
+        seal(audit)
+        with self.assertRaises(ValueError):
+            validate_confirmation_audit(audit, source_facts=facts)
+
+    def test_provisional_blind_first_pass_cannot_supply_final_approval(self):
+        facts, audit = confirmation_fixture()
+        receipt = audit['source_chunks'][0]['reviews'][0]
+        receipt.update(stage='stage1_first_pass_packet_only_partial', prior_review_supplement_opened=False)
+        seal(receipt)
+        seal(audit)
+        with self.assertRaisesRegex(ValueError, 'Provisional first-pass review'):
+            validate_confirmation_audit(audit, source_facts=facts)
+
     def test_whole_prior_source_snapshots_bind_exact_raw_artifacts_and_completed_review(self):
         chunk, row, _, ancestor = execution_fixture()
         packet = row['semantic_execution_evidence']['input_packet']
