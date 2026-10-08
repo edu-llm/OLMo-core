@@ -7,10 +7,13 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import importlib.metadata
 import json
 import math
 from pathlib import Path
 import statistics
+import sys
+import types
 
 from . import SCHEMA
 from .acquisition_grid import checkpoint_digest, verify_acquisition_grid_selection
@@ -383,7 +386,7 @@ def evaluate_final_span(bundle_paths, output, *, selection_paths=None, allocatio
     return packet
 
 
-def verify_final_span_report(report_path):
+def _verify_final_span_report_full(report_path):
     """Recompute a saved receipt from its actual immutable input files."""
     validate_planning_policy()
     packet = read_json(report_path)
@@ -413,13 +416,230 @@ def verify_final_span_report(report_path):
     return packet
 
 
+PREFLIGHT_SCHEMA = "spacing-final-span-verified-preflight-v1"
+
+
+def _file_identity(path):
+    """ctime catches byte changes even when a writer restores the old mtime."""
+    status = Path(path).stat()
+    require(Path(path).is_file(), "Preflight evidence must remain a regular file")
+    return {"device": status.st_dev, "inode": status.st_ino, "size": status.st_size,
+            "mtime_ns": status.st_mtime_ns, "ctime_ns": status.st_ctime_ns,
+            "mode": status.st_mode, "uid": status.st_uid, "gid": status.st_gid}
+
+
+def _runtime_environment():
+    # Import the analysis dependencies before indexing their actual loaded code.
+    import numpy
+    import scipy.stats
+    import torch
+    code_root = Path(__file__).resolve().parent
+    source = {str(p.resolve()): checkpoint_digest(p) for p in sorted(code_root.rglob("*.py"))}
+    callables = {}
+    proof_modules = ("common", "acquisition_grid", "acquisition_policy", "acquisition", "prepare",
+                     "data", "grounding", "units", "schedule", "teaching", "rewrites", "analysis")
+    namespaces = {"spacing_rerun.final_span": globals()}
+    namespaces.update({"spacing_rerun." + name: vars(importlib.import_module("spacing_rerun." + name))
+                       for name in proof_modules})
+    for name, namespace in sorted(namespaces.items()):
+        for attr, value in sorted(namespace.items()):
+            code = getattr(value, "__code__", None)
+            if code is not None:
+                # Bind the code actually loaded in memory as well as source
+                # bytes, so a stale import or runtime monkeypatch invalidates.
+                callables[f"{name}.{attr}"] = digest(_code_projection(code))
+    versions = {}
+    for distribution in ("numpy", "scipy", "torch", "transformers", "ai2-olmo", "tokenizers", "pyarrow"):
+        try:
+            versions[distribution] = importlib.metadata.version(distribution)
+        except importlib.metadata.PackageNotFoundError:
+            versions[distribution] = None
+    return {"python": sys.version, "python_executable": str(Path(sys.executable).resolve()),
+            "versions": versions, "package_source_sha256": source,
+            "loaded_callable_code_sha256": callables,
+            "dependency_roots": {name: str(Path(module.__file__).resolve()) for name, module in
+                                 (("numpy", numpy), ("scipy", sys.modules["scipy"]), ("torch", torch))}}
+
+
+def _code_constant(value):
+    # marshal contains interning/reference flags that can vary across calls.
+    # Project immutable code fields and constants without those process flags.
+    if isinstance(value, types.CodeType):
+        return {"code": _code_projection(value)}
+    if value is Ellipsis:
+        return {"ellipsis": True}
+    if isinstance(value, bytes):
+        return {"bytes": value.hex()}
+    if isinstance(value, tuple):
+        return {"tuple": [_code_constant(item) for item in value]}
+    if isinstance(value, frozenset):
+        items = [_code_constant(item) for item in value]
+        return {"frozenset": sorted(items, key=digest)}
+    if isinstance(value, (float, complex)):
+        return {type(value).__name__: repr(value)}
+    require(value is None or type(value) in (bool, int, str), "Unsupported loaded code constant")
+    return value
+
+
+def _code_projection(code):
+    return {"bytecode": code.co_code.hex(), "constants": [_code_constant(v) for v in code.co_consts],
+            "names": code.co_names, "varnames": code.co_varnames, "freevars": code.co_freevars,
+            "cellvars": code.co_cellvars, "argcount": code.co_argcount,
+            "posonlyargcount": code.co_posonlyargcount, "kwonlyargcount": code.co_kwonlyargcount,
+            "flags": code.co_flags, "filename": code.co_filename, "firstlineno": code.co_firstlineno,
+            "linetable": code.co_linetable.hex(), "exceptiontable": code.co_exceptiontable.hex()}
+
+
+def _runtime_dependency_paths():
+    roots = ("numpy", "scipy", "torch", "pyarrow", "tokenizers")
+    paths = {Path(sys.executable).resolve()}
+    for name, module in sys.modules.copy().items():
+        if any(name == root or name.startswith(root + ".") for root in roots):
+            filename = getattr(module, "__file__", None)
+            if filename and Path(filename).is_file():
+                paths.add(Path(filename).resolve())
+    return paths
+
+
+def _preflight_input_paths(report_path, report):
+    paths = {Path(report_path).resolve(),
+             Path(__file__).resolve().parents[1] / "configs/final-span-planning-policy-20261008.json"}
+    prepared_roots = set()
+    for bundle in report["bundles"]:
+        paths.update(Path(row["path"]).resolve() for row in bundle["provenance"])
+        selection_path = Path(bundle["selection_path"]).resolve()
+        paths.add(selection_path)
+        selection = read_json(selection_path)
+        paths.update(Path(row["decision_path"]).resolve() for row in selection["grid_inputs"])
+        binding = selection["selection_rule"]
+        require(binding["schema"] == BINDING_SCHEMA, "Preflight requires the actual nine-manifest binding")
+        for row in binding["trials"]:
+            prepared_roots.add(Path(row["prepared_path"]).resolve())
+        for arm in ARMS:
+            directory = Path(bundle["bundle_path"]) / arm
+            paths.update(p.resolve() for p in directory.glob("attempt-*.json"))
+            paths.update(p.resolve() for p in (directory / "evaluations").glob("stage2-*.json"))
+    # Each of the six selections refers to the same nine prepared directories.
+    # Traverse that inventory once, retaining new/removed-input invalidation.
+    for prepared in prepared_roots:
+        paths.update(p.resolve() for p in prepared.rglob("*") if p.is_file())
+    accounting = report["cost"].get("accounting_path")
+    if accounting:
+        paths.add(Path(accounting).resolve())
+    return paths
+
+
+def create_final_span_preflight(report_path, output):
+    """Fully verify once, then freeze the exact local evidence/code identity.
+
+    Bind the returned content SHA into the preregistration before using the
+    receipt. It applies only to the same retained files and runtime snapshot.
+    Any filesystem identity, code or software change requires a fresh full
+    verification. This is a cache of a completed proof, not an approval source.
+    """
+    require(not Path(output).exists(), "Final-span preflight already exists; never overwrite")
+    runtime_before = _runtime_environment()
+    candidate = read_json(report_path)
+    initial_paths = _preflight_input_paths(report_path, candidate)
+    initial_paths.update(Path(path) for path in runtime_before["package_source_sha256"])
+    initial_paths.update(_runtime_dependency_paths())
+    before = {str(path): _file_identity(path) for path in sorted(initial_paths)}
+    report = _verify_final_span_report_full(report_path)
+    runtime_after = _runtime_environment()
+    require(runtime_before == runtime_after, "Runtime code/software changed during full preflight verification")
+    paths = _preflight_input_paths(report_path, report)
+    paths.update(Path(path) for path in runtime_after["package_source_sha256"])
+    # Full torch deserialization can lazily import additional dependencies.
+    dependency_paths = _runtime_dependency_paths()
+    paths.update(dependency_paths)
+    require(initial_paths <= paths and all(_file_identity(path) == identity for path, identity in before.items()),
+            "Evidence changed during full preflight verification")
+    known_hashes = dict(runtime_after["package_source_sha256"])
+    for bundle in report["bundles"]:
+        for row in bundle["provenance"]:
+            path = str(Path(row["path"]).resolve())
+            require(path not in known_hashes or known_hashes[path] == row["sha256"], "Conflicting verified provenance hashes")
+            known_hashes[path] = row["sha256"]
+    files = []
+    for path in sorted(paths):
+        identity = _file_identity(path)
+        sha = known_hashes.get(str(path)) or checkpoint_digest(path)
+        require(_file_identity(path) == identity, "Evidence changed while indexing full preflight")
+        files.append({"path": str(path), "sha256": sha, "identity": identity})
+    require(all(_file_identity(row["path"]) == row["identity"] for row in files), "Evidence changed before preflight freeze")
+    require(_runtime_environment() == runtime_after, "Runtime changed before preflight freeze")
+    packet = {"schema": PREFLIGHT_SCHEMA,
+              "verified_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "verification": "complete_raw_proof_chain_and_fixed_power_simulation",
+              "report_path": str(Path(report_path).resolve()), "report_sha256": report["sha256"],
+              "planning_policy_sha256": PLANNING_POLICY_SHA256,
+              "runtime": runtime_after, "dependency_paths": sorted(map(str, dependency_paths)),
+              "files": files, "input_index_sha256": digest(files),
+              "cache_scope": "Same retained local filesystem objects. Device/inode/size/mtime/ctime/mode and source/software identity must remain unchanged. Bind this receipt SHA in the frozen preregistration.",
+              "human_review_complete": False, "confirmation_ready": False}
+    packet["sha256"] = digest(packet)
+    write_json(output, packet)
+    return packet
+
+
+def _verify_preflight(report_path, preflight_path, expected_sha256):
+    require(expected_sha256 is not None, "Cheap preflight verification requires the receipt SHA bound in the frozen preregistration")
+    receipt = read_json(preflight_path)
+    require(receipt.get("schema") == PREFLIGHT_SCHEMA and receipt.get("sha256") == expected_sha256 ==
+            digest({k: v for k, v in receipt.items() if k != "sha256"}), "Verified preflight receipt differs from the frozen content hash")
+    require(receipt.get("verification") == "complete_raw_proof_chain_and_fixed_power_simulation" and
+            receipt["planning_policy_sha256"] == PLANNING_POLICY_SHA256 and
+            receipt["report_path"] == str(Path(report_path).resolve()) and
+            receipt.get("human_review_complete") is False and receipt.get("confirmation_ready") is False,
+            "Verified preflight scope, report or policy differs")
+    validate_planning_policy()
+    runtime = _runtime_environment()
+    require(runtime == receipt["runtime"], "Runtime code/content/software changed; repeat full preflight verification")
+    report = read_json(report_path)
+    require(report.get("sha256") == receipt["report_sha256"] == digest({k: v for k, v in report.items() if k != "sha256"}) and
+            report.get("planning_policy") == PLANNING_POLICY and report.get("planning_policy_sha256") == PLANNING_POLICY_SHA256,
+            "Bound final-span report or planning policy changed")
+    files = receipt["files"]
+    require(receipt["input_index_sha256"] == digest(files) and len(files) == len({row["path"] for row in files}),
+            "Preflight file index was changed or duplicated")
+    paths = _preflight_input_paths(report_path, report)
+    paths.update(Path(path) for path in runtime["package_source_sha256"])
+    paths.update(Path(path) for path in receipt["dependency_paths"])
+    require(set(map(str, paths)) == {row["path"] for row in files}, "Preflight input inventory changed; repeat full verification")
+    require(all(_file_identity(row["path"]) == row["identity"] for row in files),
+            "Verified input bytes/filesystem identity changed; repeat full preflight verification")
+    # These small records are rehashed at every launch, in addition to ctime.
+    small_paths = {str(Path(report_path).resolve())}
+    small_paths.update(str(Path(bundle["selection_path"]).resolve()) for bundle in report["bundles"])
+    small_paths.add(str((Path(__file__).resolve().parents[1] / "configs/final-span-planning-policy-20261008.json").resolve()))
+    hashes = {row["path"]: row["sha256"] for row in files}
+    require(all(checkpoint_digest(path) == hashes[path] for path in small_paths),
+            "Bound report, policy or selected-dose proof bytes changed")
+    return report
+
+
+def verify_final_span_report(report_path, *, preflight_path=None, expected_preflight_sha256=None):
+    if preflight_path is not None:
+        return _verify_preflight(report_path, preflight_path, expected_preflight_sha256)
+    require(expected_preflight_sha256 is None, "A preflight SHA requires its actual receipt path")
+    return _verify_final_span_report_full(report_path)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bundle", type=Path, action="append", required=True)
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--bundle", type=Path, action="append")
+    inputs.add_argument("--preflight-report", type=Path, help="Fully verify an existing report and freeze its local immutable input index")
     parser.add_argument("--selection-path", type=Path, action="append")
     parser.add_argument("--allocation-accounting", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if args.preflight_report is not None:
+        require(args.selection_path is None and args.allocation_accounting is None,
+                "Preflight consumes the already-bound report and its actual inputs")
+        receipt = create_final_span_preflight(args.preflight_report, args.output)
+        print(json.dumps({key: receipt[key] for key in ("schema", "sha256", "report_sha256", "confirmation_ready")}))
+        return
     report = evaluate_final_span(args.bundle, args.output, selection_paths=args.selection_path,
                                  allocation_accounting=args.allocation_accounting)
     print(json.dumps({key: report[key] for key in ("sha256", "assay_usable", "selected_E", "confirmation_ready")}))

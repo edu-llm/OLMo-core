@@ -1,6 +1,7 @@
 import copy
 import json
 import math
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -12,7 +13,8 @@ from spacing_rerun import SCHEMA
 from spacing_rerun.common import digest, write_json
 from spacing_rerun.final_span import (FROZEN_CORE_SHA256, PLANNING_POLICY, assay_sensitivity,
                                      cost_report, evaluate_final_span, plan_precision,
-                                     validate_bundle, verify_final_span_report)
+                                     validate_bundle, verify_final_span_report, create_final_span_preflight,
+                                     PLANNING_POLICY_SHA256)
 from spacing_rerun.units import GROUNDED_METRICS
 
 
@@ -276,6 +278,80 @@ class CostTests(unittest.TestCase):
             write_json(path, accounting)
             with self.assertRaisesRegex(ValueError, "omits"):
                 cost_report(bundles, path)
+
+
+class PreflightCacheTests(unittest.TestCase):
+    def fixture(self, root):
+        # Cache mechanics only. The full scientific verifier is explicitly
+        # mocked below, and these temporary files are never research evidence.
+        prepared = root / "prepared"
+        prepared.mkdir()
+        write_json(prepared / "manifest.json", {"synthetic": True})
+        decision = root / "decision.json"
+        write_json(decision, {"synthetic": True})
+        selection = root / "selection.json"
+        write_json(selection, {"grid_inputs": [{"decision_path": str(decision)}], "selection_rule": {
+            "schema": "spacing-acquisition-grid-manifest-binding-v1", "trials": [{"prepared_path": str(prepared)}]}})
+        checkpoint = root / "checkpoint.pt"
+        checkpoint.write_bytes(b"synthetic bytes only")
+        from spacing_rerun.acquisition_grid import checkpoint_digest
+        report = {"sha256": "not-sealed-yet", "planning_policy": PLANNING_POLICY,
+                  "planning_policy_sha256": PLANNING_POLICY_SHA256, "cost": {},
+                  "bundles": [{"selection_path": str(selection), "bundle_path": str(root),
+                               "provenance": [{"path": str(checkpoint), "sha256": checkpoint_digest(checkpoint)}]}]}
+        report["sha256"] = digest({k: v for k, v in report.items() if k != "sha256"})
+        path = root / "report.json"
+        write_json(path, report)
+        return path, report, checkpoint, prepared
+
+    def test_one_full_gate_then_bound_receipt_skips_large_checkpoint_hashes(self):
+        import spacing_rerun.final_span as module
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report_path, report, checkpoint, _ = self.fixture(root)
+            real_digest = module.checkpoint_digest
+            with patch("spacing_rerun.final_span._verify_final_span_report_full", return_value=report) as full, \
+                 patch("spacing_rerun.final_span.checkpoint_digest", wraps=real_digest) as hashed:
+                receipt = create_final_span_preflight(report_path, root / "preflight.json")
+                full.assert_called_once_with(report_path)
+                hashed.reset_mock()
+                actual = verify_final_span_report(report_path, preflight_path=root / "preflight.json",
+                                                   expected_preflight_sha256=receipt["sha256"])
+                self.assertEqual(actual, report)
+                self.assertNotIn(checkpoint, [Path(call.args[0]) for call in hashed.call_args_list])
+                full.assert_called_once()
+                with self.assertRaisesRegex(ValueError, "SHA bound"):
+                    verify_final_span_report(report_path, preflight_path=root / "preflight.json")
+                with self.assertRaisesRegex(ValueError, "frozen content hash"):
+                    verify_final_span_report(report_path, preflight_path=root / "preflight.json", expected_preflight_sha256="wrong")
+                with self.assertRaisesRegex(ValueError, "never overwrite"):
+                    create_final_span_preflight(report_path, root / "preflight.json")
+
+    def test_changed_checkpoint_bytes_with_restored_mtime_and_added_input_invalidate(self):
+        for mutation in ("checkpoint", "added_prepared", "selection", "runtime", "receipt"):
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                report_path, report, checkpoint, prepared = self.fixture(root)
+                with patch("spacing_rerun.final_span._verify_final_span_report_full", return_value=report) as full:
+                    receipt = create_final_span_preflight(report_path, root / "preflight.json")
+                    if mutation == "checkpoint":
+                        status = checkpoint.stat()
+                        checkpoint.write_bytes(b"different bytes only")
+                        os.utime(checkpoint, ns=(status.st_atime_ns, status.st_mtime_ns))
+                    elif mutation == "added_prepared":
+                        write_json(prepared / "extra.json", {"new": True})
+                    elif mutation == "selection":
+                        (root / "selection.json").write_text((root / "selection.json").read_text() + "\n")
+                    elif mutation == "receipt":
+                        changed = copy.deepcopy(receipt)
+                        changed["files"][0]["sha256"] = "forged"
+                        changed["sha256"] = digest({k: v for k, v in changed.items() if k != "sha256"})
+                        write_json(root / "preflight.json", changed)
+                    runtime_patch = patch("spacing_rerun.final_span.finite_number", lambda v, label: v) if mutation == "runtime" else patch.dict({}, {})
+                    with runtime_patch, self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                        verify_final_span_report(report_path, preflight_path=root / "preflight.json",
+                                                 expected_preflight_sha256=receipt["sha256"])
+                    full.assert_called_once()
 
 
 if __name__ == "__main__":
