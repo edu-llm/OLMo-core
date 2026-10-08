@@ -54,6 +54,70 @@ def refresh(evidence):
 
 
 class SourcePatchTests(unittest.TestCase):
+    @staticmethod
+    def reseal_response(evidence):
+        response = seal(evidence['response'])
+        text = json.dumps(response, sort_keys=True, indent=2)
+        evidence['artifact_files']['response'].update(
+            utf8=text, file_sha256=hashlib.sha256(text.encode()).hexdigest(), canonical_sha256=response['sha256'])
+        seal(evidence)
+
+    def test_actual_patch_named_response_aliases_preserve_exact_raw_response(self):
+        evidence = proof_fixture();response = evidence['response']
+        response['patch_sha256'] = response.pop('output_authored_sha256')
+        response['base_sha256'] = response.pop('prior_authored_sha256')
+        response['patch_file_sha256'] = evidence['artifact_files']['patch']['file_sha256']
+        response['patch_path'] = evidence['artifact_files']['patch']['path']
+        self.reseal_response(evidence)
+        before = copy.deepcopy(response)
+        merged = reconstruct_question_patch(evidence)
+        self.assertEqual(response, before)
+        self.assertEqual(merged['question_patch_provenance']['correction_response_sha256'], response['sha256'])
+        self.assertEqual(merged['groups'], evidence['base_authored']['groups'])
+
+    def test_all_present_response_aliases_must_bind_same_actual_base_and_patch(self):
+        for key in ('patch_sha256', 'patch_file_sha256', 'base_sha256', 'patch_path', 'output_path'):
+            with self.subTest(key=key):
+                evidence = proof_fixture();response = evidence['response']
+                response.update(patch_sha256=evidence['patch']['sha256'],
+                                patch_file_sha256=evidence['artifact_files']['patch']['file_sha256'],
+                                base_sha256=evidence['base_authored']['sha256'],
+                                patch_path=evidence['artifact_files']['patch']['path'])
+                response[key] = 'different actual artifact'
+                self.reseal_response(evidence)
+                with self.assertRaisesRegex(ValueError, 'declared provenance differs'):
+                    reconstruct_question_patch(evidence)
+
+    def test_response_cannot_omit_both_actual_base_digest_aliases(self):
+        evidence = proof_fixture();evidence['response'].pop('prior_authored_sha256')
+        self.reseal_response(evidence)
+        with self.assertRaisesRegex(ValueError, 'prior_authored_sha256/base_sha256'):
+            reconstruct_question_patch(evidence)
+
+    def test_nested_actual_response_bindings_preserve_author_bytes(self):
+        evidence = proof_fixture();response = evidence['response']
+        response.pop('output_authored_sha256');response.pop('prior_authored_sha256')
+        for key, target in (('authored_patch', 'patch'), ('exact_source_base', 'base_authored')):
+            info = evidence['artifact_files'][target]
+            response[key] = {'sha256': evidence[target]['sha256'], 'file_sha256': info['file_sha256'], 'path': info['path']}
+        self.reseal_response(evidence);before = copy.deepcopy(response)
+        merged = reconstruct_question_patch(evidence)
+        self.assertEqual(response, before)
+        self.assertEqual(merged['question_patch_provenance']['base_authored_sha256'], evidence['base_authored']['sha256'])
+
+    def test_nested_response_bindings_require_actual_hash_bytes_path_and_alias_consistency(self):
+        for binding, target in (('authored_patch', 'patch'), ('exact_source_base', 'base_authored')):
+            for field in ('sha256', 'file_sha256', 'path', 'missing-file-sha', 'flat-conflict'):
+                with self.subTest(binding=binding, field=field):
+                    evidence = proof_fixture();response = evidence['response'];info = evidence['artifact_files'][target]
+                    response[binding] = {'sha256': evidence[target]['sha256'], 'file_sha256': info['file_sha256'], 'path': info['path']}
+                    if field == 'missing-file-sha':response[binding].pop('file_sha256')
+                    elif field == 'flat-conflict':
+                        response['patch_sha256' if target == 'patch' else 'base_sha256'] = 'different declared artifact'
+                    else:response[binding][field] = 'different actual artifact'
+                    self.reseal_response(evidence)
+                    with self.assertRaises(ValueError):reconstruct_question_patch(evidence)
+
     def test_semantic_revision_retains_actual_patch_ancestor_and_author_channels(self):
         evidence=proof_fixture();facts,audit=confirmation_fixture();chunk=audit['source_chunks'][0]
         merged=reconstruct_question_patch(evidence);request='synthetic-source-repair-after-question-patch-fixture'

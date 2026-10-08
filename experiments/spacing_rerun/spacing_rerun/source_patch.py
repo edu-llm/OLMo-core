@@ -34,6 +34,17 @@ def compatible_aliases(value, names, expected, *, required=False):
             'Source question patch declared provenance differs: ' + '/'.join(names))
 
 
+def response_artifact_binding(response, key, value, file_info, file_sha256):
+    """Validate an actual nested response binding without rewriting author bytes."""
+    if key not in response:
+        return False
+    binding = response[key]
+    require(isinstance(binding, dict) and binding.get('sha256') == value['sha256'] and
+            binding.get('file_sha256') == file_sha256 and binding.get('path') == file_info['path'],
+            'Source question patch nested response artifact differs: ' + key)
+    return True
+
+
 def normalize_task(status, request):
     require(status.get('status') == 'completed' and status.get('childRunId') and status.get('childThreadId') and
             status.get('taskId') and unquote(status['taskId']).endswith(':delegate-task:' + request) and
@@ -71,16 +82,20 @@ def reconstruct_question_patch(evidence):
     compatible_aliases(response, ('source_revision_packet_sha256', 'input_packet_sha256'), packet['sha256'], required=True)
     compatible_aliases(response, ('source_revision_packet_file_sha256', 'source_revision_packet_bytes_sha256', 'input_file_bytes_sha256'),
                        hashes['input_packet'], required=True)
-    compatible_aliases(response, ('authored_sha256', 'artifact_sha256', 'output_authored_sha256'), patch['sha256'], required=True)
-    compatible_aliases(response, ('authored_file_sha256', 'artifact_file_sha256', 'authored_file_bytes_sha256'), hashes['patch'])
+    nested_patch = response_artifact_binding(response, 'authored_patch', patch, files['patch'], hashes['patch'])
+    nested_base = response_artifact_binding(response, 'exact_source_base', base, files['base_authored'], hashes['base_authored'])
+    compatible_aliases(response, ('authored_sha256', 'artifact_sha256', 'output_authored_sha256', 'patch_sha256'),
+                       patch['sha256'], required=not nested_patch)
+    compatible_aliases(response, ('authored_file_sha256', 'artifact_file_sha256', 'authored_file_bytes_sha256', 'patch_file_sha256'),
+                       hashes['patch'])
     for key in ('source_catalog_sha256', 'source_author_packet_sha256'):
         compatible_aliases(response, (key,), base[key])
-    require(response['prior_authored_sha256'] == base['sha256'] and response['revision_author'] == author,
+    compatible_aliases(response, ('prior_authored_sha256', 'base_sha256'), base['sha256'], required=not nested_base)
+    require(response['revision_author'] == author,
             'Source question correction response changed its actual prior artifact/author')
     if 'input_path' in response:
         require(response['input_path'] == files['input_packet']['path'], 'Source question correction response input path differs')
-    if 'output_path' in response:
-        require(response['output_path'] == files['patch']['path'], 'Source question correction response output path differs')
+    compatible_aliases(response, ('output_path', 'patch_path'), files['patch']['path'])
     original = {row['id']: row for row in base['acquisition_records']}
     selected = {row['id']: row for row in packet['selected_acquisition_records']}
     changed = {row['id']: row for row in patch['selected_acquisition_records']}
