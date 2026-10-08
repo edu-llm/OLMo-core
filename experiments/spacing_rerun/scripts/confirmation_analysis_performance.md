@@ -6,13 +6,136 @@ training loop or GPU operation. It creates no scientific, source, property,
 membership, reporting, production or launch approval. Its small artifact tests
 are engineering checks, never an actual benchmark.
 
-The v6 successor retains the actual preexec receipt bytes through parent export
-and failure preservation. Its `launch_native` implementation changed. The eight
-native filter, ELF and read-scope functions and BOOTSTRAP retain their accepted
-R5 bytes. The genuine R5 engineering acceptance remains valid for its exact v5
-snapshot and commit. This separate v6 successor needs independent R6 review.
-All R1 through R5 reviews, handoffs, failed checks and earlier dispositions remain
-historical artifacts. None supplies production, scientific or launch approval.
+The independently accepted R6 v6 implementation retains actual preexec receipt
+bytes through available parent returns and exceptions. Its exact acceptance and
+commit remain historical bindings. The rejected R7 candidate added optional
+original-FD transport for a separately owned outside-namespace retainer. Its
+independent review found two rejection-evidence defects. This R8 candidate
+corrects those separately owned paths and needs its own
+independent review and final integration. The eight native filter, ELF and
+read-scope functions, full BOOTSTRAP, 18 numerical functions and six primary
+helpers retain their accepted bytes. All earlier reviews, failures and scoped
+acceptances remain preserved. They supply no new production or launch approval.
+
+## Optional original-FD transport candidate
+
+`launch_native(invocation, anchor, log_path, *, channel_observer_fd=None)` keeps
+the existing v6 available-return API when no bridge is supplied. The driver input,
+result and worker observation schemas remain v6. The standalone R7 owner artifact
+`native_channel_retainer.py` supplies `create_observer_bridge`,
+`OriginalChannelRetainer` and `launch_and_retain`. This module is separately
+full-file and function pinned. It does not silently enable transport in ordinary
+driver preflight or supply an approved harness. Its runtime loader compiles exact
+supplied hash-bound bytes and rejects a symlink or changed source.
+
+The owner first reconciles the authentic original bound diagnostic bucket and
+historical starts, then durably reserves the original run/attempt before sbatch.
+The retainer starts inside that same accounted Slurm allocation. Each applicable
+startup, pre-Session or retainer failure consumes that same reserved slot. The
+original max3 never resets. The original design's conflicting pre-submission
+retainer wording remains preserved with the explicit root ordering clarification.
+Reservation evidence is distinct from a running retainer's registration evidence.
+Actual histories, remaining attempts and full-study freeze remain external.
+
+The trusted retainer owns RW duplicate open file descriptions received through
+SCM_RIGHTS. It uses `pread` on originals, preserving shared OFD offsets. This is
+trusted observer behavior, not kernel-enforced read-only access. Its socket and
+sink descriptors never enter the namespace. One explicitly identified sender
+bridge may pass the separately reviewed capdrop path into the supervisor only.
+The child preexec wrapper closes that known bridge, or observes EBADF if already
+closed, before calling the unchanged original Landlock function. The bridge is
+excluded from `pass_fds` and absent from BOOTSTRAP/native worker. That closure
+inference is not appended to the unchanged kernel receipt or called a new ACK.
+Actual capdrop, Linux closure and enforcement proof remain the native owner's
+independent integration responsibilities.
+
+The first synchronous handoff carries the original output directory plus the
+four anonymous invocation, producer, preexec receipt and custody journal files.
+The second carries the original exclusive invocation file and stdout log. The
+retainer independently checks exact ordered roles, FD counts, device/inode,
+anonymity, file type and original access mode. It rejects aliased objects. No
+invocation/channel bytes or native Popen starts before both durable ACKs. Empty
+FD creation and handoff are not atomic; an empty original or named-file identity
+may remain unavailable if the supervisor dies before its handoff.
+
+Each canonical raw frame binds exact invocation/run/attempt nonces, deployment,
+policy, output identity, namespace-labelled launcher PID, sequence and previous
+raw message hash. ACKs bind the actual raw frame and binding hashes, and follow
+fsync of copied bytes, receipt and directory entries. Production requires actual
+Linux SO_PASSCRED/SCM_CREDENTIALS on both endpoints. The receiver checks the sender
+UID/GID and observed positive PID in its own namespace, with a supplied expected
+PID when known and a consistent observed sender throughout. User-namespace UID0
+mapping and host PID expectations must come from actual owner observations.
+No arithmetic PID conversion or inherited socketpair SO_PEERCRED substitute is
+allowed. Mac tests claim artifact-only transport, never Linux identity proof.
+
+Invocation and native records travel as original raw fragments. Exact offset,
+total size, metadata and completed stream hash are checked without reserializing
+JSON and calling it an original. Raw frame headers/payloads remain separate from
+their receipts and copied epochs. An emitted native fragment is distinct from a
+complete hash-verified original emitted stream and from an available-return
+native record. A delivery failure can add fields to the available native record
+after an earlier emitted stream; their raw identities remain distinct. A missing
+final native record is never reconstructed from epochs or controller events.
+
+The R8 rejection observation uses
+`p4-original-observer-rejection-observation-v1` for framing and semantic failures.
+Before parsing, checking or closing received descriptors, the receiver records
+actual header/payload bytes, base64/length/raw hash, available original credential
+bytes and every available descriptor fstat identity. Credential fragments retain
+their received raw encodings. These observations are explicitly unvalidated.
+The sender's declared inode values remain in the original raw payload and never
+replace actual receiver identities. An unavailable fstat has a null identity and
+its original error; descriptor cleanup records each actual close result. Rejected
+registration frames remain rejected, and no ACK authorizes their channel writes.
+
+Retainer semantic exceptions carry that typed observation through `serve` into
+the original error byte files and observation JSON. Launcher ACK semantic and
+partial-frame exceptions carry the same original received evidence into optional
+`observer_rejection_observations` in the native record, NativeLaunchFailure and
+its original typed cause. The official adapter additionally writes each original
+header/payload and its observation JSON under `observer-rejections`. Export-write
+failures preserve the original launch exception and inline bytes. Whitespace in
+a noncanonical ACK is retained exactly. No canonical re-encoding substitutes for
+the received packet. A first-stage rejection retains null worker PID/status/RSS
+and absent invocation-buffer facts. Missing bytes or identities stay unavailable.
+
+The accepted original55 tests and R7's20 transport tests retain full-line bytes.
+Four new R8 regressions cover the real five-original SCM_RIGHTS inode mismatch,
+noncanonical/wrong-binding/descriptor-bearing/partial ACKs through the official
+adapter, unavailable descriptor observations and inline originals after export
+failure. The CPU peer and diagnostic copies are independently labelled fixture
+evidence. They do not replace original launcher/retainer capture or establish
+Linux credential enforcement. Original R7 adversaries/rejection/status, previous
+verification failures and all earlier review history remain unchanged.
+
+Transport bounds are 32,768 payload bytes per frame, seven descriptors, 8,192
+bytes per raw fragment, 2 MiB per raw record or per sampled channel, 1,024 ordered
+messages and 512 capture epochs. The retainer runs for at most 165 requested
+seconds, checks its own deadline, and bounds individual frame reads. Reaching a
+bound fails closed or marks the sampled bytes capped. These limits do not claim
+that an arbitrary large deployment is eligible.
+
+Epoch files retain actual original identity, copied identity, raw bytes/hash,
+before/after sizes, prefix conflicts, shrinkage and caps. They are concurrent
+non-atomic samples. Bridge EOF, controller EOF and a deadline never prove writer
+quiescence. Controller bytes remain explicitly unverified outside observations.
+If the supervisor dies, a surviving retainer can continue sampling the same
+original objects. If the retainer dies, only already fsynced epochs survive; the
+launcher rejects delivery and kills/reaps its owned child using actual wait4
+when available. If scheduler/node/storage failure kills the whole allocation,
+all anonymous originals can disappear. No outside-job daemon or remote backup
+is supplied. Unread or unfsynced tails remain unavailable. Creation-to-journal
+crash gaps and incomplete abrupt-failure inventory remain unchanged.
+
+`launch_and_retain` consumes the caller bridge and exports available producer,
+receipt, journal and native bytes into a separate new anchored root. Export
+failures retain those available originals on the raised exception and preserve
+an original NativeLaunchFailure rather than replacing it. These ordinary return
+copies never substitute for outside-retainer epochs. Retainer lifecycle errors
+are recorded when storage permits; if the summary write fails, its exception
+retains the available summary. Neither transport API certifies scheduler custody,
+process-tree quiescence, kernel enforcement or completed production accounting.
 
 ## Exact external inputs
 

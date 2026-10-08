@@ -15,6 +15,11 @@ import unittest
 from unittest.mock import patch
 import zipfile
 import struct
+import base64
+import hashlib
+import socket
+import contextlib
+import signal
 
 from spacing_rerun.common import digest
 from spacing_rerun.confirmation_dependency import _saved_evaluation
@@ -1113,6 +1118,684 @@ os.write(BUFFERED_INVOCATION['producer_channel_fd'],rt.encoded({'output_registry
                     total_worker_wall_seconds=measured["wall_seconds"],operation_count=6)
                 with self.assertRaises(ValueError):
                     driver.reconcile_exported_values(dict(points=[],separate_real_probes=dict(digest=probe)),dict(records=[]))
+
+
+OWNER_RETAINER_PATH = Path(os.environ.get("P4_DRIVER_R7_OWNER_ARTIFACT",
+    str(DRIVER_PATH.parents[3] / "owner-artifacts/native_channel_retainer.py")))
+RETAINER_CHILD = r"""
+import json,sys,types
+from pathlib import Path
+path=Path(sys.argv[1]);ns=dict(__name__='original_fd_cpu_fixture',__file__=str(path))
+exec(compile(path.read_bytes(),str(path),'exec',dont_inherit=True),ns)
+rt=ns['load_runtime'](sys.argv[2],sys.argv[3])
+config=json.loads(Path(sys.argv[5]).read_bytes())
+r=ns['OriginalChannelRetainer'](rt,int(sys.argv[4]),sys.argv[6],config['binding'],artifact_only=True)
+summary=r.serve(max_seconds=config.get('seconds',5),interval=.05)
+print(json.dumps(dict(pid=__import__('os').getpid(),ppid=__import__('os').getppid(),summary=summary)),flush=True)
+"""
+SUPERVISOR_KILL_CHILD = r"""
+import json,sys,types,os,time
+from pathlib import Path
+p=Path(sys.argv[1]);ns=dict(__name__='kill_cpu_fixture',__file__=str(p))
+exec(compile(p.read_bytes(),str(p),'exec',dont_inherit=True),ns)
+rt=ns['load_runtime'](sys.argv[2],sys.argv[3]);config=json.loads(Path(sys.argv[4]).read_bytes())
+anchor=rt.OutputAnchor(Path(config['output']),new=False,inherited_fd=int(sys.argv[5]),expected=config['identity'])
+anchor.receive_registry(config['registry'])
+original_popen=rt.subprocess.Popen
+original_wait4=rt.os.wait4
+# Explicit CPU fault injection writes an actual truncated fixture receipt only.
+def popen(*args,**kwargs):
+    preexec=kwargs['preexec_fn'];receipt_fd=kwargs['pass_fds'][2]
+    def injected():
+        preexec();os.write(receipt_fd,b'{"labelled_CPU_receipt_prefix":')
+    kwargs['preexec_fn']=injected
+    return original_popen(*args,**kwargs)
+def reaped(pid,options):
+    value=original_wait4(pid,options)
+    Path(config['marker']).write_text(json.dumps(dict(pid=value[0],status=value[1],reaped=True)))
+    time.sleep(60)
+    return value
+rt.subprocess.Popen=popen;rt.os.wait4=reaped
+rt.launch_native(config['invocation'],anchor,Path(config['output'])/'native.log',channel_observer_fd=int(sys.argv[6]))
+"""
+
+
+class OriginalChannelTransportArtifactTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        raw=OWNER_RETAINER_PATH.read_bytes()
+        expected=os.environ.get("P4_DRIVER_R7_OWNER_ARTIFACT_SHA256")
+        if expected is not None and hashlib.sha256(raw).hexdigest()!=expected:
+            raise ValueError("Owner artifact differs from caller frozen raw pin")
+        ns=dict(__name__="p4_owner_artifact_tests",__file__=str(OWNER_RETAINER_PATH))
+        exec(compile(raw,str(OWNER_RETAINER_PATH),"exec",dont_inherit=True),ns)
+        import types
+        cls.owner=types.SimpleNamespace(**ns)
+        cls.rt=driver.execution
+
+    @contextlib.contextmanager
+    def root(self):
+        retained=os.environ.get("P4_DRIVER_R7_TEST_EVIDENCE_ROOT")
+        if retained:
+            yield Path(tempfile.mkdtemp(prefix=self._testMethodName+"-",dir=retained)).resolve()
+        else:
+            with tempfile.TemporaryDirectory() as name: yield Path(name).resolve()
+
+    def invocation(self,root,anchor,code):
+        package=root/'tiny_cpu_package';package.mkdir()
+        (package/'__init__.py').write_text('# labelled CPU artifact only\n')
+        script=root/'opaque_cpu.py';script.write_text(code)
+        deployment=self.rt.capture_sources(script,package)
+        retained=driver.deploy_buffers(deployment,anchor)
+        return dict(deployment=deployment,deployment_root=str(retained),input_path=str(root/'unused'),
+            nonce='CPU-original-invocation',observer_run_nonce='CPU-run-reservation',observer_attempt_nonce='CPU-attempt-reservation')
+
+    def binding(self,invocation,anchor):
+        return dict(invocation_nonce=invocation['nonce'],run_nonce=invocation['observer_run_nonce'],
+            attempt_nonce=invocation['observer_attempt_nonce'],deployment_sha256=invocation['deployment']['sha256'],
+            policy_sha256=None,output_root_identity=anchor.root_identity,scope='artifact_only_cpu')
+
+    def start_retainer(self,root,invocation,anchor,*,seconds=5):
+        outside,supervisor=self.owner.create_observer_bridge(artifact_only=True)
+        config=root/'retainer-config.json';config.write_bytes(self.rt.encoded(dict(binding=self.binding(invocation,anchor),seconds=seconds)))
+        argv=[sys.executable,'-I','-B','-S','-c',RETAINER_CHILD,str(OWNER_RETAINER_PATH),str(self.rt.__file__),
+            hashlib.sha256(Path(self.rt.__file__).read_bytes()).hexdigest(),str(outside.fileno()),str(config),str(root/'retained')]
+        stdout=(root/'retainer.stdout.log').open('wb');stderr=(root/'retainer.stderr.log').open('wb')
+        child=subprocess.Popen(argv,pass_fds=(outside.fileno(),),stdout=stdout,stderr=stderr)
+        outside.close();stdout.close();stderr.close()
+        (root/'retainer-process.json').write_bytes(self.rt.encoded(dict(argv=argv,pid=child.pid,parent_pid=os.getpid())))
+        return child,supervisor
+
+    def reap(self,child,root):
+        try: status=child.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            child.kill();child.wait();raise
+        (root/'retainer-process-exit.json').write_bytes(self.rt.encoded(dict(pid=child.pid,exit_code=status)))
+        self.assertEqual(status,0,(root/'retainer.stderr.log').read_text())
+        return json.loads((root/'retained/retainer-summary.json').read_bytes())
+
+    def test_real_rights_preserve_same_original_and_shared_offset(self):
+        with self.root() as root, tempfile.TemporaryFile(dir=root) as handle:
+            a,b=self.owner.create_observer_bridge(artifact_only=True)
+            try:
+                handle.write(b'original opaque bytes');handle.seek(7)
+                self.rt.observer_send_packet(a,b'raw-message',[handle.fileno()])
+                packet=self.rt.observer_receive_packet(b)
+                fd=packet['fds'][0]
+                try:
+                    self.assertEqual(self.rt.identity(os.fstat(fd)),self.rt.identity(os.fstat(handle.fileno())))
+                    self.assertEqual(os.fstat(fd).st_nlink,0);self.assertFalse(os.get_inheritable(fd))
+                    self.assertEqual(os.pread(fd,8,0),b'original')
+                    self.assertEqual(handle.tell(),7)
+                    os.lseek(fd,9,os.SEEK_SET);self.assertEqual(handle.tell(),9)
+                    self.assertEqual(packet['raw'],b'raw-message')
+                finally: os.close(fd)
+            finally: a.close();b.close()
+
+    def test_partial_frame_length_and_payload_preserve_original_received_bytes(self):
+        for label,raw in [('header',b'\x00\x00'),('oversize',struct.pack('!I',32769)),('payload',struct.pack('!I',9)+b'prefix')]:
+            with self.subTest(label=label):
+                a,b=self.owner.create_observer_bridge(artifact_only=True)
+                try:
+                    a.sendall(raw);a.shutdown(socket.SHUT_WR)
+                    with self.assertRaises(self.rt.ObserverPacketFailure) as caught:self.rt.observer_receive_packet(b)
+                    self.assertEqual(caught.exception.header+ caught.exception.raw,raw)
+                finally:a.close();b.close()
+
+    def test_total_frame_deadline_keeps_actual_partial_bytes_and_restores_timeout(self):
+        a,b=self.owner.create_observer_bridge(artifact_only=True)
+        try:
+            raw=struct.pack('!I',9)+b'prefix';a.sendall(raw)
+            with self.assertRaises(self.rt.ObserverPacketFailure) as caught:
+                self.rt.observer_receive_packet(b,deadline=time.monotonic()+.03)
+            self.assertEqual(caught.exception.header+caught.exception.raw,raw)
+            self.assertIsNone(b.gettimeout())
+        finally:a.close();b.close()
+
+    def test_excess_rights_reject_without_leaking_received_fds(self):
+        import array
+        a,b=self.owner.create_observer_bridge(artifact_only=True)
+        handles=[tempfile.TemporaryFile() for _ in range(8)]
+        try:
+            a.sendmsg([struct.pack('!I',1)+b'x'],[(socket.SOL_SOCKET,socket.SCM_RIGHTS,array.array('i',[h.fileno() for h in handles]))])
+            with self.assertRaises(self.rt.ObserverPacketFailure) as caught:self.rt.observer_receive_packet(b)
+            self.assertIn('truncated',str(caught.exception))
+            for h in handles:self.assertGreaterEqual(os.fstat(h.fileno()).st_ino,1)
+        finally:
+            for h in handles:h.close()
+            a.close();b.close()
+
+    def test_observer_constructor_rejects_without_closing_borrowed_descriptor(self):
+        a,b=self.owner.create_observer_bridge(artifact_only=True)
+        try:
+            with self.assertRaisesRegex(ValueError,'nonce'):self.rt.NativeChannelObserver(a.fileno(),{},dict(device=1,inode=2))
+            os.fstat(a.fileno())
+            bad=dict(nonce='x',observer_run_nonce='y',observer_attempt_nonce='z',deployment={})
+            with self.assertRaises(KeyError):self.rt.NativeChannelObserver(a.fileno(),bad,dict(device=1,inode=2))
+            os.fstat(a.fileno());self.assertIsNone(a.gettimeout())
+        finally:a.close();b.close()
+
+    def test_production_requires_actual_linux_credentials_without_mocked_identity(self):
+        if sys.platform.startswith('linux'):
+            self.skipTest('Mac negative-path artifact check; genuine namespace credentials remain external')
+        a,b=self.owner.create_observer_bridge(artifact_only=True)
+        try:
+            invocation=dict(nonce='x',observer_run_nonce='y',observer_attempt_nonce='z',deployment={'sha256':'0'*64},native_namespace={'CPU':True})
+            with self.assertRaisesRegex(ValueError,'Linux'):self.rt.NativeChannelObserver(a.fileno(),invocation,dict(device=1,inode=2))
+            with self.assertRaisesRegex(ValueError,'Linux'):self.owner.create_observer_bridge()
+            os.fstat(a.fileno())
+        finally:a.close();b.close()
+
+    def test_actual_invalid_ack_rejects_exact_message_binding(self):
+        with self.root() as root:
+            anchor,bridge,retainer,observer=self.manual_retainer(root)
+            try:
+                bogus=self.rt.encoded(dict(schema='p4-original-native-observer-ack-v1',sequence=0,
+                    message_raw_sha256='0'*64,binding_sha256=self.rt.sha(self.rt.encoded(observer.binding)),
+                    durable_registration=True,receipt_sha256='0'*64))
+                self.rt.observer_send_packet(retainer.sock,bogus)
+                with self.assertRaisesRegex(ValueError,'exact durable message'):observer.send('CPU-invalid-ACK',{})
+                self.assertEqual(observer.sequence,0)
+                packet=self.rt.observer_receive_packet(retainer.sock)
+                self.assertEqual(json.loads(packet['raw'])['kind'],'CPU-invalid-ACK')
+            finally:self.close_manual(anchor,bridge,retainer,observer)
+
+    def test_pinned_runtime_loader_rejects_mutation_and_symlink(self):
+        with self.root() as root:
+            path=root/'runtime.py';raw=Path(self.rt.__file__).read_bytes();path.write_bytes(raw)
+            checksum=self.rt.sha(raw)
+            loaded=self.owner.load_runtime(path,checksum)
+            self.assertEqual(loaded.BOOTSTRAP,self.rt.BOOTSTRAP)
+            link=root/'link.py';link.symlink_to(path)
+            with self.assertRaisesRegex(ValueError,'immutable'):self.owner.load_runtime(link,checksum)
+            path.write_bytes(raw+b'# labelled CPU mutation\n')
+            with self.assertRaisesRegex(ValueError,'immutable'):self.owner.load_runtime(path,checksum)
+
+    def test_real_launch_ack_stages_and_original_native_stream_with_bridge_absent_in_child(self):
+        with self.root() as root:
+            anchor=self.rt.OutputAnchor(root/'output',new=True).activate();child=None;bridge=None
+            try:
+                invocation=self.invocation(root,anchor,"""import os,json
+identity=BUFFERED_INVOCATION['original_native_observer']['supervisor_bridge_identity']
+present=False
+for fd in range(3,256):
+    try:s=os.fstat(fd)
+    except OSError:continue
+    present=present or {'device':s.st_dev,'inode':s.st_ino}==identity
+os.write(BUFFERED_INVOCATION['producer_channel_fd'],json.dumps({'labelled_CPU_bridge_present':present}).encode())
+print('labelled CPU stdout',flush=True)
+""")
+                child,bridge=self.start_retainer(root,invocation,anchor)
+                producer,native=self.owner.launch_and_retain(self.rt,invocation,anchor,anchor.path/'native.log',root/'returns',channel_observer_fd=bridge.detach())
+                summary=self.reap(child,root);child=None
+                self.assertFalse(json.loads(producer)['labelled_CPU_bridge_present'])
+                self.assertTrue(native['wait4_observation_available']);self.assertEqual(native['exit_code'],0)
+                self.assertFalse(summary['writer_quiescence_certified']);self.assertTrue(summary['unread_tail_unavailable'])
+                self.assertFalse(summary['actual_kernel_noexec_or_namespace_enforcement'])
+                self.assertEqual(set(summary['complete_original_emitted_raw_records']),{'invocation_buffer','native_record'})
+                first=json.loads((root/'retained/epochs/0000/index.json').read_bytes())
+                self.assertEqual({r['role'] for r in first['rows']},{'invocation','producer','preexec_receipt','custody_journal'})
+                self.assertTrue(all(r['bytes']==0 for r in first['rows']))
+                second=json.loads((root/'retained/epochs/0001/index.json').read_bytes())
+                self.assertTrue(all(r['bytes']==0 for r in second['rows']))
+                messages=[json.loads(p.read_bytes()) for p in sorted((root/'retained/messages').glob('*.payload.bin'))]
+                self.assertEqual([v['kind'] for v in messages[:2]],['channels_created','named_files_created'])
+                original_invocation=(anchor.path/'native.invocation.json').read_bytes().rstrip(b'\n')
+                invocation_binding=json.loads(original_invocation)['original_native_observer']
+                self.assertEqual(invocation_binding['binding'],messages[0]['binding'])
+                self.assertEqual(summary['complete_original_emitted_raw_records']['invocation_buffer']['raw_sha256'],hashlib.sha256(original_invocation).hexdigest())
+                self.assertEqual((root/'returns/native.json').read_bytes(),self.rt.encoded(native))
+                self.assertEqual((root/'returns/preexec-receipt.bin').read_bytes(),b'')
+                self.assertNotEqual(json.loads((root/'retained/retainer-start.json').read_bytes())['process_pid'],os.getpid())
+                roles=summary['original_identities']
+                for role in native['inherited_channel_identities']:
+                    self.assertEqual({k:roles[role][k] for k in ('device','inode')},native['inherited_channel_identities'][role])
+            finally:
+                if bridge is not None:bridge.close()
+                if child is not None:child.kill();child.wait()
+                anchor.close()
+
+    def test_wrong_nonce_rejects_before_invocation_write_or_native_popen(self):
+        with self.root() as root:
+            anchor=self.rt.OutputAnchor(root/'output',new=True).activate();child=None;bridge=None
+            try:
+                invocation=self.invocation(root,anchor,"raise RuntimeError('must not execute')\n")
+                child,bridge=self.start_retainer(root,invocation,anchor,seconds=.3)
+                invocation['observer_run_nonce']='different-reservation'
+                with self.assertRaises(self.rt.NativeLaunchFailure) as caught:
+                    self.rt.launch_native(invocation,anchor,anchor.path/'native.log',channel_observer_fd=bridge.fileno())
+                self.assertIsNone(caught.exception.native_observation['argv'])
+                self.assertIsNone(caught.exception.native_observation['pid'])
+                self.assertFalse((anchor.path/'native.invocation.json').exists())
+                summary=self.reap(child,root);child=None
+                self.assertEqual(summary['messages'],0);self.assertEqual(summary['original_identities'],{})
+                self.assertIn('binding differs',' '.join(summary['errors']))
+                self.assertTrue((root/'retained/messages/0000.payload.bin').exists())
+            finally:
+                if bridge is not None:bridge.close()
+                if child is not None:child.kill();child.wait()
+                anchor.close()
+
+    def manual_retainer(self,root):
+        anchor=self.rt.OutputAnchor(root/'original',new=True).activate()
+        invocation=dict(nonce='CPU-invocation',observer_run_nonce='CPU-run',observer_attempt_nonce='CPU-attempt',deployment={'sha256':'0'*64})
+        a,b=self.owner.create_observer_bridge(artifact_only=True)
+        retainer=self.owner.OriginalChannelRetainer(self.rt,b.detach(),root/'retained',self.binding(invocation,anchor),artifact_only=True)
+        observer=self.rt.NativeChannelObserver(a.fileno(),invocation,anchor.root_identity)
+        return anchor,a,retainer,observer
+
+    def accept_message(self,retainer,observer,kind,value,roles=(),fds=(),*,sequence=None):
+        raw=self.rt.encoded(dict(schema='p4-original-native-observer-message-v1',sequence=retainer.sequence if sequence is None else sequence,
+            previous_raw_sha256=retainer.previous,kind=kind,binding=observer.binding,roles=list(roles),value=value))
+        packet=dict(header=struct.pack('!I',len(raw)),raw=raw,fds=list(fds),credentials=None,credential_raw_base64=None)
+        retainer.accept(packet)
+        ack=self.rt.observer_receive_packet(observer.sock)
+        self.assertEqual(json.loads(ack['raw'])['message_raw_sha256'],self.rt.sha(raw))
+
+    def close_manual(self,anchor,bridge,retainer,observer):
+        observer.detach();bridge.close()
+        for fd in retainer.originals.values():os.close(fd)
+        retainer.sock.close();retainer.anchor.close();anchor.close()
+
+    def register_manual(self,retainer,observer,anchor,handles):
+        import fcntl
+        roles=['root_anchor','invocation','producer','preexec_receipt','custody_journal']
+        fds=[anchor.fd]+[h.fileno() for h in handles]
+        value={role:dict(self.rt.identity(os.fstat(fd)),access_mode=fcntl.fcntl(fd,fcntl.F_GETFL)&os.O_ACCMODE,anonymous=os.fstat(fd).st_nlink==0) for role,fd in zip(roles,fds)}
+        self.accept_message(retainer,observer,'channels_created',value,roles,[os.dup(fd) for fd in fds])
+        files=[]
+        for role in ('invocation_file','stdout_log'):
+            h=anchor.open_exclusive(anchor.path/role,binary=True);files.append(h)
+        fds=[h.fileno() for h in files];roles=['invocation_file','stdout_log']
+        value={role:dict(self.rt.identity(os.fstat(fd)),access_mode=fcntl.fcntl(fd,fcntl.F_GETFL)&os.O_ACCMODE,anonymous=False) for role,fd in zip(roles,fds)}
+        self.accept_message(retainer,observer,'named_files_created',value,roles,[os.dup(fd) for fd in fds])
+        return files
+
+    def test_retainer_samples_original_after_path_replacement_and_detects_prefix_conflict(self):
+        with self.root() as root:
+            anchor,bridge,retainer,observer=self.manual_retainer(root);handles=[tempfile.TemporaryFile(dir=anchor.path) for _ in range(4)];files=[]
+            try:
+                files=self.register_manual(retainer,observer,anchor,handles)
+                files[1].write(b'original stdout prefix');os.fsync(files[1].fileno())
+                retainer.capture('test-original')
+                (anchor.path/'stdout_log').rename(root/'moved-original-log');(anchor.path/'stdout_log').write_bytes(b'replacement log')
+                retainer.capture('test-replaced-name')
+                self.assertEqual((retainer.anchor.path/'epochs/0003/stdout_log.bin').read_bytes(),b'original stdout prefix')
+                os.ftruncate(files[1].fileno(),0);os.pwrite(files[1].fileno(),b'overwrite',0)
+                retainer.capture('test-overwrite')
+                index=json.loads((retainer.anchor.path/'epochs/0004/index.json').read_bytes())
+                self.assertTrue(next(r for r in index['rows'] if r['role']=='stdout_log')['prior_prefix_conflict'])
+                self.assertFalse(any(r['writer_quiescence_certified'] for r in index['rows']))
+            finally:
+                try:
+                    for h in files:
+                        try:h.close()
+                        except ValueError:pass  # Expected original pathname replacement detection.
+                finally:
+                    for h in handles:h.close()
+                    self.close_manual(anchor,bridge,retainer,observer)
+
+    def test_retainer_partial_frame_and_controller_eof_never_certify_quiescence(self):
+        with self.root() as root:
+            anchor,bridge,retainer,observer=self.manual_retainer(root)
+            try:
+                raw=struct.pack('!I',9)+b'prefix'
+                bridge.sendall(raw);bridge.shutdown(socket.SHUT_WR)
+                summary=retainer.serve(max_seconds=.15,interval=.05)
+                self.assertTrue(summary['bridge_eof']);self.assertTrue(summary['errors'])
+                self.assertFalse(summary['writer_quiescence_certified'])
+                self.assertEqual((root/'retained/incoming-error.header.bin').read_bytes()+(root/'retained/incoming-error.payload.bin').read_bytes(),raw)
+            finally:observer.detach();bridge.close();anchor.close()
+        with self.root() as root:
+            anchor,bridge,retainer,observer=self.manual_retainer(root);read,write=os.pipe()
+            try:
+                os.write(write,b'unverified controller bytes');os.close(write);write=None
+                summary=retainer.serve(controller_fd=read,max_seconds=.2,interval=.05)
+                self.assertEqual(summary['reason'],'controller_stop_observation_unverified')
+                self.assertFalse(summary['writer_quiescence_certified'])
+                self.assertEqual((root/'retained/outside-controller-observation.bin').read_bytes(),b'unverified controller bytes')
+            finally:
+                if write is not None:os.close(write)
+                os.close(read);observer.detach();bridge.close();anchor.close()
+
+    def test_retainer_constructor_failure_preserves_unconsumed_descriptor(self):
+        with self.root() as root:
+            anchor=self.rt.OutputAnchor(root/'original',new=True).activate()
+            a,b=self.owner.create_observer_bridge(artifact_only=True)
+            invocation=dict(nonce='x',observer_run_nonce='y',observer_attempt_nonce='z',deployment={'sha256':'0'*64})
+            (root/'already-existing').mkdir()
+            try:
+                with self.assertRaisesRegex(ValueError,'new'):
+                    self.owner.OriginalChannelRetainer(self.rt,b.fileno(),root/'already-existing',self.binding(invocation,anchor),artifact_only=True)
+                os.fstat(b.fileno());self.assertIsNone(b.gettimeout())
+            finally:a.close();b.close();anchor.close()
+
+    def test_retainer_summary_write_failure_keeps_truthful_available_summary(self):
+        with self.root() as root:
+            anchor,bridge,retainer,observer=self.manual_retainer(root)
+            original=retainer.write
+            def failed(relative,raw):
+                if relative=='retainer-summary.json':raise OSError('labelled CPU summary storage failure')
+                return original(relative,raw)
+            try:
+                bridge.shutdown(socket.SHUT_WR)
+                with patch.object(retainer,'write',new=failed):
+                    with self.assertRaises(self.owner.RetainerLifecycleFailure) as caught:
+                        retainer.serve(max_seconds=.1,interval=.05)
+                summary=caught.exception.available_summary
+                self.assertTrue(summary['bridge_eof']);self.assertFalse(summary['writer_quiescence_certified'])
+                self.assertTrue(summary['unread_tail_unavailable'])
+                self.assertFalse((root/'retained/retainer-summary.json').exists())
+            finally:observer.detach();bridge.close();anchor.close()
+
+    def test_duplicate_sequence_bad_roles_and_incomplete_or_conflicting_raw_fragments_reject(self):
+        cases=['roles','count','duplicate','offset','hash','total','finish']
+        for case in cases:
+            with self.subTest(case=case),self.root() as root:
+                anchor,bridge,retainer,observer=self.manual_retainer(root);handles=[tempfile.TemporaryFile(dir=anchor.path) for _ in range(4)];files=[]
+                try:
+                    if case=='roles':
+                        with self.assertRaisesRegex(ValueError,'five roles'):
+                            self.accept_message(retainer,observer,'channels_created',{},['wrong'])
+                    elif case=='count':
+                        with self.assertRaisesRegex(ValueError,'FD count'):
+                            self.accept_message(retainer,observer,'channels_created',{},['root_anchor','invocation','producer','preexec_receipt','custody_journal'])
+                    else:
+                        files=self.register_manual(retainer,observer,anchor,handles)
+                        fragment=dict(record='a'*32,record_kind='native_record',offset=0,total_bytes=6,raw_sha256=self.rt.sha(b'abcdef'),raw_base64=base64.b64encode(b'abc').decode())
+                        self.accept_message(retainer,observer,'raw_piece',fragment)
+                        if case=='duplicate':
+                            with self.assertRaisesRegex(ValueError,'sequence'):self.accept_message(retainer,observer,'raw_piece',fragment,sequence=2)
+                        elif case=='finish':
+                            with self.assertRaisesRegex(ValueError,'complete'):self.accept_message(retainer,observer,'finished',dict(success=False,actual_wait4_available=False))
+                        else:
+                            fragment.update(offset=3,raw_base64=base64.b64encode(b'def').decode())
+                            if case=='offset':fragment['offset']=2
+                            if case=='hash':fragment['raw_base64']=base64.b64encode(b'xxx').decode()
+                            if case=='total':fragment['total_bytes']=7
+                            with self.assertRaises(ValueError):self.accept_message(retainer,observer,'raw_piece',fragment)
+                    self.assertFalse(retainer.finished)
+                finally:
+                    for h in files+handles:h.close()
+                    self.close_manual(anchor,bridge,retainer,observer)
+
+    def test_actual_supervisor_sigkill_retainer_keeps_original_raw_prefixes_without_final_record(self):
+        with self.root() as root:
+            anchor=self.rt.OutputAnchor(root/'output',new=True).activate();retainer=None;supervisor=None;bridge=None
+            try:
+                invocation=self.invocation(root,anchor,"""import os
+os.write(BUFFERED_INVOCATION['producer_channel_fd'],b'labelled CPU producer prefix')
+os.write(BUFFERED_INVOCATION['custody_journal_fd'],b'{labelled CPU journal prefix')
+print('labelled CPU stdout prefix',flush=True)
+""")
+                retainer,bridge=self.start_retainer(root,invocation,anchor,seconds=1.3)
+                config=root/'supervisor-config.json';marker=root/'actual-worker-reaped.json'
+                config.write_bytes(self.rt.encoded(dict(output=str(anchor.path),identity=anchor.root_identity,registry=anchor.registry(),invocation=invocation,marker=str(marker))))
+                argv=[sys.executable,'-I','-B','-S','-c',SUPERVISOR_KILL_CHILD,str(OWNER_RETAINER_PATH),str(self.rt.__file__),
+                    self.rt.sha(Path(self.rt.__file__).read_bytes()),str(config),str(anchor.fd),str(bridge.fileno())]
+                with (root/'supervisor.stdout.log').open('wb') as out,(root/'supervisor.stderr.log').open('wb') as err:
+                    supervisor=subprocess.Popen(argv,pass_fds=(anchor.fd,bridge.fileno()),stdout=out,stderr=err)
+                bridge.close();deadline=time.monotonic()+8
+                while not marker.exists() and supervisor.poll() is None and time.monotonic()<deadline:time.sleep(.01)
+                self.assertTrue(marker.exists(),(root/'supervisor.stderr.log').read_text())
+                self.assertTrue(json.loads(marker.read_bytes())['reaped'])
+                supervisor.kill();status=supervisor.wait(timeout=5)
+                (root/'supervisor-actual-kill-binding.json').write_bytes(self.rt.encoded(dict(argv=argv,pid=supervisor.pid,exit_code=status,signal=signal.SIGKILL,actual_worker_reap=json.loads(marker.read_bytes()))))
+                self.assertEqual(status,-signal.SIGKILL);supervisor=None
+                summary=self.reap(retainer,root);retainer=None
+                self.assertTrue(summary['bridge_eof']);self.assertFalse(summary['launcher_finished'])
+                self.assertFalse(summary['native_record_fragment_emitted']);self.assertNotIn('native_record',summary['complete_original_emitted_raw_records'])
+                self.assertFalse(summary['writer_quiescence_certified']);self.assertTrue(summary['unread_tail_unavailable'])
+                final=root/'retained/epochs'/('%04d'%(summary['epochs']-1))
+                self.assertEqual((final/'producer.bin').read_bytes(),b'labelled CPU producer prefix')
+                self.assertEqual((final/'preexec_receipt.bin').read_bytes(),b'{"labelled_CPU_receipt_prefix":')
+                self.assertEqual((final/'custody_journal.bin').read_bytes(),b'{labelled CPU journal prefix')
+                self.assertEqual((final/'stdout_log.bin').read_bytes(),b'labelled CPU stdout prefix\n')
+            finally:
+                if bridge is not None:bridge.close()
+                for child in (supervisor,retainer):
+                    if child is not None:child.kill();child.wait()
+                anchor.close()
+
+    def test_adapter_preserves_original_failure_and_bytes_when_export_write_fails(self):
+        with self.root() as root:
+            anchor=self.rt.OutputAnchor(root/'output',new=True).activate();a,b=self.owner.create_observer_bridge(artifact_only=True)
+            native=dict(preexec_receipt_raw_base64='',preexec_receipt_raw_bytes=0,preexec_receipt_raw_sha256=self.rt.sha(b''),
+                preexec_kernel_observation=None,preexec_receipt_parse_error=None,preexec_receipt_channel_identity={'device':1,'inode':2},
+                inherited_channel_identities={'preexec_receipt':{'device':1,'inode':2}},custody_journal_raw_base64=base64.b64encode(b'opaque journal').decode())
+            failure=self.rt.NativeLaunchFailure(ValueError('original launch rejection'),native,b'opaque producer')
+            try:
+                original_write=self.rt.OutputAnchor.write
+                def damaged(instance,path,raw):
+                    if Path(path).name=='preexec-receipt.bin':raise OSError('labelled CPU export failure')
+                    return original_write(instance,path,raw)
+                with patch.object(self.rt,'launch_native',side_effect=failure),patch.object(self.rt.OutputAnchor,'write',new=damaged):
+                    with self.assertRaises(self.rt.NativeLaunchFailure) as caught:
+                        self.owner.launch_and_retain(self.rt,{},anchor,anchor.path/'x.log',root/'returns',channel_observer_fd=a.detach())
+                self.assertIs(caught.exception,failure);self.assertEqual(caught.exception.producer_bytes,b'opaque producer')
+                self.assertIn('export failure',' '.join(caught.exception.retention_errors))
+                self.assertEqual((root/'returns/producer.bin').read_bytes(),b'opaque producer')
+                self.assertEqual((root/'returns/native.json').read_bytes(),self.rt.encoded(native))
+            finally:a.close();b.close();anchor.close()
+
+    def test_bad_ack_or_closed_retainer_rejects_and_owned_child_reaps_with_actual_wait4(self):
+        # An actual child is reaped after observer delivery fails, with no poll/wait substitute.
+        with self.root() as root:
+            anchor=self.rt.OutputAnchor(root/'output',new=True).activate();retainer=None;bridge=None
+            try:
+                invocation=self.invocation(root,anchor,'import time\ntime.sleep(60)\n')
+                retainer,bridge=self.start_retainer(root,invocation,anchor)
+                original_send=self.rt.NativeChannelObserver.send
+                def failed(observer,kind,value,*args,**kwargs):
+                    if kind=='popen_returned':raise OSError('labelled CPU observer ACK failure')
+                    return original_send(observer,kind,value,*args,**kwargs)
+                with patch.object(self.rt.NativeChannelObserver,'send',new=failed):
+                    with self.assertRaises(self.rt.NativeLaunchFailure) as caught:
+                        self.rt.launch_native(invocation,anchor,anchor.path/'native.log',channel_observer_fd=bridge.fileno())
+                native=caught.exception.native_observation
+                self.assertTrue(native['wait4_observation_available']);self.assertEqual(native['exit_code'],-signal.SIGKILL)
+                with self.assertRaises(ChildProcessError):os.wait4(native['pid'],os.WNOHANG)
+                summary=self.reap(retainer,root);retainer=None
+                self.assertTrue(summary['launcher_finished']);self.assertFalse(summary['writer_quiescence_certified'])
+            finally:
+                if bridge is not None:bridge.close()
+                if retainer is not None:retainer.kill();retainer.wait()
+                anchor.close()
+
+    def test_actual_retainer_sigkill_rejects_launch_and_reaps_original_owned_worker(self):
+        with self.root() as root:
+            anchor=self.rt.OutputAnchor(root/'output',new=True).activate();retainer=None;bridge=None
+            try:
+                invocation=self.invocation(root,anchor,'import time\ntime.sleep(60)\n')
+                retainer,bridge=self.start_retainer(root,invocation,anchor)
+                original=self.rt.subprocess.Popen
+                def launched(*args,**kwargs):
+                    child=original(*args,**kwargs)
+                    retainer.kill();status=retainer.wait(timeout=3)
+                    self.assertEqual(status,-signal.SIGKILL)
+                    (root/'retainer-actual-sigkill.json').write_bytes(self.rt.encoded(dict(pid=retainer.pid,exit_code=status)))
+                    return child
+                with patch.object(self.rt.subprocess,'Popen',new=launched):
+                    with self.assertRaises(self.rt.NativeLaunchFailure) as caught:
+                        self.rt.launch_native(invocation,anchor,anchor.path/'native.log',channel_observer_fd=bridge.fileno())
+                native=caught.exception.native_observation
+                self.assertTrue(native['wait4_observation_available']);self.assertEqual(native['exit_code'],-signal.SIGKILL)
+                self.assertIn('observer_delivery_error',native)
+                with self.assertRaises(ChildProcessError):os.wait4(native['pid'],os.WNOHANG)
+                self.assertFalse((root/'retained/retainer-summary.json').exists())
+                self.assertTrue((root/'retained/messages/0001.receipt.json').exists())
+                retainer=None
+            finally:
+                if bridge is not None:bridge.close()
+                if retainer is not None:retainer.kill();retainer.wait()
+                anchor.close()
+
+    def test_observer_failure_after_child_exit_preserves_exact_wait4_without_Popen_kill_poll(self):
+        with self.root() as root:
+            anchor=self.rt.OutputAnchor(root/'output',new=True).activate();retainer=None;bridge=None
+            try:
+                invocation=self.invocation(root,anchor,"print('labelled CPU worker naturally finished',flush=True)\n")
+                retainer,bridge=self.start_retainer(root,invocation,anchor)
+                original=self.rt.NativeChannelObserver.send
+                def failed(observer,kind,value,*args,**kwargs):
+                    if kind=='popen_returned':
+                        deadline=time.monotonic()+5
+                        while b'naturally finished' not in (anchor.path/'native.log').read_bytes() and time.monotonic()<deadline:time.sleep(.01)
+                        time.sleep(.1)
+                        raise OSError('labelled CPU observer failure after natural child exit')
+                    return original(observer,kind,value,*args,**kwargs)
+                with patch.object(self.rt.NativeChannelObserver,'send',new=failed),patch.object(self.rt.subprocess.Popen,'kill',side_effect=AssertionError('Popen kill may poll/reap')):
+                    with self.assertRaises(self.rt.NativeLaunchFailure) as caught:
+                        self.rt.launch_native(invocation,anchor,anchor.path/'native.log',channel_observer_fd=bridge.fileno())
+                native=caught.exception.native_observation
+                self.assertTrue(native['wait4_observation_available']);self.assertEqual(native['exit_code'],0)
+                with self.assertRaises(ChildProcessError):os.wait4(native['pid'],os.WNOHANG)
+                self.reap(retainer,root);retainer=None
+            finally:
+                if bridge is not None:bridge.close()
+                if retainer is not None:retainer.kill();retainer.wait()
+                anchor.close()
+
+
+class ObserverRejectionEvidenceArtifactTests(unittest.TestCase):
+    setUpClass=OriginalChannelTransportArtifactTests.__dict__['setUpClass']
+    root=OriginalChannelTransportArtifactTests.root
+    binding=OriginalChannelTransportArtifactTests.binding
+
+    def start_peer(self,root,bridge,mode):
+        peer=OWNER_RETAINER_PATH.parent/'observer_rejection_cpu_peer.py'
+        expected=os.environ.get('P4_DRIVER_R8_CPU_PEER_SHA256')
+        if expected is not None:self.assertEqual(hashlib.sha256(peer.read_bytes()).hexdigest(),expected)
+        argv=[sys.executable,'-I','-B','-S',str(peer),str(OWNER_RETAINER_PATH),str(self.rt.__file__),
+            self.rt.sha(Path(self.rt.__file__).read_bytes()),str(bridge.fileno()),str(root),mode]
+        with (root/'peer.stdout.log').open('wb') as out,(root/'peer.stderr.log').open('wb') as err:
+            child=subprocess.Popen(argv,pass_fds=(bridge.fileno(),),stdout=out,stderr=err)
+        (root/'actual-peer-process.json').write_bytes(self.rt.encoded(dict(argv=argv,pid=child.pid,ppid=os.getpid())))
+        return child
+
+    def reap_peer(self,child,root):
+        try:pid,status,usage=os.wait4(child.pid,0)
+        except BaseException:child.kill();child.wait();raise
+        child.returncode=os.waitstatus_to_exitcode(status)
+        (root/'actual-peer-exit.json').write_bytes(self.rt.encoded(dict(pid=pid,ppid=os.getpid(),raw_wait_status=status,
+            exit_code=child.returncode,through_exit_rss_bytes=self.rt.rss_bytes(usage),CPU_artifact_only=True)))
+        self.assertEqual(child.returncode,0,(root/'peer.stderr.log').read_text())
+
+    def test_semantic_registration_rejection_persists_all_actual_originals_and_bytes(self):
+        import fcntl
+        with self.root() as root:
+            anchor=self.rt.OutputAnchor(root/'original',new=True).activate()
+            invocation=dict(nonce='opaque-invocation',observer_run_nonce='opaque-run',observer_attempt_nonce='opaque-attempt',deployment={'sha256':'0'*64})
+            a,b=self.owner.create_observer_bridge(artifact_only=True);child=None;handles=[]
+            try:
+                binding=self.binding(invocation,anchor)
+                (root/'receiver-config.json').write_bytes(self.rt.encoded(dict(binding=binding)))
+                child=self.start_peer(root,b,'receiver');b.close()
+                handles=[tempfile.TemporaryFile(dir=anchor.path) for _ in range(4)]
+                roles=['root_anchor','invocation','producer','preexec_receipt','custody_journal'];fds=[anchor.fd]+[h.fileno() for h in handles]
+                value={role:dict(self.rt.identity(os.fstat(fd)),access_mode=fcntl.fcntl(fd,fcntl.F_GETFL)&os.O_ACCMODE,
+                    anonymous=os.fstat(fd).st_nlink==0) for role,fd in zip(roles,fds)}
+                actual=[self.rt.identity(os.fstat(fd)) for fd in fds]
+                value['custody_journal']['inode']+=1
+                raw=self.rt.encoded(dict(schema='p4-original-native-observer-message-v1',sequence=0,previous_raw_sha256=None,
+                    kind='channels_created',binding=dict(binding,launcher_pid_namespace=os.getpid()),roles=roles,value=value))
+                self.rt.observer_send_packet(a,raw,fds)
+                self.reap_peer(child,root);child=None
+                stored=json.loads((root/'retained/incoming-error.observation.json').read_bytes())
+                self.assertEqual(stored['received_unvalidated_fd_identities'],actual)
+                self.assertEqual([r['original_fstat_identity'] for r in stored['received_descriptor_observations']],actual)
+                self.assertEqual((root/'retained/incoming-error.header.bin').read_bytes(),struct.pack('!I',len(raw)))
+                self.assertEqual((root/'retained/incoming-error.payload.bin').read_bytes(),raw)
+                self.assertEqual(stored['payload_raw_sha256'],self.rt.sha(raw))
+                self.assertTrue(stored['received_unvalidated_fds_closed'])
+                self.assertTrue(all(r['close_succeeded'] for r in stored['descriptor_cleanup_observations']))
+                self.assertFalse(stored['sender_declarations_used_as_original_authority'])
+                self.assertFalse(stored['acceptance_certified']);self.assertFalse(stored['Linux_identity_or_enforcement_certified'])
+                self.assertNotEqual(actual[-1]['inode'],value['custody_journal']['inode'])
+                summary=json.loads((root/'retained/retainer-summary.json').read_bytes())
+                self.assertEqual(summary['messages'],0);self.assertEqual(summary['original_identities'],{})
+                self.assertFalse(summary['launcher_finished'])
+                diagnostic=json.loads((root/'diagnostic-receiver-observations.json').read_bytes())
+                self.assertEqual(stored['received_unvalidated_fd_identities'],diagnostic['identities'])
+                self.assertEqual(stored['credential_raw_base64'],diagnostic['credential_raw_base64'])
+            finally:
+                if child is not None:child.kill();child.wait()
+                for h in handles:h.close()
+                a.close();b.close();anchor.close()
+
+    def test_official_adapter_retains_original_semantic_and_partial_ACK_rejections(self):
+        for mode in ('noncanonical','wrong_binding','invalid_fd','partial_payload','partial_header'):
+            with self.subTest(mode=mode),self.root() as root:
+                anchor=self.rt.OutputAnchor(root/'original',new=True).activate()
+                a,b=self.owner.create_observer_bridge(artifact_only=True);child=None
+                try:
+                    child=self.start_peer(root,b,mode);b.close()
+                    invocation=dict(nonce='opaque-invocation',observer_run_nonce='opaque-run',observer_attempt_nonce='opaque-attempt',deployment={'sha256':'0'*64})
+                    with self.assertRaises(self.rt.NativeLaunchFailure) as caught:
+                        self.owner.launch_and_retain(self.rt,invocation,anchor,anchor.path/'never-started.log',root/'available',channel_observer_fd=a.detach())
+                    self.reap_peer(child,root);child=None
+                    native=caught.exception.native_observation;observed=native['observer_rejection_observations'][0]
+                    self.assertIsNone(native['pid']);self.assertIsNone(native['raw_wait_status']);self.assertIsNone(native['through_exit_child_peak_rss_bytes'])
+                    self.assertFalse(native['wait4_observation_available']);self.assertIsNone(native['invocation_buffer_sha256'])
+                    self.assertEqual(caught.exception.observer_rejection_observations,native['observer_rejection_observations'])
+                    self.assertIsInstance(caught.exception.__cause__,self.rt.ObserverPacketFailure)
+                    for kind in ('header','payload'):
+                        original=(root/('diagnostic-sent-'+kind+'.bin')).read_bytes()
+                        self.assertEqual(base64.b64decode(observed[kind+'_raw_base64'],validate=True),original)
+                        self.assertEqual(observed[kind+'_raw_sha256'],self.rt.sha(original))
+                        self.assertEqual((root/('available/observer-rejections/0000.'+kind+'.bin')).read_bytes(),original)
+                    self.assertEqual((root/'available/native.json').read_bytes(),self.rt.encoded(native))
+                    self.assertEqual(json.loads((root/'available/observer-rejections/0000.observation.json').read_bytes()),observed)
+                    self.assertEqual((root/'available/producer.bin').read_bytes(),b'')
+                    self.assertFalse((anchor.path/'never-started.invocation.json').exists())
+                    self.assertFalse(observed['acceptance_certified']);self.assertFalse(observed['sender_declarations_used_as_original_authority'])
+                    self.assertFalse(observed['Linux_identity_or_enforcement_certified'])
+                    if mode=='invalid_fd':
+                        actual=json.loads((root/'diagnostic-ACK-descriptor-identity.json').read_bytes())
+                        self.assertEqual(observed['received_unvalidated_fd_identities'],[actual])
+                        self.assertTrue(observed['received_unvalidated_fds_closed'])
+                        self.assertTrue(observed['descriptor_cleanup_observations'][0]['close_succeeded'])
+                    else:self.assertEqual(observed['received_unvalidated_fd_identities'],[])
+                finally:
+                    if child is not None:child.kill();child.wait()
+                    a.close();b.close();anchor.close()
+
+    def test_unavailable_descriptor_is_reported_without_inventing_an_identity_or_close(self):
+        with tempfile.TemporaryFile() as handle:fd=os.dup(handle.fileno())
+        os.close(fd)
+        packet=dict(header=b'\x00\x00',raw=b'actual prefix',fds=[fd],credentials=None,credential_raw_base64=None)
+        observed=self.rt.observer_received_packet_observation(packet,phase='labelled_CPU_unavailable_descriptor')
+        self.assertEqual(observed['received_unvalidated_fd_identities'],[])
+        row=observed['received_descriptor_observations'][0]
+        self.assertIsNone(row['original_fstat_identity']);self.assertEqual(row['fstat_error']['errno'],9)
+        self.rt.observer_close_received_fds([fd],observed)
+        self.assertFalse(observed['received_unvalidated_fds_closed'])
+        self.assertFalse(observed['descriptor_cleanup_observations'][0]['close_succeeded'])
+        self.assertEqual(observed['descriptor_cleanup_observations'][0]['close_error']['errno'],9)
+
+    def test_inline_original_ACK_survives_an_export_failure(self):
+        with self.root() as root:
+            anchor=self.rt.OutputAnchor(root/'original',new=True).activate()
+            a,b=self.owner.create_observer_bridge(artifact_only=True);child=None
+            try:
+                child=self.start_peer(root,b,'noncanonical');b.close()
+                invocation=dict(nonce='opaque-invocation',observer_run_nonce='opaque-run',observer_attempt_nonce='opaque-attempt',deployment={'sha256':'0'*64})
+                original_write=self.rt.OutputAnchor.write
+                def failed(instance,path,raw):
+                    if Path(path).name=='0000.payload.bin':raise OSError('labelled CPU observer export failure')
+                    return original_write(instance,path,raw)
+                with patch.object(self.rt.OutputAnchor,'write',new=failed):
+                    with self.assertRaises(self.rt.NativeLaunchFailure) as caught:
+                        self.owner.launch_and_retain(self.rt,invocation,anchor,anchor.path/'never-started.log',root/'available',channel_observer_fd=a.detach())
+                self.reap_peer(child,root);child=None
+                observed=caught.exception.observer_rejection_observations[0]
+                self.assertEqual(base64.b64decode(observed['payload_raw_base64'],validate=True),(root/'diagnostic-sent-payload.bin').read_bytes())
+                self.assertIn('observer export failure',' '.join(caught.exception.retention_errors))
+                self.assertEqual((root/'available/native.json').read_bytes(),self.rt.encoded(caught.exception.native_observation))
+                self.assertIsInstance(caught.exception.__cause__,self.rt.ObserverPacketFailure)
+            finally:
+                if child is not None:child.kill();child.wait()
+                a.close();b.close();anchor.close()
 
 
 if __name__ == "__main__":

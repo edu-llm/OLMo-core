@@ -963,12 +963,274 @@ def rss_bytes(usage):
     return int(usage.ru_maxrss * (1 if sys.platform == "darwin" else 1024))
 
 
+OBSERVER_FRAME_LIMIT = 32768
+OBSERVER_FD_LIMIT = 7
+
+
+class ObserverPacketFailure(ValueError):
+    def __init__(self, error, header=b"", raw=b"", credentials=None, credential_raw=None, received_fd_identities=(), *, observation=None):
+        super().__init__(str(error))
+        self.header = header
+        self.raw = raw
+        self.credentials = credentials
+        self.credential_raw_base64 = base64.b64encode(credential_raw).decode("ascii") if credential_raw is not None else None
+        self.received_fd_identities = list(received_fd_identities)
+        self.packet_observation = observation
+
+
+def observer_received_packet_observation(packet, *, phase):
+    """Capture receiver bytes and every available fstat before validation/close."""
+    descriptors = []; identities = []
+    for index, fd in enumerate(packet.get("fds", ())):
+        observed = None; error = None
+        try:
+            observed = identity(os.fstat(fd)); identities.append(observed)
+        except OSError as exception:
+            error = dict(type=type(exception).__name__, errno=exception.errno, message=str(exception))
+        descriptors.append(dict(index=index, receiver_namespace_fd=fd, original_fstat_identity=observed,
+                                fstat_error=error, validation_status="unvalidated"))
+    header = packet.get("header", b""); raw = packet.get("raw", b"")
+    return dict(schema="p4-original-observer-rejection-observation-v1", phase=phase,
+        received_packet=packet.get("received_packet", True),
+        header_raw_base64=base64.b64encode(header).decode("ascii"), header_raw_bytes=len(header), header_raw_sha256=sha(header),
+        payload_raw_base64=base64.b64encode(raw).decode("ascii"), payload_raw_bytes=len(raw), payload_raw_sha256=sha(raw),
+        credentials_receiver_namespace=packet.get("credentials"), credential_raw_base64=packet.get("credential_raw_base64"),
+        credential_raw_fragments_base64=list(packet.get("credential_raw_fragments_base64", [])),
+        received_unvalidated_fd_identities=identities, received_descriptor_observations=descriptors,
+        descriptor_cleanup_observations=[], received_unvalidated_fds_closed=False,
+        sender_declarations_used_as_original_authority=False, acceptance_certified=False,
+        Linux_identity_or_enforcement_certified=False)
+
+
+def observer_close_received_fds(fds, observation):
+    """Retain each actual cleanup result without erasing the original error."""
+    cleanup = []
+    for index, fd in enumerate(fds):
+        error = None
+        try: os.close(fd)
+        except OSError as exception:
+            error = dict(type=type(exception).__name__, errno=exception.errno, message=str(exception))
+        cleanup.append(dict(index=index, receiver_namespace_fd=fd, close_succeeded=error is None, close_error=error))
+    observation["descriptor_cleanup_observations"] = cleanup
+    observation["received_unvalidated_fds_closed"] = all(row["close_succeeded"] for row in cleanup)
+
+
+def observer_packet_failure(error, packet, observation):
+    """Typed byte observation shared by framing and semantic rejection paths."""
+    credential_raw = packet.get("credential_raw_base64")
+    return ObserverPacketFailure(error, packet.get("header", b""), packet.get("raw", b""), packet.get("credentials"),
+        base64.b64decode(credential_raw, validate=True) if credential_raw is not None else None,
+        observation["received_unvalidated_fd_identities"], observation=observation)
+
+
+def observer_send_packet(sock, raw, fds=()):
+    import array
+    import socket
+    require(0 < len(raw) <= OBSERVER_FRAME_LIMIT and len(fds) <= OBSERVER_FD_LIMIT,
+            "Observer frame or descriptor count exceeds exact bound")
+    frame = struct.pack("!I", len(raw)) + raw
+    ancillary = [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", fds))] if fds else []
+    sent = sock.sendmsg([frame], ancillary)
+    require(sent > 0, "Observer send made no progress")
+    if sent < len(frame): sock.sendall(frame[sent:])
+
+
+def observer_receive_packet(sock, *, deadline=None):
+    """Bounded stream frame, retaining actual partial bytes on failure."""
+    import array
+    import socket
+    header = b""; raw = b""; fds = []; credentials = None; credential_bytes = None
+    credential_raw_fragments = []
+    original_timeout = sock.gettimeout()
+    def receive(size, target):
+        nonlocal credentials, credential_bytes, header, raw
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            require(remaining > 0, "Observer total frame deadline elapsed")
+            sock.settimeout(min(original_timeout, remaining) if original_timeout is not None else remaining)
+        data, ancillary, flags, _ = sock.recvmsg(size, socket.CMSG_SPACE(OBSERVER_FD_LIMIT*array.array("i").itemsize)+socket.CMSG_SPACE(12))
+        if target == "header": header += data
+        else: raw += data
+        # Adopt all actual received rights before any ancillary validation fails.
+        for level, kind, value in ancillary:
+            if level == socket.SOL_SOCKET and kind == getattr(socket, "SCM_CREDENTIALS", -1):
+                credential_bytes = value
+                credential_raw_fragments.append(base64.b64encode(value).decode("ascii"))
+            if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+                received = array.array("i")
+                received.frombytes(value[:len(value)-len(value)%received.itemsize])
+                fds.extend(received)
+                for fd in received: os.set_inheritable(fd,False)
+        for level, kind, value in ancillary:
+            require(level == socket.SOL_SOCKET, "Unexpected observer ancillary level")
+            if kind == socket.SCM_RIGHTS:
+                received = array.array("i")
+                require(len(value) % received.itemsize == 0, "Observer rights bytes truncated")
+            elif kind == getattr(socket, "SCM_CREDENTIALS", -1):
+                require(len(value) == 12, "Observer credential bytes differ")
+                pid, uid, gid = struct.unpack("iII", value)
+                actual = dict(pid=pid, uid=uid, gid=gid)
+                require(credentials is None or credentials == actual, "Observer sender changed within frame")
+                credentials = actual
+            else: raise ValueError("Unexpected observer ancillary type")
+        require(not flags & (socket.MSG_CTRUNC | socket.MSG_TRUNC) and len(fds) <= OBSERVER_FD_LIMIT,
+                "Observer ancillary/message truncated or too many descriptors")
+        return data
+    try:
+        while len(header) < 4:
+            data = receive(4-len(header), "header")
+            if not data:
+                require(not header and not fds, "Observer partial header ended")
+                return None
+        length = struct.unpack("!I", header)[0]
+        require(0 < length <= OBSERVER_FRAME_LIMIT, "Observer frame length exceeds bound")
+        while len(raw) < length:
+            data = receive(length-len(raw), "payload")
+            require(data, "Observer partial payload ended")
+        return dict(header=header, raw=raw, fds=fds, credentials=credentials,
+                    credential_raw_base64=base64.b64encode(credential_bytes).decode("ascii") if credential_bytes is not None else None,
+                    credential_raw_fragments_base64=credential_raw_fragments)
+    except Exception as error:
+        packet = dict(header=header, raw=raw, fds=fds, credentials=credentials,
+            credential_raw_base64=base64.b64encode(credential_bytes).decode("ascii") if credential_bytes is not None else None,
+            credential_raw_fragments_base64=credential_raw_fragments)
+        observation = observer_received_packet_observation(packet, phase="framing_rejection")
+        observer_close_received_fds(fds, observation)
+        raise observer_packet_failure(error, packet, observation) from error
+    finally:
+        if deadline is not None: sock.settimeout(original_timeout)
+
+
+class NativeChannelObserver:
+    """Borrowed supervisor-only bridge; RW duplicates are held by retainer."""
+    def __init__(self, fd, invocation, root_identity):
+        import socket
+        require(type(fd) is int and fd >= 3, "Observer needs one explicit supervisor descriptor")
+        self.production = bool(invocation.get("native_namespace"))
+        require(not self.production or (sys.platform.startswith("linux") and hasattr(socket, "SO_PASSCRED")),
+                "Production observer needs actual Linux SCM_CREDENTIALS")
+        for key in ("nonce", "observer_run_nonce", "observer_attempt_nonce"):
+            require(isinstance(invocation.get(key), str) and invocation[key], "Observer requires original fresh nonce binding")
+        self.fd = fd; self.identity = identity(os.fstat(fd))
+        self.sock = socket.socket(fileno=fd)
+        self.original_timeout = self.sock.gettimeout()
+        try:
+            self.sock.settimeout(5)
+            require(self.sock.family == socket.AF_UNIX and self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) == socket.SOCK_STREAM,
+                    "Observer must be a connected Unix stream bridge")
+            self.sock.getpeername()
+            if hasattr(socket, "SO_PASSCRED"): self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
+            self.binding = dict(invocation_nonce=invocation["nonce"], run_nonce=invocation["observer_run_nonce"],
+                attempt_nonce=invocation["observer_attempt_nonce"], deployment_sha256=invocation["deployment"]["sha256"],
+                policy_sha256=sha(encoded(invocation["native_namespace"])) if invocation.get("native_namespace") is not None else None,
+                output_root_identity=root_identity, scope="production_credentials_required" if self.production else "artifact_only_cpu",
+                launcher_pid_namespace=os.getpid())
+        except BaseException:
+            self.sock.settimeout(self.original_timeout)
+            self.sock.detach()
+            raise
+        self.sequence = 0; self.previous = None; self.registrations = []
+        self.receiver_credentials = None
+        self.rejection_observations = []
+
+    def send(self, kind, value, roles=(), fds=()):
+        raw = encoded(dict(schema="p4-original-native-observer-message-v1", sequence=self.sequence,
+            previous_raw_sha256=self.previous, kind=kind, binding=self.binding, roles=list(roles), value=value))
+        observer_send_packet(self.sock, raw, fds)
+        try:
+            packet = observer_receive_packet(self.sock, deadline=time.monotonic()+5)
+        except ObserverPacketFailure as error:
+            error.packet_observation["expected_ACK_sequence"] = self.sequence
+            error.packet_observation["sent_message_raw_sha256"] = sha(raw)
+            self.rejection_observations.append(error.packet_observation)
+            raise
+        if packet is None:
+            packet = dict(header=b"", raw=b"", fds=[], credentials=None, credential_raw_base64=None, received_packet=False)
+        observation = observer_received_packet_observation(packet, phase="ACK_semantic_rejection")
+        observation.update(expected_ACK_sequence=self.sequence, sent_message_raw_sha256=sha(raw))
+        try:
+            require(observation["received_packet"], "Observer ACK absent")
+            require(not packet["fds"] and (not self.production or packet["credentials"] is not None),
+                    "Observer ACK descriptors/actual credentials differ")
+            if self.production:
+                require(packet["credentials"]["pid"] > 0 and
+                        (self.receiver_credentials is None or self.receiver_credentials == packet["credentials"]),
+                        "Observer ACK receiver credentials changed")
+                self.receiver_credentials = packet["credentials"]
+            ack = json.loads(packet["raw"])
+            require(encoded(ack) == packet["raw"] and set(ack) == {"schema", "sequence", "message_raw_sha256", "binding_sha256", "durable_registration", "receipt_sha256"} and
+                    ack["schema"] == "p4-original-native-observer-ack-v1" and type(ack["sequence"]) is int and ack["sequence"] == self.sequence and
+                    ack["message_raw_sha256"] == sha(raw) and ack["binding_sha256"] == sha(encoded(self.binding)) and
+                    ack["durable_registration"] is True and isinstance(ack["receipt_sha256"], str) and len(ack["receipt_sha256"]) == 64 and
+                    all(c in "0123456789abcdef" for c in ack["receipt_sha256"]),
+                    "Observer ACK does not bind exact durable message")
+        except Exception as error:
+            observer_close_received_fds(packet["fds"], observation)
+            self.rejection_observations.append(observation)
+            raise observer_packet_failure(error, packet, observation) from error
+        self.previous = sha(raw); self.sequence += 1
+        return dict(message_raw_sha256=sha(raw), ack_raw_sha256=sha(packet["raw"]),
+                    receipt_sha256=ack["receipt_sha256"], receiver_credentials=packet["credentials"])
+
+    def register(self, kind, handles):
+        import fcntl
+        roles = [name for name, fd in handles]
+        value = {name: dict(identity(os.fstat(fd)), access_mode=fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE,
+                           anonymous=os.fstat(fd).st_nlink == 0) for name, fd in handles}
+        receipt = self.send(kind, value, roles, [fd for name, fd in handles])
+        self.registrations.append(dict(kind=kind, identities=value, **receipt))
+
+    def raw_value(self, kind, raw):
+        require(len(raw) <= 2*1024*1024, "Observer raw native/invocation record exceeds bound")
+        record = uuid.uuid4().hex
+        for offset in range(0, max(1,len(raw)), 8192):
+            self.send("raw_piece", dict(record=record, record_kind=kind, offset=offset,
+                total_bytes=len(raw), raw_sha256=sha(raw), raw_base64=base64.b64encode(raw[offset:offset+8192]).decode("ascii")))
+
+    def public_binding(self):
+        return dict(schema="p4-original-native-observer-binding-v1", binding=self.binding,
+                    registrations=self.registrations, supervisor_bridge_identity=self.identity,
+                    outside_RW_duplicate_authority_disclosed=True, kernel_readonly_observer_claimed=False)
+
+    def close_in_child(self):
+        try:
+            observed = identity(os.fstat(self.fd))
+        except OSError as error:
+            import errno
+            require(error.errno == errno.EBADF, "Observer child bridge closure is unknown")
+            return
+        require(observed == self.identity, "Observer child descriptor was replaced before closure")
+        os.close(self.fd)
+
+    def detach(self):
+        self.sock.settimeout(self.original_timeout)
+        self.sock.detach()
+
+
 class NativeLaunchFailure(ValueError):
     """Available actual channel bytes survive a rejected native launch."""
     def __init__(self, error, native, producer):
         super().__init__(str(error))
         self.native_observation = native
         self.producer_bytes = producer
+        if "observer_rejection_observations" in native:
+            self.observer_rejection_observations = native["observer_rejection_observations"]
+
+
+def original_observer_rejection_bytes(native):
+    """Decode/check retained originals, never recreate a received ACK as JSON."""
+    records = []
+    for observed in native.get("observer_rejection_observations", []):
+        require(observed.get("schema") == "p4-original-observer-rejection-observation-v1",
+                "Original observer rejection schema differs")
+        raw_values = {}
+        for kind in ("header", "payload"):
+            raw = base64.b64decode(observed[kind+"_raw_base64"], validate=True)
+            require(type(observed[kind+"_raw_bytes"]) is int and len(raw) == observed[kind+"_raw_bytes"] and
+                    sha(raw) == observed[kind+"_raw_sha256"], "Original observer rejection bytes/length/hash differ")
+            raw_values[kind] = raw
+        records.append((observed, raw_values))
+    return records
 
 
 def observe_preexec_receipt(raw):
@@ -995,7 +1257,7 @@ def original_preexec_receipt(native):
     return raw
 
 
-def launch_native(invocation, anchor, log_path):
+def launch_native(invocation, anchor, log_path, *, channel_observer_fd=None):
     """One exact wait4 observation and original channel bytes through exit."""
     anchor.verify()
     with tempfile.TemporaryFile(dir=anchor.path) as source, tempfile.TemporaryFile(dir=anchor.path) as channel, tempfile.TemporaryFile(dir=anchor.path) as enforcement, tempfile.TemporaryFile(dir=anchor.path) as journal:
@@ -1013,26 +1275,53 @@ def launch_native(invocation, anchor, log_path):
                     "Native preexec supervisor requires a single actual parent thread")
         started_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
         started = time.monotonic()
-        pid = status = usage = child = None; launch_error = None; argv = None; data = None
+        pid = status = usage = child = None; launch_error = None; argv = None; data = None; observer = None
         try:
+            if channel_observer_fd is not None:
+                require(channel_observer_fd not in {fd.fileno() for _, fd in handles} | {anchor.fd},
+                        "Observer bridge aliases a native channel/root descriptor")
+                observer = NativeChannelObserver(channel_observer_fd, invocation, anchor.root_identity)
+                observer.register("channels_created", [("root_anchor", anchor.fd)]+[(name, fd.fileno()) for name, fd in handles])
             with anchor.open_exclusive(Path(log_path).with_suffix(".invocation.json"), binary=True) as invocation_file, anchor.open_exclusive(log_path) as log:
+                if observer:
+                    observer.register("named_files_created", [("invocation_file", invocation_file.fileno()), ("stdout_log", log.fileno())])
+                    invocation["original_native_observer"] = observer.public_binding()
                 invocation["output_registry_before_child"] = anchor.registry()
                 data = encoded(invocation)
                 source.write(data); source.flush(); source.seek(0)
                 invocation_file.write(data + b"\n"); invocation_file.flush(); os.fsync(invocation_file.fileno())
+                if observer:
+                    observer.raw_value("invocation_buffer", data)
                 argv = [sys.executable, "-I", "-B", "-S", "-c", BOOTSTRAP, str(source.fileno()), sha(data)]
                 preexec = (lambda: landlock_before_exec(policy, invocation["deployment"], enforcement.fileno(), sha(data))) if policy else None
+                if observer:
+                    def observed_preexec():
+                        observer.close_in_child()
+                        if policy: landlock_before_exec(policy, invocation["deployment"], enforcement.fileno(), sha(data))
+                    preexec = observed_preexec
                 child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                          pass_fds=(source.fileno(), channel.fileno(), enforcement.fileno(), journal.fileno(), anchor.fd),
                                          preexec_fn=preexec,
                                          env=dict({k: v for k, v in os.environ.items() if not k.startswith("PYTHON")}, CUDA_VISIBLE_DEVICES=""),
                                          cwd=str(anchor.path))
+                if observer: observer.send("popen_returned", dict(pid=child.pid, pid_scope="launcher_namespace"))
                 pid, status, usage = os.wait4(child.pid, 0)
                 child.returncode = os.waitstatus_to_exitcode(status)
+                if observer: observer.send("wait4_observed", dict(pid=pid, raw_wait_status=status, exit_code=child.returncode,
+                    through_exit_child_peak_rss_bytes=rss_bytes(usage), pid_scope="launcher_namespace"))
         except Exception as error:
             launch_error = error
             if child is not None and pid is None:
                 pid = child.pid
+            if child is not None and usage is None and child.returncode is None and observer is not None:
+                try:
+                    import signal
+                    try: os.kill(child.pid, signal.SIGKILL)
+                    except ProcessLookupError: pass
+                    pid, status, usage = os.wait4(child.pid, 0)
+                    child.returncode = os.waitstatus_to_exitcode(status)
+                except Exception as reap_error:
+                    launch_error = RuntimeError(str(error)+"; owned-child reaping unavailable: "+str(reap_error))
         elapsed = time.monotonic() - started
         channel.seek(0); producer_bytes = channel.read()
         enforcement.seek(0); enforcement_bytes = enforcement.read()
@@ -1075,5 +1364,23 @@ def launch_native(invocation, anchor, log_path):
         if launch_error is not None:
             native["launch_error_type"] = type(launch_error).__name__
             native["launch_error"] = str(launch_error)
+        if observer is not None:
+            native["original_native_observer"] = observer.public_binding()
+            if observer.rejection_observations:
+                native["observer_rejection_observations"] = list(observer.rejection_observations)
+            try:
+                observer.raw_value("native_record", encoded(native))
+                observer.send("finished", dict(success=launch_error is None, actual_wait4_available=usage is not None))
+            except Exception as observer_error:
+                native["observer_delivery_error"] = type(observer_error).__name__+": "+str(observer_error)
+                if launch_error is None:
+                    launch_error = observer_error
+                    native["launch_error_type"] = type(launch_error).__name__
+                    native["launch_error"] = str(launch_error)
+            finally:
+                if observer.rejection_observations:
+                    native["observer_rejection_observations"] = list(observer.rejection_observations)
+                observer.detach()
+        if launch_error is not None:
             raise NativeLaunchFailure(launch_error, native, producer_bytes) from launch_error
         return producer_bytes, native
