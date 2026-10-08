@@ -495,9 +495,10 @@ def _runtime_dependency_paths():
     paths = {Path(sys.executable).resolve()}
     for name, module in sys.modules.copy().items():
         if any(name == root or name.startswith(root + ".") for root in roots):
-            filename = getattr(module, "__file__", None)
-            if filename and Path(filename).is_file():
-                paths.add(Path(filename).resolve())
+            namespace = vars(module) if isinstance(module, types.ModuleType) else {}
+            for filename in (namespace.get("__file__"), namespace.get("__cached__")):
+                if isinstance(filename, str) and Path(filename).is_file():
+                    paths.add(Path(filename).resolve())
     return paths
 
 
@@ -615,6 +616,8 @@ def _verify_preflight(report_path, preflight_path, expected_sha256):
     hashes = {row["path"]: row["sha256"] for row in files}
     require(all(checkpoint_digest(path) == hashes[path] for path in small_paths),
             "Bound report, policy or selected-dose proof bytes changed")
+    require(all(_file_identity(row["path"]) == row["identity"] for row in files),
+            "Verified input identity changed during the cheap launch check")
     return report
 
 
