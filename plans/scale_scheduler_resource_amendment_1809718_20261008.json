@@ -1,0 +1,100 @@
+{
+  "actual_scontrol_update_arguments_template": [
+    "update",
+    "JobId=1809718",
+    "Partition=normal",
+    "QOS=normal",
+    "ArrayTaskThrottle=1",
+    "TimeLimit=00:20:00",
+    "Comment=p4-pregrid-sha256:e7b4f8c4fbeb702a7e1fc5219dc5e1e43d657b69a1477551e36228ccc5ae8f14 p4-resource-amendment-sha256:<this record payload SHA256>"
+  ],
+  "amendment_status": "Prospective requested scheduler resource override; actual application and queue estimate recorded separately after push.",
+  "array_job_id": "1809718",
+  "created_utc": "2026-10-08T09:09:05.353906+00:00",
+  "dependent_jobs_unchanged": [
+    "1809725",
+    "1809726",
+    "1809727"
+  ],
+  "explicit_header_override": {
+    "original": {
+      "array_task_throttle": 3,
+      "partition": "gpu",
+      "qos": "gpu",
+      "time_limit_minutes": 30
+    },
+    "requested": {
+      "array_task_throttle": 1,
+      "partition": "normal",
+      "qos": "normal",
+      "time_limit_minutes": 20
+    }
+  },
+  "infrastructure_budget": {
+    "maximum_started_launch_attempts": 3,
+    "next_started_launch_attempt": 2,
+    "pending_resource_update_consumes_start": false,
+    "prior_started_launches_per_trial": 1
+  },
+  "invariants": "Source, gold, aliases, probes, gates, selectors, all three prospective bindings, checkpoints, numerical code, seeds and threads remain unchanged. Retained original script headers are explicitly overridden only in scheduler metadata, which is captured separately.",
+  "observed_before_state": "All three tasks PENDING and all three actual stage1 directories exactly empty at remote observation2026-10-08T09:08:26.904529+00:00.",
+  "original_actual_scheduler_attestation": {
+    "path": "/scratch/users/ericrcwu/agent-runs/p4-reviewed-scale-20261008-8ad2785e/actual-retry-scheduler-submission-1809718.json",
+    "payload_sha256": "922fc89ce82e5ea0902cfffaea33941888dcbaa5ca08d6666c20722c88f98db3"
+  },
+  "original_exact_script": {
+    "file_sha256": "a8d247c176b0f9a7992975bc0f7233b87336e0a79823fabe506527fd2af81bc3",
+    "remote_path": "/scratch/users/ericrcwu/agent-runs/p4-reviewed-scale-20261008-8ad2785e/operators-v4/calibrate.sbatch",
+    "repo_path": "plans/scale_retry_calibrate_launch_v4_20261008.sbatch"
+  },
+  "original_retry_launch_reference": {
+    "payload_sha256": "8f5d94725e82f8f92564d9ca8bb4306092f539f7eaec83d0296ab2b1922c9df3",
+    "pushed_commit": "b6311aab1226b4af68e71424ad51143e9bd632a5",
+    "repo_path": "plans/scale_retry_launch_reference_v2_20261008.json"
+  },
+  "remote_artifacts_downloaded": false,
+  "resource_basis": {
+    "conservative_scaled_runtime_seconds": 796.8284178948618,
+    "each_scale_total_E8_updates": 280,
+    "largest_observed_workload_ratio": 2.8526315789473684,
+    "memory_reason": "Preserve48G; successful normal runs reached about32GB RSS, so lowering memory to fit smaller CPU fragments is not justified.",
+    "normal_application_wall_seconds": [
+      279.33099520299584,
+      237.20421048789285,
+      255.6163998900447,
+      230.03662415011786,
+      274.83851001691073,
+      263.95527266012505
+    ],
+    "normal_completed_slurm_jobs": [
+      "1806319_1",
+      "1806319_2",
+      "1806319_3",
+      "1806319_4",
+      "1806319_5",
+      "1806319_6"
+    ],
+    "normal_measured_host_MaxRSS_K_upper": 33530832,
+    "normal_total_E8_updates": 104,
+    "queue_reason": "All24 GPUs allocated; current gpu queue estimates hours. Serial normal-partition execution may gain an earlier resource opening. No improvement is claimed before the actual queue observation.",
+    "requested_limit_seconds": 1200
+  },
+  "retained_before_scontrol": {
+    "bytes": 4369,
+    "file_sha256": "98e315d9662f745254cba512b47ce12b3a605655deb1f0a5ae5eb25d8ad287d3",
+    "path": "/scratch/users/ericrcwu/agent-runs/p4-reviewed-scale-20261008-8ad2785e/actual-scheduler-before-resource-amendment-1809718.txt"
+  },
+  "schema": "p4-scale-prospective-scheduler-resource-amendment-v1",
+  "sha256": "a74bbbcc900a9944ea119fc0497b8d40b11d3bf5e4b6eff503c1b244f2e24d97",
+  "unchanged_numerical_commit": "1b6f6e99d99b9a2d1c3ced6bb9c39fbffc4f9ec7",
+  "unchanged_operator_inventory_sha256": "96c473fc90c09ed32f380bf65ac3576d1e3ec4d1d1be9938eae60fca2bf6465b",
+  "unchanged_resources": {
+    "GPU_per_task": 1,
+    "actual_scheduler_CPUs_before": 13,
+    "exclude_nodes": [
+      "wheat-01"
+    ],
+    "host_memory_per_task": "48G",
+    "runtime_OMP_threads": 4
+  }
+}
