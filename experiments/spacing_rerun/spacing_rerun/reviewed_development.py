@@ -71,6 +71,8 @@ SOURCE_FIRST_ADJUDICATION_SHA256 = frozenset((
     "988efe2a33ffdd51058db6885dd8edd9c96f0d4729a60f26a6bf4575357395e8",
     "8d8585c0835c63c609a623f26265fff9d89588ee777d8345a9577c3e1c82ced0",
     "b2d9dc90d58614bc13acf91d4219feaf9f8a4697114fccda91fb9628bd25551d",
+    # Actual R6 accepts only the disclosed pre-scale diagnostic amendment.
+    "a0c94078e8c91eab4251b6d860625a7f7b366b472686563ea3aba8f3ff29dddb",
 ))
 
 
