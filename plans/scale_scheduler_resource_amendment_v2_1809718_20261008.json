@@ -1,0 +1,62 @@
+{
+  "actual_scontrol_update_arguments_template": [
+    "update",
+    "JobId=1809718",
+    "Partition=gpu",
+    "QOS=gpu",
+    "ArrayTaskThrottle=3",
+    "TimeLimit=00:20:00",
+    "Comment=p4-pregrid-sha256:e7b4f8c4fbeb702a7e1fc5219dc5e1e43d657b69a1477551e36228ccc5ae8f14 p4-resource-amendment-v2-sha256:<this record payload SHA256>"
+  ],
+  "amendment_status": "Prospective return to GPU partition after actual slower normal queue estimate; actual application recorded separately.",
+  "array_job_id": "1809718",
+  "created_utc": "2026-10-08T09:13:12.031443+00:00",
+  "dependent_jobs_unchanged": [
+    "1809725",
+    "1809726",
+    "1809727"
+  ],
+  "exact_retained_script": {
+    "file_sha256": "a8d247c176b0f9a7992975bc0f7233b87336e0a79823fabe506527fd2af81bc3",
+    "repo_path": "plans/scale_retry_calibrate_launch_v4_20261008.sbatch"
+  },
+  "explicit_header_override": "Original exact script time limit30min becomes scheduler20min. Its gpu partition, gpu QoS and throttle3 match again. No executable body or numerical change.",
+  "infrastructure_budget": {
+    "maximum_started_launch_attempts": 3,
+    "next_started_launch_attempt": 2,
+    "pending_resource_update_consumes_start": false,
+    "prior_started_launches_per_trial": 1
+  },
+  "justification": "All three remain pending. Normal partition estimated later startup. Verified normal batch-child MaxRSS up to33530832K, distinct from ReqMem and MaxVMSize0, supports preserving48G. Earlier prospective amendment retains the actual normal runtimes/workload scaling supporting20min. Up to3GPU tasks on gpu partition are within configured per-user max4 and original design.",
+  "materialized_task_handling": "Apply parent throttle at ArrayJobId and each actual native task partition/QoS/time/comment separately if required; retain actual scheduler errors and all final task states.",
+  "observed_normal_queue_estimate": "2026-10-08T09:12:00 America/Los_Angeles, observed2026-10-08T09:10:51.996640+00:00; estimate is provisional and no runtime has started.",
+  "original_pregrid_evidence_payload_sha256": "e7b4f8c4fbeb702a7e1fc5219dc5e1e43d657b69a1477551e36228ccc5ae8f14",
+  "prior_actual_success_receipt": {
+    "path": "/scratch/users/ericrcwu/agent-runs/p4-reviewed-scale-20261008-8ad2785e/actual-instantiated-child1-resource-amendment-v2-1809718.json",
+    "payload_sha256": "66ecb4ddcab56f76d0f0d37caefa04ce2ac5b2e0f62fc1ecf783e8dd58c6ac1a"
+  },
+  "prior_error_receipts_retained": [
+    "/scratch/users/ericrcwu/agent-runs/p4-reviewed-scale-20261008-8ad2785e/actual-resource-amendment-result-1809718.json",
+    "/scratch/users/ericrcwu/agent-runs/p4-reviewed-scale-20261008-8ad2785e/actual-instantiated-child1-resource-amendment-1809718.json"
+  ],
+  "prior_prospective_amendment_sha256": "a74bbbcc900a9944ea119fc0497b8d40b11d3bf5e4b6eff503c1b244f2e24d97",
+  "remote_artifacts_downloaded": false,
+  "requested_effective_resources": {
+    "GPU_per_task": 1,
+    "array_task_throttle": 3,
+    "exclude_nodes": [
+      "wheat-01"
+    ],
+    "host_memory": "48G",
+    "partition": "gpu",
+    "qos": "gpu",
+    "runtime_OMP_threads": 4,
+    "scheduler_CPUs_before": 13,
+    "time_limit_minutes": 20
+  },
+  "schema": "p4-scale-prospective-scheduler-resource-amendment-v2",
+  "sha256": "0e91067d0b549cc21da6dc50da88b66226a9bf1634f6eae0d8136bf15e45858b",
+  "source_policy_bindings_seed_probe_gate_selector_changes": false,
+  "unchanged_numerical_commit": "1b6f6e99d99b9a2d1c3ced6bb9c39fbffc4f9ec7",
+  "unchanged_operator_inventory_sha256": "96c473fc90c09ed32f380bf65ac3576d1e3ec4d1d1be9938eae60fca2bf6465b"
+}
