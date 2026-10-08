@@ -267,7 +267,7 @@ class CostTests(unittest.TestCase):
         self.assertIsNone(cost_report(bundles)["allocation_gpu_hours"])
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "sacct.json"
-            accounting = {"schema": "spacing-slurm-allocation-accounting-v1", "allocations": [{
+            accounting = {"schema": "spacing-slurm-allocation-accounting-v2", "allocations": [{
                 "job_id": "1", "elapsed_seconds": 120, "allocated_gpu_count": 1,
                 "source": "sacct", "state": "COMPLETED"}]}
             write_json(path, accounting)
@@ -328,7 +328,7 @@ class PreflightCacheTests(unittest.TestCase):
                     create_final_span_preflight(report_path, root / "preflight.json")
 
     def test_changed_checkpoint_bytes_with_restored_mtime_and_added_input_invalidate(self):
-        for mutation in ("checkpoint", "added_prepared", "selection", "runtime", "receipt"):
+        for mutation in ("checkpoint", "added_prepared", "added_rejected", "added_unregistered", "selection", "runtime", "receipt"):
             with tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 report_path, report, checkpoint, prepared = self.fixture(root)
@@ -340,6 +340,10 @@ class PreflightCacheTests(unittest.TestCase):
                         os.utime(checkpoint, ns=(status.st_atime_ns, status.st_mtime_ns))
                     elif mutation == "added_prepared":
                         write_json(prepared / "extra.json", {"new": True})
+                    elif mutation == "added_rejected":
+                        write_json(root / "infrastructure-launches" / "UNI" / "rejected-999-restart-0.json", {"slurm_job_id": "999"})
+                    elif mutation == "added_unregistered":
+                        write_json(root / "infrastructure-launches" / "UNI" / "unregistered-999-1.json", {"slurm_job_id_from_allocation_environment": "999"})
                     elif mutation == "selection":
                         (root / "selection.json").write_text((root / "selection.json").read_text() + "\n")
                     elif mutation == "receipt":
@@ -352,6 +356,30 @@ class PreflightCacheTests(unittest.TestCase):
                         verify_final_span_report(report_path, preflight_path=root / "preflight.json",
                                                  expected_preflight_sha256=receipt["sha256"])
                     full.assert_called_once()
+
+    def test_changed_query_provenance_invalidates_cached_verification(self):
+        # Inventory/cache test only: scientific proof verification is explicitly mocked.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report_path, report, _, _ = self.fixture(root)
+            sidecar = root / "synthetic-query-provenance.json"
+            write_json(sidecar, {"synthetic": True, "returncode": 0})
+            raw = root / "synthetic-sacct.txt"
+            raw.write_text("synthetic scheduler bytes\n")
+            accounting = root / "synthetic-accounting.json"
+            write_json(accounting, {"raw_sacct": {"path": str(raw)},
+                                    "raw_sacct_provenance": {"path": str(sidecar)}})
+            report["cost"] = {"accounting_path": str(accounting)}
+            report["sha256"] = digest({key: value for key, value in report.items() if key != "sha256"})
+            write_json(report_path, report)
+            with patch("spacing_rerun.final_span._verify_final_span_report_full", return_value=report) as full:
+                receipt = create_final_span_preflight(report_path, root / "preflight.json")
+                self.assertIn(str(sidecar.resolve()), {item["path"] for item in receipt["files"]})
+                write_json(sidecar, {"synthetic": True, "returncode": 1})
+                with self.assertRaises(ValueError):
+                    verify_final_span_report(report_path, preflight_path=root / "preflight.json",
+                                             expected_preflight_sha256=receipt["sha256"])
+                full.assert_called_once()
 
 
 if __name__ == "__main__":

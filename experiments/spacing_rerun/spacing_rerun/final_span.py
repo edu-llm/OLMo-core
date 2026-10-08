@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import importlib.metadata
 import json
 import math
@@ -21,6 +22,8 @@ from .acquisition_policy import BINDING_SCHEMA, manifest_policy_trial
 from .common import digest, read_json, require, write_json
 from .prepare import load_prepared
 from .schedule import ARMS
+from .slurm_identity import native_id, raw_allocation_counts
+from .scheduler_chronology import allocation_chronology, declared_times_match, parse_sacct, query_provenance
 from .units import GROUNDED_METRICS
 
 FROZEN_CORE_SHA256 = "56d0d72fcfbff828dafe27e6713041fc9b0d6ed0ad9de2a799c312083d9975cc"
@@ -300,6 +303,175 @@ def validate_bundle(path, selection_path=None):
             "raw_primary_endpoints": raw_endpoints, "provenance": provenance, "attempts": attempts}
 
 
+def outer_arm_allocation_jobs(bundles, accounting):
+    """Bind outer pre-Session GPU starts to exact fixed trial/arm streams."""
+    required = accounting.get("outer_arm_infrastructure_accounting_required") is True
+    require(not any("bundle_path" in bundle for bundle in bundles) or required,
+            "Actual physical arm bundles require complete outer infrastructure accounting")
+    cited = accounting.get("observed_outer_arm_launch_inputs", [])
+    require(len(cited) == len({row["path"] for row in cited}), "Duplicate outer launch input citation")
+    by_path = {str(Path(row["path"]).resolve()): row for row in cited}
+    require(len(by_path) == len(cited), "Duplicate resolved outer launch input citation")
+    actual_paths, by_trial, owners = set(), {}, {}
+    for bundle in bundles:
+        jobs = set()
+        if "bundle_path" not in bundle:
+            require(not required and not cited, "Outer accounting requires actual retained bundle paths")
+            by_trial[id(bundle)] = jobs
+            continue
+        root = Path(bundle["bundle_path"]).resolve()
+        for arm in ARMS:
+            require(not list((root / "infrastructure-launches" / arm).glob("unregistered-*.json")),
+                    "Retained native registration failure requires independent scheduler reconciliation")
+            require(not list((root / "infrastructure-launches" / arm).glob("rejected-*.json")),
+                    "Over-budget native allocation rejection requires review before final cost eligibility")
+            paths = sorted((root / "infrastructure-launches" / arm).glob("launch-*.json"))
+            require(not required or paths, "Missing actual outer infrastructure starts for a frozen arm")
+            require(len(paths) <= 3, "Outer infrastructure starts exceed unchanged max3")
+            records = []
+            for path in paths:
+                path = path.resolve()
+                require(path.parent == root / "infrastructure-launches" / arm and str(path) in by_path,
+                        "Outer launch is outside its fixed arm or missing from accounting")
+                citation = by_path[str(path)]
+                require(checkpoint_digest(path) == citation["file_sha256"], "Outer launch bytes changed")
+                record = read_json(path)
+                require(record.get("schema") == "p4-final-span-actual-arm-infrastructure-launch-v1" and
+                        record.get("sha256") == digest({k: v for k, v in record.items() if k != "sha256"}) and
+                        record.get("maximum_infrastructure_starts") == 3 and record.get("session_attempt_counter_unchanged") is True and
+                        record.get("numerical_commit") == "1b6f6e99d99b9a2d1c3ced6bb9c39fbffc4f9ec7" and
+                        (record.get("manifest_sha256") == bundle["manifest_sha256"] or
+                         record.get("manifest_sha256") is None and record.get("binding_load_error") and
+                         record.get("manifest_path") == str(root / "prepared" / "manifest.json") and
+                         str(record.get("slurm_job_id")) not in {native_id(a["slurm_job_id"], "Session native job") for a in bundle["attempts"]}) and record.get("arm") == arm and
+                        f'normal-{record.get("trial_index", 0):02}' == bundle["trial_id"],
+                        "Outer launch is forged or bound to a different fixed stream")
+                job = native_id(record["slurm_job_id"], "Outer launch native job")
+                require(job.isdigit() and type(record.get("scheduler_restarts")) is int and record["scheduler_restarts"] >= 0 and
+                        path.name == f'launch-{job}-restart-{record["scheduler_restarts"]}.json' and
+                        citation.get("slurm_job_id") == job and citation.get("trial") == bundle["trial_id"] and citation.get("arm") == arm,
+                        "Outer launch native job/restart citation differs")
+                fields = dict(item.split("=", 1) for item in record["actual_scontrol_stdout"].split() if "=" in item)
+                require(fields.get("JobId") == job and fields.get("Restarts") == str(record["scheduler_restarts"]) and
+                        record["actual_scontrol_command"] == ["scontrol", "show", "job", "--oneliner", job],
+                        "Outer launch lacks actual matching native scheduler identity")
+                started = datetime.datetime.fromisoformat(record["actual_utc"])
+                frozen = datetime.datetime.fromisoformat(PLANNING_POLICY["frozen_utc"])
+                require(started.tzinfo is not None and frozen <= started <= datetime.datetime.now(datetime.timezone.utc),
+                        "Outer arm start predates prospective planning or is in the future")
+                owner = (bundle["trial_id"], arm)
+                require(job not in owners or owners[job] == owner, "Native allocation reused across different frozen arm streams")
+                owners[job] = owner
+                jobs.add(job)
+                records.append((path, record))
+                actual_paths.add(str(path))
+            ordered = sorted(records, key=lambda value: value[1]["infrastructure_start"])
+            require([r["infrastructure_start"] for _, r in ordered] == list(range(1, len(ordered) + 1)),
+                    "Outer infrastructure start sequence is missing or duplicated")
+            restarts = {}
+            last_time = None
+            for index, (_, record) in enumerate(ordered):
+                job = native_id(record["slurm_job_id"])
+                actual_time = datetime.datetime.fromisoformat(record["actual_utc"])
+                require(last_time is None or actual_time >= last_time,
+                        "Outer arm start chronology differs from infrastructure order")
+                last_time = actual_time
+                require(record["scheduler_restarts"] == restarts.get(job, -1) + 1,
+                        "Same native allocation restart sequence must start at zero and increase by one")
+                restarts[job] = record["scheduler_restarts"]
+                expected = [{"path": str(p), "file_sha256": checkpoint_digest(p)} for p, _ in sorted(ordered[:index])]
+                require(record["prior_actual_starts"] == expected, "Outer launch lost or changed retained prior starts")
+        if required:
+            require({native_id(a["slurm_job_id"], "Session native job") for a in bundle["attempts"]} <= jobs,
+                    "Session attempt allocation is outside the retained actual outer starts")
+        by_trial[id(bundle)] = jobs
+    require(actual_paths == set(by_path), "Accounting cites an extraneous outer launch outside registered arm streams")
+    if required:
+        attempt_rows = accounting.get("observed_arm_attempt_inputs", [])
+        require(len(attempt_rows) == len({row["path"] for row in attempt_rows}), "Duplicate actual Session attempt citation")
+        expected_paths = {str(path.resolve()) for bundle in bundles for arm in ARMS
+                          for path in (Path(bundle["bundle_path"]) / arm).glob("attempt-*.json")}
+        require(expected_paths == {str(Path(row["path"]).resolve()) for row in attempt_rows},
+                "Actual Session attempt input coverage is incomplete or extraneous")
+        for row in attempt_rows:
+            path = Path(row["path"]).resolve()
+            require(checkpoint_digest(path) == row["file_sha256"], "Actual Session attempt input changed")
+            attempt = read_json(path)
+            job = native_id(attempt["slurm_job_id"], "Session native job")
+            require(row["slurm_job_id"] == job and owners.get(job) == (row["trial"], row["arm"]) and
+                    path.parent.name == row["arm"] and path.parent.parent.name == row["trial"],
+                    "Session attempt is outside its own actual outer arm allocation")
+    return by_trial
+
+
+TERMINAL_STATES = ("COMPLETED", "FAILED", "TIMEOUT", "CANCELLED", "OUT_OF_MEMORY", "NODE_FAIL", "PREEMPTED")
+
+
+def verify_raw_allocation_accounting(accounting, rows):
+    """Reparse the SHA-bound raw sacct bytes under their retained query provenance (R4 F18)."""
+    proof = accounting.get("raw_sacct")
+    require(isinstance(proof, dict) and type(proof.get("path")) is str and type(proof.get("file_sha256")) is str,
+            "Actual raw sacct bytes or binding changed")
+    data = Path(proof["path"]).read_bytes()
+    require(hashlib.sha256(data).hexdigest() == proof["file_sha256"], "Actual raw sacct bytes or binding changed")
+    # Complete accounting needs the same query, timezone and capture bindings the producer retained.
+    query = query_provenance(proof, accounting.get("captured_utc"))
+    require(type(proof.get("bytes")) is int and len(data) == proof["bytes"], "Actual raw sacct byte count differs")
+    require(accounting.get("scheduler_timezone") == query["zone"].key and
+            accounting.get("actual_sacct_arguments") == proof["actual_command"],
+            "Accounting and raw sacct proof bind different scheduler query or timezone")
+    binding = accounting.get("raw_sacct_provenance")
+    require(isinstance(binding, dict) and type(binding.get("path")) is str,
+            "Actual raw sacct provenance sidecar binding is required")
+    try:
+        retained = Path(binding["path"]).read_bytes()
+    except OSError as error:
+        raise ValueError("Actual raw sacct provenance sidecar is unavailable") from error
+    require(hashlib.sha256(retained).hexdigest() == binding.get("file_sha256"),
+            "Actual raw sacct provenance sidecar bytes changed")
+    try:
+        provenance = json.loads(retained)
+    except (ValueError, UnicodeDecodeError) as error:
+        raise ValueError("Actual raw sacct provenance sidecar is not JSON") from error
+    require(isinstance(provenance, dict) and provenance.get("schema") == "p4-actual-sacct-query-provenance-v1",
+            "Actual raw sacct provenance sidecar schema differs")
+    require(provenance.get("sha256") == digest({key: value for key, value in provenance.items() if key != "sha256"}) and
+            provenance.get("sha256") == binding.get("payload_sha256"),
+            "Actual raw sacct provenance sidecar seal differs")
+    require(type(provenance.get("returncode")) is int and provenance["returncode"] == 0,
+            "Actual raw sacct query did not succeed")
+    retained_fields = ("path", "file_sha256", "bytes", "actual_command", "actual_environment",
+                       "unset_environment", "scheduler_timezone", "queried_utc")
+    require(all(key in provenance and provenance[key] == proof[key] for key in retained_fields),
+            "Accounting raw sacct proof differs from the retained query provenance sidecar")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError("Raw sacct proof is not UTF-8 text; never guessed") from None
+    raw = parse_sacct(text, query["columns"])
+    require(raw and len(raw) == len({value.get("JobIDRaw") for value in raw}) and
+            all(value.get("JobIDRaw", "").isascii() and value.get("JobIDRaw", "").isdigit() and
+                str(int(value["JobIDRaw"])) == value["JobIDRaw"] for value in raw), "Raw sacct requires unique native allocation rows")
+    by_job = {native_id(value["JobIDRaw"], "Raw sacct native allocation"): value for value in raw}
+    require(set(by_job) == set(query["job_ids"]), "Raw native sacct rows differ from the exact retained query IDs")
+    require(set(by_job) == {row["job_id"] for row in rows}, "Raw native sacct and allocation coverage differ")
+    for row in rows:
+        require(all(type(row.get(key)) is int and row[key] >= 0 for key in
+                    ("elapsed_seconds", "allocated_gpu_count", "allocated_cpu_count")), "Declared actual allocation counts must be nonnegative integers")
+        value = by_job[row["job_id"]]
+        raw_state = value["State"].split()[0].rstrip("+") if value["State"].split() else ""
+        elapsed, gpu, cpu = raw_allocation_counts(value.get("AllocTRES", ""), value.get("AllocCPUS", ""),
+                                                  value.get("ElapsedRaw", ""), raw_state, value.get("Start"))
+        require(raw_state in TERMINAL_STATES, "Raw sacct allocation is not terminal: " + row["job_id"])
+        require(value.get("ElapsedRaw", "").isdigit() and value.get("AllocCPUS", "").isdigit() and
+                raw_state == row["state"] and
+                int(value["ElapsedRaw"]) == row["elapsed_seconds"] and gpu == row["allocated_gpu_count"] and
+                int(value["AllocCPUS"]) == row.get("allocated_cpu_count"), "Raw sacct and declared allocation state/cost differ")
+        allocation_chronology(value, row["job_id"], query["zone"], query["queried"],
+                              state=raw_state, elapsed=elapsed, cpu=cpu, gpu=gpu)
+        declared_times_match(row, value, row["job_id"])
+    return by_job
+
 def cost_report(bundles, allocation_accounting=None, chosen_n=None):
     attempts = [a for bundle in bundles for a in bundle["attempts"]]
     process = 0.
@@ -315,28 +487,36 @@ def cost_report(bundles, allocation_accounting=None, chosen_n=None):
     if allocation_accounting is None:
         return packet
     accounting = read_json(allocation_accounting)
-    require(accounting.get("schema") == "spacing-slurm-allocation-accounting-v1", "Unknown allocation accounting schema")
+    require(accounting.get("schema") == "spacing-slurm-allocation-accounting-v2",
+            "Allocation accounting must use the v2 raw query provenance/chronology interface; v1 packets are not restamped")
     rows = accounting.get("allocations", [])
-    require(len(rows) == len({row["job_id"] for row in rows}), "Duplicate Slurm allocation accounting")
-    by_job = {str(row["job_id"]): row for row in rows}
-    expected = {str(a["slurm_job_id"]) for a in attempts}
+    require(len(rows) == len({str(row["job_id"]) for row in rows}), "Duplicate Slurm allocation accounting")
+    require(all(isinstance(row["job_id"], str) and row["job_id"].isascii() and row["job_id"].isdigit() and
+                str(int(row["job_id"])) == row["job_id"] for row in rows),
+            "Slurm allocation IDs must be canonical native strings")
+    by_job = {native_id(row["job_id"], "Slurm allocation native ID"): row for row in rows}
+    if accounting.get("outer_arm_infrastructure_accounting_required") is True:
+        verify_raw_allocation_accounting(accounting, rows)
+    outer_jobs = outer_arm_allocation_jobs(bundles, accounting)
+    expected = {native_id(a["slurm_job_id"], "Session native job") for a in attempts} | set().union(*outer_jobs.values())
     require("None" not in expected and expected <= set(by_job), "Allocation accounting omits observed arm attempt jobs")
     gpu_hours = {}
     for job in expected:
         row = by_job[job]
         elapsed = finite_number(row["elapsed_seconds"], "allocation elapsed seconds")
         gpus = finite_number(row["allocated_gpu_count"], "allocated GPU count")
-        require(elapsed >= 0 and gpus >= 1 and row.get("source") == "sacct" and row.get("state") in
-                ("COMPLETED", "FAILED", "TIMEOUT", "CANCELLED", "OUT_OF_MEMORY", "NODE_FAIL", "PREEMPTED"),
+        require(elapsed >= 0 and gpus >= 1 and row.get("source") == "sacct" and row.get("state") in TERMINAL_STATES,
                 "Accounting must describe terminal actual sacct GPU allocations")
         gpu_hours[job] = elapsed * gpus / 3600
     allocated = sum(gpu_hours.values())
     require(allocated + 1e-3 >= process, "Allocation accounting is smaller than observed process runtime")
-    largest = max(sum(gpu_hours[job] for job in {str(a["slurm_job_id"]) for a in bundle["attempts"]}) for bundle in bundles)
-    packet.update(allocation_gpu_hours=allocated, accounting_complete=True,
+    largest = max(sum(gpu_hours[job] for job in {native_id(a["slurm_job_id"], "Session native job") for a in bundle["attempts"]} | outer_jobs[id(bundle)]) for bundle in bundles)
+    packet.update(allocation_gpu_hours=allocated, accounting_complete=accounting.get("outer_arm_infrastructure_accounting_required") is True,
                   accounting_path=str(Path(allocation_accounting).resolve()),
                   accounting_sha256=checkpoint_digest(allocation_accounting),
-                  largest_observed_five_arm_bundle_gpu_hours=largest)
+                  largest_observed_five_arm_bundle_gpu_hours=largest,
+                  outer_infrastructure_accounting_complete=accounting.get("outer_arm_infrastructure_accounting_required") is True,
+                  pre_session_arm_failures_included=bool(set().union(*outer_jobs.values()) - {native_id(a["slurm_job_id"], "Session native job") for a in attempts}))
     if chosen_n is not None:
         packet["confirmation_cost_projection"] = {"arm_gpu_hours_at_largest_observed_bundle": chosen_n * largest,
             "n": chosen_n, "basis": "Observed maximum standard-development arm allocation, not a bound on larger confirmation content. Add scaled acquisition, preparation and retry allowance before final budgeting.",
@@ -520,6 +700,11 @@ def _preflight_input_paths(report_path, report):
             directory = Path(bundle["bundle_path"]) / arm
             paths.update(p.resolve() for p in directory.glob("attempt-*.json"))
             paths.update(p.resolve() for p in (directory / "evaluations").glob("stage2-*.json"))
+            outer = Path(bundle["bundle_path"]) / "infrastructure-launches" / arm
+            require(not list(outer.glob("rejected-*.json")) and not list(outer.glob("unregistered-*.json")),
+                    "Retained rejected or unregistered native allocation blocks cached eligibility")
+            for pattern in ("launch-*.json", "rejected-*.json", "unregistered-*.json"):
+                paths.update(p.resolve() for p in (Path(bundle["bundle_path"]) / "infrastructure-launches" / arm).glob(pattern))
     # Each of the six selections refers to the same nine prepared directories.
     # Traverse that inventory once, retaining new/removed-input invalidation.
     for prepared in prepared_roots:
@@ -527,6 +712,16 @@ def _preflight_input_paths(report_path, report):
     accounting = report["cost"].get("accounting_path")
     if accounting:
         paths.add(Path(accounting).resolve())
+        cost_inputs = read_json(accounting)
+        paths.update(Path(row["path"]).resolve() for row in cost_inputs.get("observed_outer_arm_launch_inputs", []))
+        if cost_inputs.get("raw_sacct"):
+            paths.add(Path(cost_inputs["raw_sacct"]["path"]).resolve())
+        if cost_inputs.get("raw_sacct_provenance"):
+            paths.add(Path(cost_inputs["raw_sacct_provenance"]["path"]).resolve())
+        for bundle in report["bundles"]:
+            for arm in ARMS:
+                paths.update(path.resolve() for path in (Path(bundle["bundle_path"]) / "infrastructure-launches" / arm).glob("launch-*.json"))
+                paths.update(path.resolve() for path in (Path(bundle["bundle_path"]) / "infrastructure-launches" / arm).glob("rejected-*.json"))
     return paths
 
 
