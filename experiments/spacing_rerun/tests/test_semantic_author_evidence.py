@@ -45,7 +45,7 @@ def execution_fixture():
         'taskId': 'node:delegated-task:command:synthetic:delegate-task:source-semantic-repair-synthetic',
         'model': 'fixture-model', 'providerInstanceId': 'codex-synthetic-fixture',
         'summary': summary, 'latestTerminalSummary': summary, 'latestTerminalStatus': 'completed',
-        'hasPendingChildRuns': False}
+        'hasPendingChildRuns': False,'latestTerminalRunId':'synthetic-run'}
     row = {'role': 'revision_author', 'task_record': normalize_task(status, 'source-semantic-repair-synthetic'),
         'identity': person, 'authored_sha256': authored['sha256'],
         'author_packet_sha256': authored['source_author_packet_sha256'], 'input_channel': 'source_only',
@@ -60,6 +60,39 @@ def execution_fixture():
 
 
 class SemanticAuthorEvidenceTests(unittest.TestCase):
+    def test_reviewer_cannot_hide_author_overlap_behind_secondary_actor_alias(self):
+        from spacing_rerun.confirmation import reviewed_records
+        _,audit=confirmation_fixture();chunk=audit['source_chunks'][0];packet=chunk['review_packet']
+        receipt=chunk['reviews'][0];author=chunk['authored']['author']
+        reviewed_records(packet,[receipt],'groups',author,schema='spacing-source-semantic-review-v1')
+        for kind in ('reviewer-name','reviewer-actual-identity','author-name','empty-reviewer-alias'):
+            with self.subTest(kind=kind):
+                own=copy.deepcopy(receipt);person=copy.deepcopy(author)
+                if kind=='reviewer-name':own['reviewer']['name']=author['agent_id']
+                elif kind=='reviewer-actual-identity':own['reviewer']['actual_identity']=author['agent_id']
+                elif kind=='author-name':person['name']=receipt['reviewer']['agent_id']
+                else:own['reviewer']['name']=' '
+                seal(own)
+                with self.assertRaises(ValueError):reviewed_records(packet,[own],'groups',person,schema='spacing-source-semantic-review-v1')
+
+    def test_author_context_rejects_patch_with_latest_failure_or_pending_children(self):
+        from test_source_patch import proof_fixture
+        from spacing_rerun.source_patch import reconstruct_question_patch
+        evidence=proof_fixture();merged=reconstruct_question_patch(evidence);task=evidence['task_record']
+        row={'role':'revision_author','task_record':task,'task_id':task['task_id'],'identity':merged['revision_author'],
+             'authored_sha256':merged['sha256'],'author_packet_sha256':merged['source_author_packet_sha256'],'input_channel':'source_only'}
+        chunk={'authored':merged,'question_patch_evidence':evidence,'author_task_provenance':[row]}
+        author_context(chunk)
+        for kind in ('failed','pending'):
+            with self.subTest(kind=kind):
+                changed=copy.deepcopy(chunk);proof=changed['question_patch_evidence'];status=proof['actual_task_status']
+                if kind=='failed':status['latestTerminalStatus']='failed'
+                else:status['hasPendingChildRuns']=True
+                inventory=proof['actual_task_status_inventory'];seal(inventory)
+                proof['artifact_files']['actual_task_status_inventory']=raw(inventory,'/tmp/synthetic-latest-patch-task-status.json')
+                seal(proof)
+                with self.assertRaises(ValueError):author_context(changed)
+
     def test_flat_two_phase_receipt_hashes_require_exact_retained_artifacts(self):
         _, audit = confirmation_fixture()
         chunk = copy.deepcopy(audit['source_chunks'][0])
