@@ -6,7 +6,7 @@ import unittest
 
 from spacing_rerun.confirmation import (local_author_identity, semantic_execution_evidence,
     validate_retained_source_ancestor, source_preservation_context, validate_source_chunks, author_context,
-    declared_receipt_bindings, source_semantic_base_version)
+    declared_receipt_bindings, source_semantic_base_version, validate_confirmation_audit)
 from spacing_rerun.common import digest
 from spacing_rerun.source_patch import normalize_task
 from test_confirmation import confirmation_fixture, seal
@@ -60,6 +60,89 @@ def execution_fixture():
 
 
 class SemanticAuthorEvidenceTests(unittest.TestCase):
+    def test_whole_prior_source_snapshots_bind_exact_raw_artifacts_and_completed_review(self):
+        chunk, row, _, ancestor = execution_fixture()
+        packet = row['semantic_execution_evidence']['input_packet']
+        material = packet['actual_source_review_materials'][0]
+        status = copy.deepcopy(row['task_record']['actual_task_status'])
+        status['latestTerminalSummary'] = 'Synthetic completed review ' + material['receipt']['sha256']
+        context = {'authored': ancestor, 'author_task_provenance': []}
+        status_raw = {'task_statuses': [{'result': status}]}
+        status_text = json.dumps(status_raw, ensure_ascii=False)
+        snapshots = {'current_authored_raw_file': raw(ancestor, packet['current_authored_path']),
+            'latest_actual_review_receipt_file': raw(material['receipt'], material['receipt_path']),
+            'latest_actual_blind_packet_file': raw(material['review_packet'], material['review_packet_path']),
+            'actual_latest_review_task_status': status,
+            'actual_latest_review_task_status_file': {'path': '/synthetic/status.json', 'utf8': status_text,
+                'file_sha256': hashlib.sha256(status_text.encode()).hexdigest(), 'canonical_sha256': None},
+            'whole_prior_source_chunk_context': context,
+            'whole_prior_context_binding': {'extracted_source_chunk_sha256': digest(context),
+                'extracted_source_chunk_index': ancestor['chunk_index'],
+                'other_source_or_evaluation_chunks_included': False}}
+        packet.update(copy.deepcopy(snapshots))
+        chunk['authored']['retained_source_ancestor'].update(copy.deepcopy(snapshots))
+        validate_retained_source_ancestor(chunk, ancestor)
+        for field in snapshots:
+            changed = copy.deepcopy(chunk)
+            changed['authored']['retained_source_ancestor'][field] = {'invented': True}
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'exact source-only input'):
+                validate_retained_source_ancestor(changed, ancestor)
+        for field, mutate in (
+                ('current_authored_raw_file', lambda value: value.update(file_sha256='0'*64)),
+                ('whole_prior_context_binding', lambda value: value.update(extracted_source_chunk_sha256='0'*64)),
+                ('actual_latest_review_task_status', lambda value: value.update(status='running'))):
+            changed = copy.deepcopy(chunk)
+            mutate(changed['author_task_provenance'][0]['semantic_execution_evidence']['input_packet'][field])
+            changed['authored']['retained_source_ancestor'][field] = copy.deepcopy(
+                changed['author_task_provenance'][0]['semantic_execution_evidence']['input_packet'][field])
+            with self.subTest(invalid_source_field=field), self.assertRaises(ValueError):
+                validate_retained_source_ancestor(changed, ancestor)
+
+    def test_parent_inventory_covers_actual_author_beneath_computed_metadata_view(self):
+        facts, audit = confirmation_fixture()
+        chunk = audit['source_chunks'][0]
+        base = copy.deepcopy(chunk)
+        base['authored']['source_units'][0]['nonliteral_answer_labels'] = ['incorrect-flag']
+
+        def attach_task(version, name, *, computed=False):
+            authored = version['authored']
+            who = {'agent_id': name, 'task_id': name, 'provider': 'openai', 'model': 'fixture-model'}
+            if computed:
+                who['role'] = 'derived_flag_metadata_only'
+                authored.update(prior_authored_sha256=base['authored']['sha256'], approval_granted=False,
+                    metadata_derivation={'revision_kind': 'derived_flag_metadata_only', 'metadata_only': True,
+                                         'task_id': name})
+            authored['revision_author'] = who
+            seal(authored)
+            result = {'authored_sha256': authored['sha256'],
+                      'author_packet_sha256': authored['source_author_packet_sha256'],
+                      'input_channel': 'source_only', 'identity': who}
+            task = {'schema': 'spacing-native-author-task-evidence-v1', 'canonical_task_name': name,
+                    'status': 'completed', 'model': who['model'], 'actual_result': result,
+                    'actual_result_text': 'Synthetic completed result ' + authored['sha256'],
+                    'result_source': 'Synthetic fixture, no actual certification'}
+            version['author_task_provenance'] = [{'role': 'revision_author', 'task_id': name,
+                                                 'task_record': task, **result}]
+            return task
+
+        base_task = attach_task(base, '/root/synthetic-semantic-base-author')
+        chunk['authored'] = copy.deepcopy(base['authored'])
+        chunk['authored']['source_units'][0]['nonliteral_answer_labels'] = []
+        current_task = attach_task(chunk, '/root/synthetic-computed-flags-author', computed=True)
+        chunk.update(prior_authored=base['authored'], metadata_derivation_base_version=base)
+        chunk['review_packet']['authored_chunk_sha256'] = chunk['authored']['sha256']
+        seal(chunk['review_packet'])
+        chunk['reviews'][0]['review_packet_sha256'] = chunk['review_packet']['sha256']
+        seal(chunk['reviews'][0])
+        audit['author_task_inventory'] = {'schema': 'p4-actual-t3-author-task-inventory-v1',
+                                          'records': [base_task, current_task], 'test_fixture': True}
+        seal(audit)
+        self.assertTrue(validate_confirmation_audit(audit, source_facts=facts)['independent_agent_review_complete'])
+        audit['author_task_inventory']['records'].remove(base_task)
+        seal(audit)
+        with self.assertRaisesRegex(ValueError, 'actual parent task inventory'):
+            validate_confirmation_audit(audit, source_facts=facts)
+
     def test_supplied_v4_snapshot_aliases_do_not_create_missing_v5_history(self):
         chunk, row, _, ancestor = execution_fixture()
         ancestor['retained_source_ancestor'] = {'question_patch_provenance': {'schema': 'synthetic-historical-patch'}}

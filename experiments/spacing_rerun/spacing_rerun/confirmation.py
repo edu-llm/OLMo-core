@@ -137,6 +137,42 @@ def semantic_execution_evidence(chunk, row, person):
     return packet
 
 
+def validate_retained_source_input_snapshots(packet, ancestor):
+    """Bind preserved actual input snapshots without inferring review approval."""
+    import json
+    from .source_patch import actual_bytes
+    require(packet.get('current_authored') == ancestor,
+            'Retained raw source input does not contain the exact immutable ancestor')
+    raw_ancestor = packet['current_authored_raw_file']
+    require(raw_ancestor.get('path') == packet['current_authored_path'],
+            'Retained raw source ancestor path differs from actual input')
+    actual_bytes(ancestor, raw_ancestor)
+    receipt_file = packet['latest_actual_review_receipt_file']
+    packet_file = packet['latest_actual_blind_packet_file']
+    receipt = checked(json.loads(receipt_file['utf8']), 'spacing-source-semantic-review-v1')
+    blind = checked(json.loads(packet_file['utf8']), 'spacing-source-independent-review-packet-v1')
+    actual_bytes(receipt, receipt_file)
+    actual_bytes(blind, packet_file)
+    require(packet_binding(receipt) == blind['sha256'] and blind.get('authored_chunk_sha256') == ancestor['sha256'] and
+            any(material.get('receipt') == receipt and material.get('review_packet') == blind
+                for material in packet['actual_source_review_materials']),
+            'Retained latest raw review snapshots differ from the actual source review input')
+    status = packet['actual_latest_review_task_status']
+    status_file = packet['actual_latest_review_task_status_file']
+    raw_status = json.loads(status_file['utf8'])
+    actual_bytes(raw_status, status_file)
+    require(status in [row.get('result') for row in raw_status.get('task_statuses', [])] and
+            status.get('status') == status.get('latestTerminalStatus') == 'completed' and
+            status.get('hasPendingChildRuns') is False and receipt['sha256'] in status.get('latestTerminalSummary', ''),
+            'Retained latest review snapshots lack exact completed actual task evidence')
+    context = packet['whole_prior_source_chunk_context']
+    binding = packet['whole_prior_context_binding']
+    require(context.get('authored') == ancestor and binding.get('extracted_source_chunk_sha256') == digest(context) and
+            binding.get('extracted_source_chunk_index') == ancestor['chunk_index'] and
+            binding.get('other_source_or_evaluation_chunks_included') is False,
+            'Retained whole prior source context differs from the exact input ancestor')
+
+
 def validate_retained_source_ancestor(chunk, ancestor):
     authored = chunk['authored']
     retained = authored['retained_source_ancestor']
@@ -149,8 +185,19 @@ def validate_retained_source_ancestor(chunk, ancestor):
     proof = next((r.get('semantic_execution_evidence') for r in chunk.get('author_task_provenance', [])
                   if r.get('role') == 'revision_author'), None)
     packet = proof.get('input_packet') if proof else None
+    snapshot_fields = {'actual_latest_review_task_status', 'actual_latest_review_task_status_file',
+                       'current_authored_raw_file', 'latest_actual_blind_packet_file',
+                       'latest_actual_review_receipt_file', 'whole_prior_context_binding',
+                       'whole_prior_source_chunk_context'}
+    if snapshot_fields & retained.keys():
+        require(packet and snapshot_fields <= retained.keys() and snapshot_fields <= packet.keys() and
+                all(retained[key] == packet[key] for key in snapshot_fields),
+                'Retained actual source snapshots differ from exact source-only input')
+        validate_retained_source_input_snapshots(packet, ancestor)
     for key, value in retained.items():
         if key in required:
+            continue
+        if key in snapshot_fields:
             continue
         if key in ancestor:
             require(value == ancestor[key], 'Retained source ancestor field differs from its immutable original')
@@ -1079,6 +1126,8 @@ def validate_confirmation_audit(audit, *, source_facts=None, pinned_factsheets=N
             rows.extend(author_rows(version['question_patch_base_version']))
         if version.get('source_ancestor_version'):
             rows.extend(author_rows(version['source_ancestor_version']))
+        if version.get('metadata_derivation_base_version'):
+            rows.extend(author_rows(version['metadata_derivation_base_version']))
         return rows
     provenance = [row for kind in ('source_chunks', 'evaluation_chunks') for chunk in audit.get(kind, [])
                   for version in list(chunk.get('history', [])) + [chunk] for row in author_rows(version)]
