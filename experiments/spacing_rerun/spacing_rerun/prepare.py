@@ -12,6 +12,8 @@ from .data import (DATASET, MODEL, MODEL_REVISION_PREFIX, REVISION, assign_roles
 from .encoding import build_examples, generic_slice
 from .schedule import compile_schedule, validate_schedule
 from .rewrites import apply_development_rewrites
+from .units import LEGACY_POLICY, UNIT_POLICY, build_units, schedule_records, validate_units
+from .teaching import CANONICAL_QA_POLICY, SOURCE_QA_POLICY, build_teaching_pool, validate_teaching_pool
 
 MCQ_CONFIG = "gend_mcq_w_grades_03-01-26"
 GENERIC_REVISION = "b08601e04326c79dfdd32d625aee71d232d685c3"
@@ -39,6 +41,15 @@ def validate_config(config):
     require(config["primary_delay"] in delays, "Primary delay must be a declared evaluation delay")
     require(max(delays) == config["buffer_steps"], "Longest evaluated delay must end the buffer")
     require(all(0 < f < 1 for f in config["stage2_eval_fractions"]), "Stage2 grid lies outside Stage2")
+    require(config.get("rehearsal_unit_policy", LEGACY_POLICY) in (LEGACY_POLICY, UNIT_POLICY),
+            "Unknown rehearsal unit policy")
+    require(config.get("qa_teaching_policy", CANONICAL_QA_POLICY) in (CANONICAL_QA_POLICY, SOURCE_QA_POLICY),
+            "Unknown QA-teaching policy")
+    if config.get("qa_teaching_policy") == SOURCE_QA_POLICY:
+        require(config["mode"] == "development", "Expanded source QA teaching is development-only until audited and frozen")
+    if config["mode"] == "confirmation":
+        require(config.get("rehearsal_unit_policy") == UNIT_POLICY,
+                "Confirmation requires distinct supporting-statement rehearsal units")
 
 
 def prepare(config_path, output, source_directory=None, audit_path=None):
@@ -65,7 +76,8 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
                 f"Source parquet differs from pinned revision: {name}")
         tables[name] = pq.read_table(path).to_pylist()
     require(len(tables["fict_qa"]) == 7500, "Pinned FictionalQA row count changed")
-    facts, source_audit = canonicalize(tables.pop("fict_qa"))
+    source_rows = tables.pop("fict_qa")
+    facts, source_audit = canonicalize(source_rows)
     source_audit["joins"] = join_metadata(facts, tables)
     partition = outer_partition(facts, source_audit["cross_event_links"], config["outer_seed"])
     audited = read_json(audit_path) if audit_path else {}
@@ -93,16 +105,21 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
         require(rewrite_bundle["source_dataset_revision"] == REVISION, "Rewrite dataset revision differs")
         rewrite_audit = apply_development_rewrites(facts, rewrite_bundle, mode=config["mode"],
                                                    partition_hash=partition["sha256"], roles=split["roles"])
+    unit_registry = build_units(facts) if config.get("rehearsal_unit_policy") == UNIT_POLICY else None
+    teaching_pool = (build_teaching_pool(source_rows, facts, split["roles"], config["mode"])
+                     if config.get("qa_teaching_policy") == SOURCE_QA_POLICY else None)
+    teaching_records = teaching_pool["records"] if teaching_pool else None
     generic_path = hf_hub_download("Salesforce/wikitext", "wikitext-2-raw-v1/train-00000-of-00001.parquet",
                                    repo_type="dataset", revision=GENERIC_REVISION)
     generic_rows = pq.read_table(generic_path).to_pylist()
     generic_text = "\n".join(row["text"] for row in generic_rows if row["text"].strip())
     generic_tokens = tokenizer.encode(generic_text, add_special_tokens=False)
-    examples = build_examples(facts, tokenizer, generic_tokens, config)
+    examples = build_examples(facts, tokenizer, generic_tokens, config, teaching_records)
     # Encoding adds frozen probes/option order to the same fact objects.
     split["sha256"] = digest({k: v for k, v in split.items() if k != "sha256"})
-    schedule = compile_schedule(facts, config)
-    validate_schedule(schedule, facts, examples)
+    training_records = schedule_records(facts, unit_registry, teaching_records)
+    schedule = compile_schedule(training_records, config)
+    validate_schedule(schedule, training_records, examples)
     # A disjoint generic validation split diagnoses broad language-model degradation.
     validation_path = hf_hub_download("Salesforce/wikitext", "wikitext-2-raw-v1/validation-00000-of-00001.parquet",
                                       repo_type="dataset", revision=GENERIC_REVISION)
@@ -132,6 +149,11 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
                     "generic_filler_tokens_by_example": {k: v["generic_filler_tokens"] for k, v in examples.items()}}}
     if rewrite_audit is not None:
         manifest["statement_rewrite_audit"] = rewrite_audit
+    manifest["rehearsal_unit_policy"] = config.get("rehearsal_unit_policy", LEGACY_POLICY)
+    if unit_registry is not None:
+        manifest["unit_registry"] = unit_registry
+    if teaching_pool is not None:
+        manifest["qa_teaching_pool"] = teaching_pool
     manifest["sha256"] = digest(manifest)
     output.mkdir(parents=True, exist_ok=True)
     tokenizer.save_pretrained(output / "tokenizer")
@@ -158,5 +180,20 @@ def load_prepared(path):
         require(digest({k: v for k, v in rewrite_bundle.items() if k != "sha256"}) ==
                 rewrite_bundle["sha256"] == manifest["statement_rewrite_audit"]["bundle_sha256"],
                 "Prepared rewrite audit changed")
-    validate_schedule(schedule, manifest["split"]["facts"], examples)
+    facts = manifest["split"]["facts"]
+    registry = manifest.get("unit_registry")
+    require(manifest.get("rehearsal_unit_policy", LEGACY_POLICY) ==
+            manifest["config"].get("rehearsal_unit_policy", LEGACY_POLICY), "Manifest unit policy differs from config")
+    if manifest["config"].get("rehearsal_unit_policy") == UNIT_POLICY:
+        require(registry is not None, "Missing rehearsal unit registry")
+        validate_units(facts, registry)
+    else:
+        require(registry is None, "Legacy schedule unexpectedly contains a unit registry")
+    teaching_pool = manifest.get("qa_teaching_pool")
+    if manifest["config"].get("qa_teaching_policy") == SOURCE_QA_POLICY:
+        require(teaching_pool is not None, "Missing source QA-teaching pool")
+        validate_teaching_pool(teaching_pool, facts, manifest["split"]["roles"])
+    else:
+        require(teaching_pool is None, "Canonical QA-teaching unexpectedly contains a source pool")
+    validate_schedule(schedule, schedule_records(facts, registry, teaching_pool["records"] if teaching_pool else None), examples)
     return manifest, schedule, examples

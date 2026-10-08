@@ -6,24 +6,36 @@ import time
 
 from .common import require
 from .data import normalize
+from .units import LEGACY_METRICS, UNIT_METRICS
+
+
+def metric_means(rows, metric):
+    """Average probes within each source unit, then units within each event."""
+    events = collections.defaultdict(lambda: collections.defaultdict(list))
+    for index, row in enumerate(rows):
+        unit_id = row.get("unit_id", row.get("id", str(index)))
+        events[row["event"]][unit_id].append(float(row[metric]))
+    units = {event: [sum(values) / len(values) for values in grouped.values()]
+             for event, grouped in events.items()}
+    return {metric + "_event_macro": sum(sum(v) / len(v) for v in units.values()) / len(units),
+            metric + "_unit_micro": sum(sum(v) for v in units.values()) / sum(map(len, units.values())),
+            metric + "_fact_micro": sum(float(r[metric]) for r in rows) / len(rows)}
 
 
 def aggregate(rows):
     result = {}
     metrics = ("loss", "loss_with_eos", "exact_match", "mcq_accuracy", "mcq_accuracy_normalized",
                "mcq_margin", "mcq_margin_normalized", "generation_terminated")
-    for role in ("old", "new", "control"):
+    for role in ("old", "new", "control", "qa"):
         subset = [r for r in rows if r["role"] == role]
-        result[role] = {"facts": len(subset), "events": len({r["event"] for r in subset})}
+        result[role] = {"facts": len(subset), "events": len({r["event"] for r in subset}),
+                        "units": len({(r["event"], r.get("unit_id", r.get("id", str(i))))
+                                      for i, r in enumerate(subset)})}
         for metric in metrics:
             observed = [r for r in subset if metric in r]
             if not observed:
                 continue
-            events = collections.defaultdict(list)
-            for row in observed:
-                events[row["event"]].append(float(row[metric]))
-            result[role][metric + "_event_macro"] = sum(sum(v) / len(v) for v in events.values()) / len(events)
-            result[role][metric + "_fact_micro"] = sum(float(r[metric]) for r in observed) / len(observed)
+            result[role].update(metric_means(observed, metric))
     return result
 
 
@@ -92,6 +104,8 @@ def evaluate(model, tokenizer, facts, config, device, autocast, behavior=True, g
     was_training = model.training
     model.eval()
     selected = [f for f in facts if f["role"] in ("old", "new", "control")]
+    require(all("unit_id" in f for f in selected) or all("unit_id" not in f for f in selected),
+            "Mixed legacy and unit-aware evaluation probes")
     variants, timings = {}, {}
     for variant in ("canonical", "paraphrase"):
         key = "probe" if variant == "canonical" else "paraphrase_probe"
@@ -102,7 +116,8 @@ def evaluate(model, tokenizer, facts, config, device, autocast, behavior=True, g
         probes = [f[key] for f in pool]
         scores = conditional_scores(model, probes, tokenizer.eos_token_id, device,
                                     config["eval_batch_size"], autocast)
-        rows = [dict(id=f["id"], event=f["event"], role=f["role"], **s) for f, s in zip(pool, scores)]
+        rows = [dict(id=f["id"], unit_id=f.get("unit_id", f["id"]), event=f["event"], role=f["role"], **s)
+                for f, s in zip(pool, scores)]
         timings[variant + "_loss_seconds"] = time.monotonic() - tick
         if behavior:
             tick = time.monotonic()
@@ -133,6 +148,25 @@ def evaluate(model, tokenizer, facts, config, device, autocast, behavior=True, g
         timings["generic_seconds"] = time.monotonic() - tick
     else:
         generic_loss = None
+    teaching = None
+    if behavior and config.get("qa_teaching_diagnostics", False):
+        pool = [f for f in facts if f["role"] == "qa"]
+        require(pool, "QA-teaching diagnostics requested without teaching probes")
+        tick = time.monotonic()
+        probes = [f["probe"] for f in pool]
+        scores = conditional_scores(model, probes, tokenizer.eos_token_id, device,
+                                    config["eval_batch_size"], autocast)
+        answers = generated_answers(model, tokenizer, probes, device, config["generation_batch_size"],
+                                    config["max_answer_tokens"], autocast)
+        rows = []
+        for fact, score, answer in zip(pool, scores, answers):
+            rows.append(dict(id=fact["id"], unit_id=fact.get("unit_id", fact["id"]),
+                             event=fact["event"], role="qa", **score, **answer,
+                             exact_match=int(normalize(answer["prediction"]) in {normalize(a) for a in fact["aliases"]})))
+        teaching = {"diagnostic_only": True, "in_sample_teaching_questions": True,
+                    "aggregate": aggregate(rows)["qa"], "facts": rows}
+        timings["qa_teaching_diagnostic_seconds"] = time.monotonic() - tick
     model.train(was_training)
-    return {"variants": variants, "generic_loss": generic_loss, "timings": timings,
+    return {"metric_schema": UNIT_METRICS if selected and "unit_id" in selected[0] else LEGACY_METRICS,
+            "variants": variants, "generic_loss": generic_loss, "qa_teaching_diagnostic": teaching, "timings": timings,
             "wall_seconds": time.monotonic() - started}

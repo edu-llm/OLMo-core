@@ -5,6 +5,7 @@ from pathlib import Path
 import statistics
 
 from .common import read_json, require, write_json
+from .units import LEGACY_POLICY, UNIT_POLICY, LEGACY_METRICS, UNIT_METRICS
 
 
 def paired_interval(values, confidence):
@@ -72,12 +73,17 @@ def summarize_bundles(bundle_paths, output, primary_delay, margin=.02, preregist
     for path in map(Path, bundle_paths):
         manifest = read_json(path / "prepared" / "manifest.json")
         stage2 = read_json(path / "prepared" / "schedule.json")["stage2_steps"]
-        bundle = {"manifest_sha256": manifest["sha256"], "mode": manifest["mode"], "arms": {}}
+        policy = manifest.get("rehearsal_unit_policy", LEGACY_POLICY)
+        expected_metrics = UNIT_METRICS if policy == UNIT_POLICY else LEGACY_METRICS
+        bundle = {"manifest_sha256": manifest["sha256"], "mode": manifest["mode"], "arms": {},
+                  "rehearsal_unit_policy": policy, "metric_schema": expected_metrics}
         for arm in ("NONE", "UNI", "EXP", "MASS", "GEN"):
             directory = path / arm
             matches = sorted((directory / "evaluations").glob("stage2-*.json"))
             evaluations = [read_json(p) for p in matches]
             require(all(e["manifest_sha256"] == manifest["sha256"] for e in evaluations), "Evaluation manifest mismatch")
+            require(all(e.get("metric_schema", LEGACY_METRICS) == expected_metrics for e in evaluations),
+                    "Evaluation aggregation differs from prepared unit policy")
             endpoint = [e for e in evaluations if e["stage2_step"] == stage2 + primary_delay]
             require(len(endpoint) == 1, f"Missing unique primary endpoint {path}/{arm}")
             aggregates = endpoint[0]["variants"]["canonical"]["aggregate"]
@@ -91,10 +97,14 @@ def summarize_bundles(bundle_paths, output, primary_delay, margin=.02, preregist
             costs.append(read_json(attempt))
         bundles.append(bundle)
     require(len({b["mode"] for b in bundles}) == 1, "Never pool development with confirmation")
+    require(len({b["rehearsal_unit_policy"] for b in bundles}) == 1, "Never pool different rehearsal unit policies")
     require(len({b["manifest_sha256"] for b in bundles}) == len(bundles), "Duplicate replicate bundles")
     if bundles[0]["mode"] == "confirmation":
         require(preregistration is not None, "Confirmation analysis requires frozen preregistration")
         prereg = read_json(preregistration)
+        require(all(b["rehearsal_unit_policy"] == UNIT_POLICY for b in bundles) and
+                prereg.get("rehearsal_unit_policy") == UNIT_POLICY and prereg.get("metric_schema") == UNIT_METRICS,
+                "Confirmation requires preregistered supporting-statement units and aggregation")
         require(len(bundles) == prereg["n"] and {b["manifest_sha256"] for b in bundles} ==
                 set(prereg["replicate_manifest_sha256"]), "Incomplete preregistered replicate set")
         require(primary_delay == prereg["primary_delay"] and margin == prereg["loss_margin"], "Analysis changed frozen estimand")

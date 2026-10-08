@@ -16,6 +16,7 @@ from .common import append_json, digest, read_json, require, write_json
 from .evaluation import evaluate
 from .prepare import load_prepared
 from .schedule import ARMS, stage1_epoch
+from .units import LEGACY_POLICY, UNIT_POLICY, UNIT_METRICS, schedule_records, training_key
 
 
 def capture_rng():
@@ -158,6 +159,8 @@ class Session:
         self.manifest, self.schedule, self.examples = load_prepared(prepared)
         self.config = self.manifest["config"]
         self.facts = self.manifest["split"]["facts"]
+        self.training_records = schedule_records(self.facts, self.manifest.get("unit_registry"),
+                                                self.manifest.get("qa_teaching_pool", {}).get("records"))
         self.output = Path(output)
         self.output.mkdir(parents=True, exist_ok=True)
         self.device = device
@@ -253,6 +256,7 @@ class Session:
             "schema": SCHEMA, "cursor": self.progress["cursor"], "global_step": self.progress["global_step"],
             "phase": phase, "phase_step": index, "examples": row, "row_sha256": digest(row),
             "example_content_sha256": [self.examples[k]["content_sha256"] for k in row],
+            "rehearsal_unit_policy": self.manifest.get("rehearsal_unit_policy", LEGACY_POLICY),
             "loss_weight": 1.0, "new_qa_tokens_total": self.progress["new_qa_tokens_total"], **metrics})
         if self.progress["cursor"] % self.config["log_every_updates"] == 0:
             print(json.dumps({"phase": phase, "step": index, **metrics}), flush=True)
@@ -266,12 +270,12 @@ class Session:
         logs = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
         require(len(logs) == self.progress["cursor"], "Realized exposure count differs from checkpoint")
         epochs = {}
-        rows_per_epoch = len(stage1_epoch(self.facts, 0, self.config))
+        rows_per_epoch = len(stage1_epoch(self.training_records, 0, self.config))
         for entry in logs:
             if entry["phase"] == "stage1":
                 epoch, index = divmod(entry["phase_step"], rows_per_epoch)
                 if epoch not in epochs:
-                    epochs[epoch] = stage1_epoch(self.facts, epoch, self.config)
+                    epochs[epoch] = stage1_epoch(self.training_records, epoch, self.config)
                 expected = epochs[epoch][index]
             else:
                 expected = self.schedule["arms"][self.progress["arm"]][entry["phase_step"]]
@@ -294,6 +298,7 @@ class Session:
                           self.autocast, behavior, self.manifest["generic_eval"] if generic else None)
         restore_rng(rng)
         result.update({"schema": SCHEMA, "manifest_sha256": self.manifest["sha256"],
+                       "rehearsal_unit_policy": self.manifest.get("rehearsal_unit_policy", LEGACY_POLICY),
                        "tag": tag, "global_step": self.progress["global_step"],
                        "stage2_step": stage2_step, "epoch": self.progress["epoch"]})
         if stage2_step is not None:
@@ -303,9 +308,13 @@ class Session:
             result["new_qa_tokens_since_last_old_exposure"] = {
                 key: self.progress["new_qa_tokens_total"] - clock
                 for key, clock in self.progress["last_old_newqa_clock"].items()}
+            result["old_probe_to_exposure_unit"] = {f["id"]: training_key(f) for f in self.facts if f["role"] == "old"}
         self.seconds["evaluation"] += result["wall_seconds"]
         write_json(path, result)
-        print(json.dumps({"evaluation": tag, "old": result["variants"]["canonical"]["aggregate"]["old"]}), flush=True)
+        summary = {"evaluation": tag, "old": result["variants"]["canonical"]["aggregate"]["old"]}
+        if result.get("qa_teaching_diagnostic") is not None:
+            summary["qa_teaching"] = result["qa_teaching_diagnostic"]["aggregate"]
+        print(json.dumps(summary), flush=True)
         return result
 
 
@@ -337,7 +346,7 @@ def run_acquisition(prepared, output, *, device="cuda", fixed_exposures=None, pr
                 break
         if epoch >= max(milestones):
             break
-        rows = stage1_epoch(s.facts, epoch, s.config)
+        rows = stage1_epoch(s.training_records, epoch, s.config)
         for i in range(s.progress["epoch_cursor"], len(rows)):
             s.update(rows[i], "stage1", epoch * len(rows) + i)
             s.progress["epoch_cursor"] = i + 1
@@ -360,12 +369,16 @@ def run_acquisition(prepared, output, *, device="cuda", fixed_exposures=None, pr
 
 
 def verify_preregistration(path, manifest):
+    require(manifest.get("rehearsal_unit_policy") == UNIT_POLICY and manifest.get("unit_registry"),
+            "Confirmation requires distinct supporting-statement rehearsal units")
     require(path is not None, "Confirmation requires a frozen preregistration")
     prereg = read_json(path)
     required = ("frozen_utc", "n", "replicate_manifest_sha256", "E", "primary_delay", "loss_margin",
                 "hardware", "measured_cost", "power_scenarios", "assay_usable", "maximum_attempts",
-                "secondary_holm_family", "missing_pair_rule")
+                "secondary_holm_family", "missing_pair_rule", "rehearsal_unit_policy", "metric_schema")
     require(all(k in prereg for k in required), "Incomplete preregistration fields")
+    require(prereg["rehearsal_unit_policy"] == UNIT_POLICY and prereg["metric_schema"] == UNIT_METRICS,
+            "Preregistered rehearsal units/aggregation differ")
     require(isinstance(prereg["n"], int) and prereg["n"] >= 2 and isinstance(prereg["E"], int) and prereg["E"] > 0,
             "Invalid preregistered replication/dose")
     require(prereg["loss_margin"] > 0 and prereg["primary_delay"] > 0, "Margins/delays must be positive")

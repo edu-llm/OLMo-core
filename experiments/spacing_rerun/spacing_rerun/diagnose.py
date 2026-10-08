@@ -23,24 +23,22 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 from . import SCHEMA
 from .common import digest, require, write_json
 from .data import normalize
-from .evaluation import conditional_scores, generated_answers
+from .evaluation import conditional_scores, generated_answers, metric_means
+from .units import LEGACY_POLICY, LEGACY_METRICS, UNIT_METRICS, training_key
 from .prepare import load_prepared
 from .training import load_checkpoint, load_model, make_optimizer, seed_all
 
 
 def summarize(facts, scores):
-    """Equal fact weight within event, then equal event weight within this run."""
+    """Use the same probe/unit/event hierarchy as the acquisition score."""
     require(len(facts) == len(scores) and len(facts) > 0, "Empty or misaligned diagnostic scores")
     metrics = ("loss", "loss_with_eos", "exact_match", "generation_terminated")
-    output = {"facts": len(facts), "events": len({f["event"] for f in facts})}
+    output = {"facts": len(facts), "events": len({f["event"] for f in facts}),
+              "units": len({(f["event"], f.get("unit_id", f.get("id", str(i)))) for i, f in enumerate(facts)})}
     for metric in metrics:
         if not all(metric in score for score in scores):
             continue
-        by_event = collections.defaultdict(list)
-        for fact, score in zip(facts, scores):
-            by_event[fact["event"]].append(float(score[metric]))
-        output[metric + "_event_macro"] = sum(sum(v) / len(v) for v in by_event.values()) / len(by_event)
-        output[metric + "_fact_micro"] = sum(float(s[metric]) for s in scores) / len(scores)
+        output.update(metric_means([dict(fact, **score) for fact, score in zip(facts, scores)], metric))
     return output
 
 
@@ -49,7 +47,7 @@ def declarative_probes(facts, examples, eos):
     probes = []
     for fact in facts:
         ids = fact["statement_ids"]
-        example = examples["old/" + fact["id"]]
+        example = examples["old/" + (training_key(fact) if "role" in fact else fact["id"])]
         require(ids and example["input_ids"][0] == eos, "Statement must have its trained initial EOS")
         require(example["input_ids"][1:len(ids) + 1] == ids and
                 example["labels"][1:len(ids) + 1] == ids,
@@ -141,7 +139,7 @@ def diagnose(prepared, checkpoint, output, *, device="cuda", max_runtime_seconds
                 score.update(answer)
                 score["exact_match"] = int(normalize(answer["prediction"]) in {normalize(a) for a in fact["aliases"]})
         timings[name + "_seconds"] = time.monotonic() - tick
-        rows = [dict(id=f["id"], event=f["event"], source_role=f["role"], **s)
+        rows = [dict(id=f["id"], unit_id=f.get("unit_id", f["id"]), event=f["event"], source_role=f["role"], **s)
                 for f, s in zip(pool, scores)]
         sections[name] = {"aggregate": summarize(pool, scores), "facts": rows}
 
@@ -174,6 +172,8 @@ def diagnose(prepared, checkpoint, output, *, device="cuda", max_runtime_seconds
         ["git", "rev-parse", "HEAD"], text=True).strip()
     old, qa, statement = [sections[key]["aggregate"] for key in ("old_qa", "qa_teaching", "old_statement_content")]
     result = {"schema": SCHEMA, "type": "post_acquisition_diagnostic", "status": "complete",
+              "rehearsal_unit_policy": manifest.get("rehearsal_unit_policy", LEGACY_POLICY),
+              "metric_schema": UNIT_METRICS if "unit_registry" in manifest else LEGACY_METRICS,
               "started_utc": started_utc, "code_commit": code_commit,
               "manifest_sha256": manifest["sha256"], "checkpoint_path": str(checkpoint.resolve()),
               "checkpoint_sha256": checkpoint_hash, "checkpoint_bytes": before.st_size,

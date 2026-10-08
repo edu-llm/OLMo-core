@@ -89,7 +89,8 @@ class TrainingTests(unittest.TestCase):
     def test_mid_epoch_restart_preserves_all_later_epochs(self):
         """An interruption after unsaved work resumes the saved shuffled stream."""
         from collections import Counter
-        config = dict(self.config(), batch_size=6, qa_per_step=1, order_seed=17)
+        config = dict(self.config(), batch_size=6, qa_per_step=1, order_seed=17,
+                      qa_teaching_policy="all_source_questions_v1")
         facts = [{"id": f"{role}{i}", "role": role} for role in ("old", "qa") for i in range(7)]
         examples = {role + "/" + f["id"]: packed_example(Tokenizer(), "ab", f["id"],
                     [1, 2, 3, 4] * 50, 8, 12) for f in facts for role in [f["role"]]}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .common import digest, require
+from .units import training_key
 
 
 def encode_probe(tokenizer, question, answer, context_length):
@@ -47,7 +48,7 @@ def packed_example(tokenizer, text, key, generic_tokens, loss_budget, context_le
             "content_sha256": digest({"ids": ids, "labels": labels})}
 
 
-def build_examples(facts, tokenizer, generic_tokens, config):
+def build_examples(facts, tokenizer, generic_tokens, config, qa_teaching_records=None):
     examples = {}
     budget, length = config["loss_tokens_per_example"], config["context_length"]
     eval_length = config.get("eval_context_length", length)
@@ -68,16 +69,25 @@ def build_examples(facts, tokenizer, generic_tokens, config):
                 f"{chr(65 + j)}. {a}" for j, a in enumerate(mcq["choices"]))
             question += "\nRespond with the complete answer text."
             mcq["probes"] = [encode_probe(tokenizer, question, a, eval_length) for a in mcq["choices"]]
-        role, key = fact["role"], fact["id"]
+        role, key = fact["role"], training_key(fact)
         if role in ("old", "new"):
-            examples[role + "/" + key] = packed_example(
+            example = packed_example(
                 tokenizer, fact["statement"], role + "/" + key, generic_tokens, budget, length)
-        if role == "qa":
+            if role + "/" + key in examples:
+                require(examples[role + "/" + key] == example, "Probes in one unit have different training content")
+            examples[role + "/" + key] = example
+        if role == "qa" and qa_teaching_records is None:
             examples["qa/" + key] = packed_example(
                 tokenizer, fact["question"], "qa/" + key, generic_tokens, budget, length,
                 answer=fact["answer"])
         if role == "old":
             examples["gen/" + key] = packed_example(
                 tokenizer, "", "gen/" + key, generic_tokens, budget, length)
+    if qa_teaching_records is not None:
+        for fact in qa_teaching_records:
+            key = "qa/" + fact["id"]
+            require(key not in examples, "Duplicate QA-teaching example key")
+            examples[key] = packed_example(tokenizer, fact["question"], key, generic_tokens, budget, length,
+                                           answer=fact["answer"])
     examples["filler"] = packed_example(tokenizer, "", "stage1-filler", generic_tokens, budget, length)
     return examples

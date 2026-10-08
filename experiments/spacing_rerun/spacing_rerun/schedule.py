@@ -5,6 +5,7 @@ import math
 import random
 
 from .common import digest, require
+from .teaching import SOURCE_QA_POLICY
 
 ARMS = ("NONE", "UNI", "EXP", "MASS", "GEN")
 
@@ -161,7 +162,12 @@ def stage1_epoch(facts, epoch, config):
     rows = []
     for offset in range(0, len(old), capacity):
         row = ["old/" + key for key in old[offset:offset + capacity]]
-        row += ["qa/" + qa[(epoch * len(old) + offset + j) % len(qa)]
+        # Legacy artifacts keep their original indexing for exact checkpoint
+        # replay. Expanded teaching uses a continuous question cursor, including
+        # the partial final old-unit batch, so complete cycles have equal dose.
+        qa_cursor = ((epoch * math.ceil(len(old) / capacity) + offset // capacity) * config["qa_per_step"]
+                     if config.get("qa_teaching_policy") == SOURCE_QA_POLICY else epoch * len(old) + offset)
+        row += ["qa/" + qa[(qa_cursor + j) % len(qa)]
                 for j in range(config["qa_per_step"])]
         row += ["filler"] * (config["batch_size"] - len(row))
         rows.append(row)
