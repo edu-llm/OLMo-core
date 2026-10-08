@@ -1,3 +1,5 @@
+> Active amendment, October 8, 2026: [Final assay development amendment](spacing_final_assay_amendment_20261008.md) supersedes the preliminary development bundle limit, initial span and proposed human-only audit path below. It freezes metadata-derived L=252, extends bounded development to 8 bundles, requires acquisition scale/stability checks and completed independent agent audit artifacts, and retains human review as false. Original confirmation role counts,40–70% acquisition gate, every evaluation probe and0.02 loss margin remain fixed. Confirmation is still blocked pending the actual audit and final preregistration.
+
 # PRD: Reruns for the spacing study (Priority 1) and the interleaving study (Priority 2)
 
 *Owner: P4 · Drafted 2026-10-04 · Spacing reviewed 2026-10-07 · Status: staged proposal; calibration and preregistration required before confirmation*

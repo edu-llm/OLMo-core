@@ -1,5 +1,7 @@
 **TL;DR:** This is the standalone implementation of Part 1 of the [spacing rerun PRD](../../plans/PRD_spacing_interleaving_reruns.md). Start with CPU preparation, then one bounded development acquisition screen on a FarmShare GPU. Confirmation stays blocked until acquisition, interference sensitivity, cost, replication and the source audits have been resolved and preregistered.
 
+The active [October 8 assay amendment](../../plans/spacing_final_assay_amendment_20261008.md) freezes metadata-derived L=252 for the original confirmation role geometry, adds development acquisition scale/stability checks, and requires six paired final-span sensitivity bundles before precision planning. The completed L=84 five-arm run is a disclosed pilot. Independent agent audit artifacts will replace the preliminary proposed human-only audit method only through separately guarded protocol support; human review remains false and confirmation remains blocked.
+
 ## What the implementation runs
 
 The pretrained checkpoint is `allenai/DataDecide-dolma1_7-300M` at `4b1b42ff7c5224a077c4f5624824dd7c8bbe98d7`. The loader uses the checkpoint's original `hf_olmo` architecture with full fine-tuning, fp32 parameters and AdamW states, and bf16 CUDA autocast. CPU execution exists for tests. Real jobs require CUDA and a recorded full code commit.
