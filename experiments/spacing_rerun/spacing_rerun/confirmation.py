@@ -11,6 +11,8 @@ import os
 from pathlib import Path
 import random
 import subprocess
+import re
+import uuid
 
 from .common import digest, require, read_json
 from .data import REVISION, normalize
@@ -72,6 +74,126 @@ def receipt_declaration(receipt, key):
     return values[0] if values else None
 
 
+def local_author_identity(person, authored):
+    """Classify disclosed runtime labels without treating them as delegated task IDs."""
+    label = person.get('task_id')
+    name = identity(person)
+    if label == name and name in ('/root', 'root'):
+        return 'runtime_agent_path'
+    sessions = [person[key] for key in ('runtime_thread_id', 'runtime_session_id', 'codex_thread_id', 'thread_id') if person.get(key)]
+    if sessions:
+        require(len(set(sessions)) == 1, 'Disclosed author runtime session labels disagree')
+        session = sessions[0]
+        require(str(uuid.UUID(session)) == session, 'Author runtime session is not a canonical UUID')
+        allowed = {session, 'codex-thread:' + session, 'codex-thread:' + session + '/root',
+                   'codex-thread:' + session + f'/root/chunk-{authored["chunk_index"]:02}-semantic-v4'}
+        require(label in allowed and name in ('/root', 'root', 'codex:' + session, 'codex-thread:' + session + ':/root') and
+                all(person[key] == '/root' for key in ('agent_path', 'runtime_agent_path') if key in person),
+                'Declared author runtime label differs from its disclosed session/path')
+        return 'runtime_session_label'
+    match = re.fullmatch(r'/root:chunk([0-9]{2})-source-only-semantic-v4:([0-9a-f-]{36})', str(label))
+    require(match and int(match[1]) == authored['chunk_index'] and str(uuid.UUID(match[2])) == match[2] and
+            name == '/root' and 'local repair execution UUID' in person.get('identity_basis', '') and
+            'not an asserted T3 delegated-task ID' in person['identity_basis'],
+            'Declared author task ID differs from actual task execution or disclosed local identity')
+    return 'disclosed_local_repair_uuid'
+
+
+def semantic_execution_evidence(chunk, row, person):
+    """Bind a local author label to exact completed task and source-only input/result bytes."""
+    from .source_patch import actual_bytes, compatible_aliases, normalize_task
+    authored = chunk['authored']
+    proof = row.get('semantic_execution_evidence', {})
+    task = row['task_record']
+    status = task.get('actual_task_status', {})
+    require(normalize_task(status, task['client_request_id']) == task and
+            status.get('latestTerminalStatus') == 'completed' and not status.get('hasPendingChildRuns'),
+            'Local author label lacks its exact terminal delegated task evidence')
+    packet = checked(proof.get('input_packet'), 'source-only-confirmation-review-and-structural-repair-input-v1')
+    response = checked(proof.get('correction_response'))
+    for key, value in (('input_packet', packet), ('correction_response', response), ('authored', authored)):
+        info = proof.get('artifact_files', {}).get(key, {})
+        require(Path(info.get('path', '')).is_absolute(), 'Semantic author evidence lacks an absolute actual artifact path')
+        actual_bytes(value, info)
+    require(packet.get('evaluation_question_text_included') is False and packet.get('evaluation_identifiers_included') is False and
+            packet.get('model_outcomes_included') is False and packet['source_author_packet']['sha256'] == authored['source_author_packet_sha256'] and
+            packet['current_authored_sha256'] == authored.get('prior_authored_sha256') and
+            packet['chunk_index'] == authored['chunk_index'] and response.get('revision_author') == person and
+            response.get('authored_sha256') == authored['sha256'] and
+            all(value in status['latestTerminalSummary'] for value in (authored['sha256'], response['sha256'])) and
+            person.get('provider', '').casefold() in ('openai', 'codex') and
+            str(task.get('provider_instance_id', '')).casefold().startswith('codex'),
+            'Local author task is not bound to the exact source-only input, provider and completed result')
+    compatible_aliases(response, ('input_packet_sha256', 'repair_input_sha256'), packet['sha256'], required=True)
+    compatible_aliases(response, ('prior_authored_sha256',), authored['prior_authored_sha256'], required=True)
+    compatible_aliases(response, ('authored_path',), proof['artifact_files']['authored']['path'])
+    classification = local_author_identity(person, authored)
+    require(row.get('declared_task_identity_classification') == classification,
+            'Local author task-label classification differs from the preserved raw declaration')
+    return packet
+
+
+def validate_retained_source_ancestor(chunk, ancestor):
+    authored = chunk['authored']
+    retained = authored['retained_source_ancestor']
+    required = {'applies_to_authored_sha256': ancestor['sha256'], **{
+        key: ancestor[key] for key in ('question_patch_provenance', 'retained_historical_annotations') if key in ancestor}}
+    require(all(retained.get(key) == value for key, value in required.items()) and
+            authored.get('prior_authored_sha256') == ancestor['sha256'] and all(authored[key] == ancestor[key] for key in
+                ('source_catalog_sha256', 'source_author_packet_sha256', 'dataset_revision', 'chunk_index', 'events')),
+            'Retained source history differs from the exact immutable source-only ancestor')
+    proof = next((r.get('semantic_execution_evidence') for r in chunk.get('author_task_provenance', [])
+                  if r.get('role') == 'revision_author'), None)
+    packet = proof.get('input_packet') if proof else None
+    for key, value in retained.items():
+        if key in required:
+            continue
+        if key in ancestor:
+            require(value == ancestor[key], 'Retained source ancestor field differs from its immutable original')
+        elif key in ('prior_full_authored_chunk', 'authored_snapshot'):
+            require(value == ancestor, 'Retained full source snapshot differs from immutable ancestor')
+        elif key == 'historical_annotations':
+            require(value == {k: v for k, v in ancestor.items() if k not in
+                    ('source_units', 'groups', 'acquisition_records', 'sha256', 'question_patch_provenance')},
+                    'Retained historical annotation projection differs from immutable ancestor')
+        elif key == 'historical_annotation_scope':
+            require(retained.get('authored_snapshot') == ancestor and value ==
+                    'Every value in authored_snapshot, including review references, revision history, author metadata and record annotations, applies only to the immutable ancestor identified above.',
+                    'Retained historical annotation scope is unsupported')
+        elif key == 'replaced_author_annotations':
+            require(isinstance(value, list), 'Invalid retained author annotation change ledger')
+            seen = set()
+            for change in value:
+                collection, field = change.get('collection'), change.get('field')
+                require((collection, field) in (('groups', 'grouping_rationale'), ('acquisition_records', 'rationale')) and
+                        set(change) == {'collection', 'field', 'id', 'before', 'after', 'source_only_reason'},
+                        'Retained author annotation ledger contains unsupported fields')
+                before = {r['id']: r for r in ancestor[collection]}; after = {r['id']: r for r in authored[collection]}
+                signature = collection, field, change['id']
+                require(signature not in seen and change['id'] in before and change['id'] in after and
+                        change['before'] == before[change['id']][field] and change['after'] == after[change['id']][field] and
+                        change['source_only_reason'], 'Retained author annotation ledger differs from exact before/after content')
+                seen.add(signature)
+        elif key in ('actual_prior_review_references', 'source_review_history'):
+            require(packet is not None and isinstance(value, list), 'Retained review references lack actual source-only input')
+            for ref in value:
+                material = next((m for m in packet['actual_source_review_materials'] if m['receipt']['sha256'] == ref.get('receipt_sha256')), None)
+                allowed = {'receipt_path', 'receipt_sha256', 'review_packet_path', 'review_packet_sha256',
+                           'applies_to_review_packet_sha256', 'reviewed_authored_sha256'}
+                require(material and set(ref) <= allowed and all(ref.get(k) == material[k] for k in ('receipt_path', 'review_packet_path')) and
+                        ref.get('review_packet_sha256') == material['review_packet']['sha256'] and
+                        ref.get('applies_to_review_packet_sha256', material['review_packet']['sha256']) == material['review_packet']['sha256'] and
+                        ref.get('reviewed_authored_sha256', material['review_packet']['authored_chunk_sha256']) == material['review_packet']['authored_chunk_sha256'],
+                        'Retained review reference differs from exact actual source review material')
+        elif key == 'authored_path':
+            require(proof and packet['current_authored'] == ancestor and value == packet['current_authored_path'],
+                    'Retained authored path differs from exact source-only ancestor input')
+        elif key == 'input_packet_sha256':
+            require(packet and value == packet['sha256'], 'Retained repair input hash differs from exact source-only evidence')
+        else:
+            require(False, 'Unsupported retained source ancestor field: ' + key)
+
+
 def author_context(chunk, *, evaluation=False):
     authored = chunk['authored']
     people = {'author': authored['author']}
@@ -119,27 +241,28 @@ def author_context(chunk, *, evaluation=False):
                      (metadata_request in request if metadata_only else revision_request)),
                     'Actual author task belongs to a different input channel or role')
             if person.get('task_id'):
-                require(person['task_id'] in (task_id, task['client_request_id']), 'Declared author task ID differs from actual task execution')
+                if person['task_id'] not in (task_id, task['client_request_id']):
+                    require(role == 'revision_author' and not evaluation,
+                            'Declared author task ID differs from actual task execution')
+                    semantic_execution_evidence(chunk, row, person)
         channels.append('task:' + task_id)
     if authored.get('question_patch_provenance'):
         from .source_patch import reconstruct_question_patch
         patch_evidence = chunk.get('question_patch_evidence')
         require(patch_evidence and reconstruct_question_patch(patch_evidence) == authored,
                 'Mechanical source question merge differs from its exact actual source-only patch')
-        prior_context = author_context({'authored': patch_evidence['base_authored'],
-                                       'author_task_provenance': chunk.get('base_author_task_provenance', [])})
+        base_version = chunk.get('question_patch_base_version', {'authored': patch_evidence['base_authored'],
+                                     'author_task_provenance': chunk.get('base_author_task_provenance', [])})
+        require(base_version.get('authored') == patch_evidence['base_authored'],
+                'Question patch retained base version differs from its immutable actual base')
+        prior_context = author_context(base_version)
         people.update({'retained_' + key: person for key, person in prior_context['people'].items()})
         channels.extend(prior_context['channels'])
         provenance = list(provenance) + list(prior_context['task_provenance'])
-    if authored.get('retained_source_ancestor'):
+    if authored.get('retained_source_ancestor') and not authored.get('question_patch_provenance'):
         ancestor_version = chunk.get('source_ancestor_version', {})
         ancestor = checked(ancestor_version.get('authored'), authored['schema'])
-        expected = {'applies_to_authored_sha256': ancestor['sha256'], **{
-            key: ancestor[key] for key in ('question_patch_provenance', 'retained_historical_annotations') if key in ancestor}}
-        require(authored['retained_source_ancestor'] == expected and authored.get('prior_authored_sha256') == ancestor['sha256'] and
-                all(authored[key] == ancestor[key] for key in ('source_catalog_sha256', 'source_author_packet_sha256',
-                    'dataset_revision', 'chunk_index', 'events')),
-                'Retained source history differs from the exact immutable source-only ancestor')
+        validate_retained_source_ancestor(chunk, ancestor)
         prior_context = author_context(ancestor_version)
         people.update({'ancestor_' + key: person for key, person in prior_context['people'].items()})
         channels.extend(prior_context['channels'])
@@ -470,6 +593,17 @@ def source_review_content(record, field):
     return {key: record[key] for key in keys}
 
 
+def source_preservation_context(authored):
+    """Fixed preservation obligations and bare dispositions, without author explanations."""
+    return {'schema': 'spacing-source-preservation-protocol-context-v1',
+            'preserved_declaration_rule': 'Every preserve_source_conflict or preserve_source_ambiguity unit must remain a singleton group whose declaration equals its raw original source_assertion literally.',
+            'support_review_rule': 'Assess grounding, evidence, source limitations and question-to-target faithfulness independently. A preservation status does not assert factsheet support or resolve a source conflict.',
+            'membership_review_rule': 'Preserved source conflicts and ambiguities cannot be merged or rewritten. Judge dependency and equivalence claims using the supplied source assertions and factsheets while retaining that obligation.',
+            'visibility': 'Bare source disposition labels and fixed protocol obligations only; no author rationales, author judgments, prior reviewer findings, evaluator questions, model outcomes or completion claims.',
+            'source_dispositions': [{'unit_id': row['unit_id'], 'status': row['status']} for row in authored['source_units']
+                                    if row['status'] in ('preserve_source_conflict', 'preserve_source_ambiguity')]}
+
+
 def validate_blind_packet(packet, *, evaluation=False):
     forbidden = {'author_rationales', 'author_judgments', 'author_notes', 'model_outputs', 'model_outcomes'}
     if evaluation:
@@ -553,6 +687,9 @@ def validate_source_chunks(chunks, catalog):
         authored = current_authored
         review_packet = checked(chunk["review_packet"], "spacing-source-independent-review-packet-v1")
         validate_blind_packet(review_packet)
+        if 'source_preservation_protocol' in review_packet:
+            require(review_packet['source_preservation_protocol'] == source_preservation_context(authored),
+                    'Blind source preservation protocol differs from exact bare dispositions and fixed obligations')
         history = review_history(chunk)
         authors = author_context(chunk)
         author_ids.update(authors['channels'])
@@ -560,8 +697,15 @@ def validate_source_chunks(chunks, catalog):
         require(packet["source_catalog_sha256"] == authored["source_catalog_sha256"] == review_packet["source_catalog_sha256"] == catalog["sha256"] and
                 authored["source_author_packet_sha256"] == review_packet["source_author_packet_sha256"] == packet["sha256"] and
                 review_packet["authored_chunk_sha256"] == authored["sha256"], "Source author/review packet provenance differs")
-        require(authored.get("dataset_revision") == REVISION and authored.get("authoring_inputs") ==
-                ["source_assertions", "source_answer_labels", "event_factsheets"] and authored.get("evaluation_question_text_included") is False and
+        inputs = ['source_assertions', 'source_answer_labels', 'event_factsheets']
+        if authored.get('authoring_inputs') != inputs:
+            require(authored.get('authoring_inputs') == inputs + ['current_source_only_artifact', 'actual_source_review_findings'],
+                    'Authored source changed its disclosed source-only authoring inputs')
+            input_version = chunk.get('question_patch_base_version', chunk) if authored.get('question_patch_provenance') else chunk
+            revision_row = next((row for row in input_version.get('author_task_provenance', []) if row['role'] == 'revision_author'), None)
+            require(revision_row is not None, 'Expanded source repair inputs lack exact actual revision evidence')
+            semantic_execution_evidence(input_version, revision_row, input_version['authored']['revision_author'])
+        require(authored.get("dataset_revision") == REVISION and authored.get("evaluation_question_text_included") is False and
                 authored.get("model_outcomes_used") is False and authored.get("human_review_complete") is False and
                 authored.get("independent_agent_review_complete") is False and review_packet.get("author_rationales_included") is False,
                 "Authored source packet changed its blinded inputs or asserted review completion")
@@ -840,6 +984,8 @@ def validate_confirmation_audit(audit, *, source_facts=None, pinned_factsheets=N
             audit.get("model_outcomes_used") is False, "Confirmation requires the explicit agent-audit protocol and truthful human/outcome status")
     def author_rows(version):
         rows = list(version.get('author_task_provenance', [])) + list(version.get('base_author_task_provenance', []))
+        if version.get('question_patch_base_version'):
+            rows.extend(author_rows(version['question_patch_base_version']))
         if version.get('source_ancestor_version'):
             rows.extend(author_rows(version['source_ancestor_version']))
         return rows
