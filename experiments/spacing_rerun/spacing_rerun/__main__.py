@@ -25,11 +25,24 @@ def main():
         p.add_argument("--output", required=True)
         if name in ("stage1", "arm"):
             p.add_argument("--preregistration")
+        if name == "calibrate":
+            p.add_argument("--acquisition-policy-core", help="Prelaunch frozen seeds/settings/source frames for two-stage acquisition binding")
+            p.add_argument("--acquisition-manifest-binding", help="Required for scale trials after all nine reviewed manifests are bound")
         if name == "stage1":
             p.add_argument("--exposures", type=int, required=True)
         if name == "arm":
             p.add_argument("--stage1-checkpoint", required=True)
             p.add_argument("--arm", choices=("NONE", "UNI", "EXP", "MASS", "GEN"), required=True)
+            p.add_argument("--acquisition-selection", help="Hash-bound nine-grid common-dose selection for full-grid development")
+    choose = sub.add_parser("choose-acquisition-grid-checkpoint", help="Choose a common dose from nine frozen development grids")
+    choose.add_argument("--prepared", required=True)
+    choose.add_argument("--grid-output", action="append", required=True)
+    choose.add_argument("--selection-rule", required=True)
+    choose.add_argument("--output", required=True)
+    bind = sub.add_parser("bind-acquisition-grid-manifests", help="Bind all nine reviewed prepared manifests to the already frozen policy core")
+    bind.add_argument("--policy-core", required=True)
+    bind.add_argument("--prepared", action="append", required=True)
+    bind.add_argument("--output", required=True)
     analysis = sub.add_parser("analyze")
     analysis.add_argument("--bundle", action="append", required=True, help="Contains prepared/, stage1/ and five arm directories")
     analysis.add_argument("--output", required=True)
@@ -53,10 +66,25 @@ def main():
         from .training import run_acquisition
         run_acquisition(args.prepared, args.output,
                         fixed_exposures=args.exposures if args.command == "stage1" else None,
-                        preregistration=getattr(args, "preregistration", None))
+                        preregistration=getattr(args, "preregistration", None),
+                        acquisition_policy_core=getattr(args, "acquisition_policy_core", None),
+                        acquisition_manifest_binding=getattr(args, "acquisition_manifest_binding", None))
     elif args.command == "arm":
         from .training import run_arm
-        run_arm(args.prepared, args.output, args.stage1_checkpoint, args.arm, preregistration=args.preregistration)
+        run_arm(args.prepared, args.output, args.stage1_checkpoint, args.arm, preregistration=args.preregistration,
+                acquisition_selection=args.acquisition_selection)
+    elif args.command == "choose-acquisition-grid-checkpoint":
+        from .acquisition_grid import choose_acquisition_grid_checkpoint
+        result = choose_acquisition_grid_checkpoint(args.prepared, args.grid_output, args.selection_rule, args.output)
+        print(json.dumps({"selected_E": result["selected_E"], "selection_usable": result["selection_usable"],
+                          "selected_checkpoint": result["selected_checkpoint"], "sha256": result["sha256"]}))
+        raise SystemExit(0 if result["selection_usable"] else 2)
+    elif args.command == "bind-acquisition-grid-manifests":
+        from .acquisition_policy import bind_policy_manifests
+        from .common import read_json
+        result = bind_policy_manifests(read_json(args.policy_core), args.prepared, args.output)
+        print(json.dumps({"policy_core_sha256": result["policy_core_sha256"], "binding_utc": result["binding_utc"],
+                          "sha256": result["sha256"]}))
     elif args.command == "analyze":
         from .analysis import summarize_bundles
         summarize_bundles(args.bundle, args.output, args.primary_delay, args.margin, args.preregistration)

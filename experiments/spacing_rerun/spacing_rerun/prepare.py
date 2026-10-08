@@ -8,7 +8,7 @@ from pathlib import Path
 from . import SCHEMA
 from .common import digest, read_json, require, write_json
 from .data import (DATASET, MODEL, MODEL_REVISION_PREFIX, REVISION, assign_roles,
-                   canonicalize, join_metadata, normalize, outer_partition)
+                   assign_development_scale_roles, canonicalize, join_metadata, normalize, outer_partition)
 from .encoding import build_examples, generic_slice
 from .schedule import compile_schedule, validate_schedule
 from .rewrites import apply_development_rewrites
@@ -16,6 +16,7 @@ from .units import LEGACY_POLICY, UNIT_POLICY, GROUNDED_POLICY, build_units, sch
 from .teaching import CANONICAL_QA_POLICY, SOURCE_QA_POLICY, build_teaching_pool, validate_teaching_pool
 from .grounding import FACTSHEETS_SHA256, build_grounded_registry, validate_bundle, validate_grounded_registry
 from .acquisition import (DECLARATION_POLICY, SOURCE_QA_ACQUISITION_POLICY,
+                          ADAPTIVE_TRAJECTORY_POLICY, GRID_TRAJECTORY_POLICY,
                           acquisition_similarity, validate_acquisition_bundle)
 
 MCQ_CONFIG = "gend_mcq_w_grades_03-01-26"
@@ -44,6 +45,23 @@ def validate_config(config):
     require(config["primary_delay"] in delays, "Primary delay must be a declared evaluation delay")
     require(max(delays) == config["buffer_steps"], "Longest evaluated delay must end the buffer")
     require(all(0 < f < 1 for f in config["stage2_eval_fractions"]), "Stage2 grid lies outside Stage2")
+    trajectory_policy = config.get("acquisition_trajectory_policy", ADAPTIVE_TRAJECTORY_POLICY)
+    require(trajectory_policy in (ADAPTIVE_TRAJECTORY_POLICY, GRID_TRAJECTORY_POLICY), "Unknown acquisition trajectory policy")
+    if trajectory_policy == GRID_TRAJECTORY_POLICY:
+        require(config["mode"] == "development", "Full acquisition grids are development-only")
+        require(milestones == [2, 3, 4, 6, 8] and config["acquisition_target_min"] == .4 and
+                config["acquisition_target_max"] == .7, "Full grid requires the frozen E2/3/4/6/8 and 40–70% gates")
+    if config.get("development_scale_probe"):
+        require(config["mode"] == "development" and trajectory_policy == GRID_TRAJECTORY_POLICY,
+                "Scale probes are development-only and require a fixed full acquisition grid")
+        require(config.get("development_role_counts") == {"old": 15, "new": 1, "control": 1, "qa": 3},
+                "Unsupported development scale role geometry")
+        fixed_qa = config.get("development_fixed_qa_events", [])
+        require(sorted(fixed_qa) == ["event_010", "event_017", "event_070"],
+                "Scale probes must retain the three original development teaching events")
+    else:
+        require(not config.get("development_role_counts") and not config.get("development_fixed_qa_events"),
+                "Development role overrides require the explicit scale-probe flag")
     require(config.get("rehearsal_unit_policy", LEGACY_POLICY) in (LEGACY_POLICY, UNIT_POLICY, GROUNDED_POLICY),
             "Unknown rehearsal unit policy")
     if config.get("rehearsal_unit_policy") == GROUNDED_POLICY:
@@ -115,7 +133,10 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
             fact["paraphrase"] = override["paraphrase"]
         # Preserve join evidence in the source audit, without triplicating the raw tables per replicate.
         del fact["source_metadata"]
-    split = assign_roles(facts, partition, config["mode"], config["split_seed"])
+    split = (assign_development_scale_roles(facts, partition, config["mode"], config["development_role_counts"],
+                                           config["development_fixed_qa_events"])
+             if config.get("development_scale_probe") else
+             assign_roles(facts, partition, config["mode"], config["split_seed"]))
     facts = split["facts"]
     rewrite_bundle, rewrite_audit = None, None
     if config.get("training_statement_rewrites"):
@@ -212,6 +233,10 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
             "stage2_acquisition_qa_dose": 0,
             "independent_agent_review_complete": acquisition_bundle["independent_agent_review_complete"],
             "independent_agent_reviewer": acquisition_bundle["independent_agent_reviewer"]}
+        if acquisition_input.get("source_catalog_sha256"):
+            require(acquisition_bundle.get("source_catalog_sha256") == acquisition_input["source_catalog_sha256"],
+                    "Acquisition source and reviewed QA catalog bindings differ")
+            manifest["acquisition_qa_audit"]["source_catalog_sha256"] = acquisition_input["source_catalog_sha256"]
         manifest["acquisition_qa_similarity"] = acquisition_similarity(facts, acquisition_records)
     if grounding_bundle is not None:
         manifest["source_unit_registry"] = source_registry
@@ -241,6 +266,7 @@ def load_prepared(path):
     manifest, schedule, examples = [read_json(path / name) for name in
                                      ("manifest.json", "schedule.json", "examples.json")]
     validate_config(manifest["config"])
+    require(manifest["mode"] == manifest["config"]["mode"], "Prepared mode differs from its frozen config")
     for payload in (manifest, schedule, manifest["split"], manifest["partition"]):
         require(digest({k: v for k, v in payload.items() if k != "sha256"}) == payload["sha256"],
                 "Manifest integrity check failed")
@@ -252,6 +278,14 @@ def load_prepared(path):
                 rewrite_bundle["sha256"] == manifest["statement_rewrite_audit"]["bundle_sha256"],
                 "Prepared rewrite audit changed")
     facts = manifest["split"]["facts"]
+    if manifest["config"].get("development_scale_probe"):
+        expected_scale = assign_development_scale_roles(facts, manifest["partition"], manifest["mode"],
+                                                        manifest["config"]["development_role_counts"],
+                                                        manifest["config"]["development_fixed_qa_events"])
+        require(manifest["split"].get("development_scale_probe") is True and
+                manifest["split"].get("roles") == expected_scale["roles"] and
+                all(f["role"] == expected_scale["roles"][f["event"]] for f in facts),
+                "Prepared scale-probe role geometry differs from frozen metadata rule")
     registry = manifest.get("unit_registry")
     require(manifest.get("rehearsal_unit_policy", LEGACY_POLICY) ==
             manifest["config"].get("rehearsal_unit_policy", LEGACY_POLICY), "Manifest unit policy differs from config")
@@ -287,6 +321,10 @@ def load_prepared(path):
                 source_input["sha256"] == manifest["acquisition_qa_audit"]["source_input_sha256"],
                 "Prepared acquisition QA provenance differs")
         validate_acquisition_bundle(acquisition_bundle, source_input, facts, registry, bundle, mode=manifest["mode"])
+        if manifest["acquisition_qa_audit"].get("source_catalog_sha256"):
+            require(source_input.get("source_catalog_sha256") == acquisition_bundle.get("source_catalog_sha256") ==
+                    manifest["acquisition_qa_audit"]["source_catalog_sha256"],
+                    "Prepared acquisition source-catalog provenance differs")
         similarity = read_json(path / "acquisition-similarity.json")
         require(similarity == manifest.get("acquisition_qa_similarity") ==
                 acquisition_similarity(facts, acquisition_bundle["records"]),

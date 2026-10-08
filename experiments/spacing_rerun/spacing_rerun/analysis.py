@@ -80,6 +80,8 @@ def summarize_bundles(bundle_paths, output, primary_delay, margin=.02, preregist
     bundles, costs = [], []
     for path in map(Path, bundle_paths):
         manifest = read_json(path / "prepared" / "manifest.json")
+        require(not manifest.get("config", {}).get("development_scale_probe"),
+                "Stage-1-only scale probes cannot enter spacing-arm analysis")
         stage2 = read_json(path / "prepared" / "schedule.json")["stage2_steps"]
         policy = manifest.get("rehearsal_unit_policy", LEGACY_POLICY)
         expected_metrics = {UNIT_POLICY: UNIT_METRICS, GROUNDED_POLICY: GROUNDED_METRICS,

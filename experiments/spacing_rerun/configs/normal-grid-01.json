@@ -1,0 +1,62 @@
+{
+  "mode": "development",
+  "rehearsal_unit_policy": "grounded_assertion_v1",
+  "qa_teaching_diagnostics": true,
+  "qa_teaching_policy": "all_source_questions_v1",
+  "model_revision": "4b1b42ff7c5224a077c4f5624824dd7c8bbe98d7",
+  "outer_seed": 20261007,
+  "split_seed": 999,
+  "order_seed": 2701,
+  "train_seed": 2801,
+  "eval_seed": 2901,
+  "batch_size": 16,
+  "microbatch_size": 2,
+  "review_cap": 8,
+  "cohort_size": 2,
+  "qa_per_step": 4,
+  "loss_tokens_per_example": 36,
+  "context_length": 96,
+  "eval_context_length": 256,
+  "span": 252,
+  "max_stagger_span_ratio": 0.75,
+  "buffer_steps": 168,
+  "primary_delay": 84,
+  "eval_delays": [
+    21,
+    84,
+    168
+  ],
+  "stage2_eval_fractions": [
+    0.25,
+    0.5,
+    0.75
+  ],
+  "learning_rate": 0.0001,
+  "warmup_steps": 10,
+  "acquisition_exposures": [
+    2,
+    3,
+    4,
+    6,
+    8
+  ],
+  "acquisition_target_min": 0.4,
+  "acquisition_target_max": 0.7,
+  "eval_batch_size": 16,
+  "generation_batch_size": 16,
+  "max_answer_tokens": 32,
+  "generic_eval_sequences": 32,
+  "checkpoint_every_updates": 50,
+  "log_every_updates": 10,
+  "max_runtime_seconds": 72000,
+  "max_attempts": 3,
+  "development_design_limit": {
+    "lr_candidates": 3,
+    "replicate_bundles": 8
+  },
+  "training_unit_grounding": "../data/development-grounded-declarations.json",
+  "acquisition_policy": "declaration_plus_source_qa_v1",
+  "acquisition_qa_bundle": "../data/development-acquisition-qa.json",
+  "acquisition_qa_source_input": "../data/development-acquisition-source-input.json",
+  "acquisition_trajectory_policy": "fixed_grid_no_early_stop_v1"
+}

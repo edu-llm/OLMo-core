@@ -9,7 +9,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from spacing_rerun.acquisition import (SOURCE_QA_ACQUISITION_POLICY, acquisition_identity,
-                                      acquisition_key, acquisition_similarity, validate_acquisition_bundle)
+                                      acquisition_key, acquisition_similarity, validate_acquisition_bundle,
+                                      GRID_TRAJECTORY_POLICY)
 from spacing_rerun.analysis import validate_analysis_methods
 from spacing_rerun.common import digest, write_json
 from spacing_rerun.data import REVISION, normalize
@@ -420,6 +421,93 @@ class AcquisitionTests(unittest.TestCase):
                 self.assertEqual(set(counts.values()), {4})
                 self.assertTrue(all(not row["acquisition_qa_examples"] for row in logs))
                 self.assertTrue(all(row["acquisition_qa_tokens_total"] == 78 * 36 for row in logs))
+
+                # Run the actual model/Adam/RNG trajectory through every frozen
+                # dose. Controlled metrics test gates, not learned accuracy.
+                from spacing_rerun.acquisition_grid import (checkpoint_digest, choose_acquisition_grid_checkpoint)
+                from spacing_rerun.training import checkpoint_state_equal
+                from test_acquisition_grid import grid_fixture
+                grid_manifest = copy.deepcopy(manifest)
+                grid_manifest["config"].update(acquisition_trajectory_policy=GRID_TRAJECTORY_POLICY,
+                                               acquisition_exposures=[2, 3, 4, 6, 8], max_attempts=6)
+                grid_schedule = compile_schedule(training_records, grid_manifest["config"])
+                grid_manifest["schedule_sha256"] = grid_schedule["sha256"]
+                rehash(grid_manifest)
+                grid_prepared = Path(directory) / "grid-prepared"
+                for path in prepared.iterdir():
+                    write_json(grid_prepared / path.name, json.loads(path.read_text()))
+                write_json(grid_prepared / "manifest.json", grid_manifest)
+                write_json(grid_prepared / "schedule.json", grid_schedule)
+                grid_output = Path(directory) / "grid-output"
+                with self.assertRaisesRegex(ValueError, "cannot be truncated"):
+                    run_acquisition(grid_prepared, grid_output, device="cpu", fixed_exposures=2, model_factory=factory)
+                with patch("spacing_rerun.training.evaluate", side_effect=controlled_gate(.5)):
+                    run_acquisition(grid_prepared, grid_output, device="cpu", model_factory=factory)
+                grid_decision = json.loads((grid_output / "acquisition_decision.json").read_text())
+                self.assertEqual(set(grid_decision["grid_results"]), {"2", "3", "4", "6", "8"})
+                self.assertIsNone(grid_decision["selected_E"])
+                self.assertFalse(grid_decision["acquisition_usable"])
+                self.assertEqual(grid_decision["final_exposures"], 8)
+                hashes = {}
+                for exposure in [2, 3, 4, 6, 8]:
+                    dose = grid_output / f"stage1-E{exposure:03}.pt"
+                    hashes[exposure] = checkpoint_digest(dose)
+                    state = torch.load(dose, weights_only=False)
+                    self.assertTrue(state["model"])
+                    self.assertTrue(state["optimizer"]["state"])
+                    self.assertEqual(set(state["rng"]), {"python", "numpy", "torch", "cuda"})
+                    self.assertEqual(state["progress"]["global_step"], exposure * 13)
+                    self.assertEqual(state["progress"]["epoch"], exposure)
+                    self.assertEqual(state["progress"]["epoch_cursor"], 0)
+                    self.assertTrue(state["progress"]["acquisition_usable"])
+                    self.assertEqual(set(state["progress"]["acquisition_qa_target_doses"].values()), {exposure})
+                    self.assertEqual({tuple(v) for v in state["progress"]["acquisition_qa_variant_doses"].values()},
+                                     {((exposure + 1) // 2, exposure // 2)})
+                    self.assertEqual(state["progress"]["acquisition_qa_tokens_total"], exposure * 78 * 36)
+                    self.assertEqual(grid_decision["grid_results"][str(exposure)]["checkpoint_sha256"], hashes[exposure])
+
+                # Recover a crash after final atomic checkpoint but before the
+                # decision write. Completed recovery must recreate its decision.
+                (grid_output / "acquisition_decision.json").unlink()
+                run_acquisition(grid_prepared, grid_output, device="cpu", model_factory=factory)
+                self.assertEqual(json.loads((grid_output / "acquisition_decision.json").read_text()), grid_decision)
+                final_state = torch.load(grid_output / "grid-final.pt", weights_only=False)
+
+                # Replay from the E4 checkpoint in the hash-write crash window.
+                # Existing E4/6/8 files must remain byte-identical.
+                resume_state = torch.load(grid_output / "stage1-E004.pt", weights_only=False)
+                resume_state["progress"].update(status="running", acquisition_usable=False)
+                torch.save(resume_state, grid_output / "latest.pt")
+                with patch("spacing_rerun.training.evaluate", side_effect=controlled_gate(.5)):
+                    run_acquisition(grid_prepared, grid_output, device="cpu", model_factory=factory)
+                replayed = torch.load(grid_output / "grid-final.pt", weights_only=False)
+                for key in ("model", "optimizer", "rng", "progress"):
+                    self.assertTrue(checkpoint_state_equal(final_state[key], replayed[key]), key)
+                self.assertEqual({e: checkpoint_digest(grid_output / f"stage1-E{e:03}.pt") for e in hashes}, hashes)
+
+                # A normal full grid continues only through the global selection
+                # artifact, and restores the actual selected E2 state.
+                rule, nine_decisions = grid_fixture()
+                rule["normal_manifest_sha256"][0] = grid_manifest["sha256"]
+                rehash(rule)
+                nine_decisions[0] = grid_decision
+                outputs = [grid_output]
+                for i, other in enumerate(nine_decisions[1:], 1):
+                    other_output = Path(directory) / f"other-grid-{i}"
+                    write_json(other_output / "acquisition_decision.json", other)
+                    outputs.append(other_output)
+                write_json(Path(directory) / "rule.json", rule)
+                selection_path = Path(directory) / "selection.json"
+                selection = choose_acquisition_grid_checkpoint(grid_prepared, outputs, Path(directory) / "rule.json", selection_path)
+                self.assertEqual(selection["selected_E"], 2)
+                with self.assertRaisesRegex(ValueError, "requires a frozen common-dose"):
+                    run_arm(grid_prepared, Path(directory) / "grid-guarded-UNI", grid_output / "stage1-E002.pt", "UNI",
+                            device="cpu", model_factory=factory)
+                run_arm(grid_prepared, Path(directory) / "grid-UNI", grid_output / "stage1-E002.pt", "UNI",
+                        device="cpu", model_factory=factory, acquisition_selection=selection_path)
+                continued = torch.load(Path(directory) / "grid-UNI/latest.pt", weights_only=False)
+                self.assertEqual(continued["progress"]["epoch"], 2)
+                self.assertEqual(set(continued["progress"]["acquisition_qa_target_doses"].values()), {2})
                 corrupted = copy.deepcopy(bundle)
                 corrupted["records"][0]["questions"][0] += " tampered"
                 write_json(prepared / "acquisition-qa.json", corrupted)

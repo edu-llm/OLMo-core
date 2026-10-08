@@ -18,7 +18,7 @@ from .evaluation import evaluate
 from .prepare import load_prepared
 from .schedule import ARMS, stage1_epoch
 from .units import LEGACY_POLICY, UNIT_POLICY, UNIT_METRICS, schedule_records, training_key
-from .acquisition import SOURCE_QA_ACQUISITION_POLICY
+from .acquisition import SOURCE_QA_ACQUISITION_POLICY, GRID_TRAJECTORY_POLICY
 
 
 def capture_rng():
@@ -387,8 +387,33 @@ class Session:
         return result
 
 
-def run_acquisition(prepared, output, *, device="cuda", fixed_exposures=None, preregistration=None, model_factory=None):
+def run_acquisition(prepared, output, *, device="cuda", fixed_exposures=None, preregistration=None, model_factory=None,
+                    acquisition_policy_core=None, acquisition_manifest_binding=None):
     manifest, _, _ = load_prepared(prepared)
+    full_grid = manifest["config"].get("acquisition_trajectory_policy") == GRID_TRAJECTORY_POLICY
+    require(not full_grid or fixed_exposures is None, "A full acquisition grid cannot be truncated with fixed exposures")
+    core, trial, binding = None, None, None
+    require(acquisition_manifest_binding is None or acquisition_policy_core is not None,
+            "Manifest binding requires its frozen acquisition policy core")
+    if acquisition_policy_core is not None:
+        from .acquisition_policy import aware_time, manifest_policy_trial
+        require(full_grid, "A frozen grid policy core requires a full acquisition grid")
+        core = read_json(acquisition_policy_core)
+        trial = manifest_policy_trial(manifest, core)
+        require(aware_time(core["frozen_utc"]) <= datetime.datetime.now(datetime.timezone.utc),
+                "Grid policy core freeze is in the future")
+        if trial["development_scale_probe"]:
+            from .acquisition_policy import validate_manifest_binding
+            require(acquisition_manifest_binding is not None, "Scale grids require the actual nine-manifest binding before launch")
+            binding = read_json(acquisition_manifest_binding)
+            bound_core, validated = validate_manifest_binding(binding)
+            require(bound_core["sha256"] == core["sha256"] and any(
+                row["manifest_sha256"] == manifest["sha256"] for row, _, _ in validated),
+                "Scale manifest binding differs from its frozen policy/manifest")
+            require(aware_time(binding["binding_utc"]) <= datetime.datetime.now(datetime.timezone.utc),
+                    "Acquisition manifest binding timestamp is in the future")
+        else:
+            require(acquisition_manifest_binding is None, "Normal grids launch under the original policy core")
     if manifest["mode"] == "confirmation":
         prereg = verify_preregistration(preregistration, manifest)
         require(fixed_exposures == prereg["E"], "Fixed Stage-1 dose must match preregistration")
@@ -399,9 +424,24 @@ def run_acquisition(prepared, output, *, device="cuda", fixed_exposures=None, pr
     else:
         milestones = [fixed_exposures]
     s.resume()
-    if s.progress["status"] == "stage1_complete":
+    if s.progress.get("policy_core_sha256"):
+        require(core is not None and s.progress["policy_core_sha256"] == core["sha256"] and
+                s.progress["policy_trial_id"] == trial["trial_id"], "Resume requires the same frozen acquisition policy core")
+    if core is not None:
+        require(s.progress["global_step"] == 0 or s.progress.get("policy_core_sha256") == core["sha256"],
+                "Cannot attach a newly frozen policy core to an already-started grid")
+        s.progress.update(policy_core_sha256=core["sha256"], policy_trial_id=trial["trial_id"])
+        if binding is not None:
+            require(s.progress["global_step"] == 0 or s.progress.get("policy_manifest_binding_sha256") == binding["sha256"],
+                    "Scale resume requires the original actual manifest binding")
+            s.progress["policy_manifest_binding_sha256"] = binding["sha256"]
+    if s.progress["status"] in ("stage1_complete", "acquisition_grid_complete"):
+        write_acquisition_decision(s, full_grid)
         s.write_attempt("already_complete")
         return
+    if full_grid:
+        s.progress.setdefault("acquisition_grid_results", {})
+        s.progress.setdefault("acquisition_grid_started_utc", s.started_utc)
     if s.progress["global_step"] == 0:
         s.evaluate("baseline", behavior=True)
     accepted = False
@@ -410,10 +450,58 @@ def run_acquisition(prepared, output, *, device="cuda", fixed_exposures=None, pr
         if epoch in milestones and s.progress["epoch_cursor"] == 0:
             result = s.evaluate(f"acquisition-E{epoch:03}", behavior=True, generic=True)
             em = result["variants"]["canonical"]["aggregate"]["old"]["exact_match_event_macro"]
-            confirmation_fixed_dose = s.manifest["mode"] == "confirmation" and fixed_exposures is not None
-            if (confirmation_fixed_dose or em >= s.config["acquisition_target_min"]) and s.progress["global_step"] >= s.config["warmup_steps"]:
-                accepted = confirmation_fixed_dose or em <= s.config["acquisition_target_max"]
-                break
+            if full_grid:
+                from .acquisition_grid import checkpoint_digest
+                require(s.progress["global_step"] >= s.config["warmup_steps"], "Full-grid checkpoint precedes complete warmup")
+                within_gate = s.config["acquisition_target_min"] <= em <= s.config["acquisition_target_max"]
+                checkpoint_name = f"stage1-E{epoch:03}.pt"
+                prior_entry = s.progress["acquisition_grid_results"].get(str(epoch))
+                entry = {
+                    "exposures": epoch, "old_exact_match_event_macro": em,
+                    "within_acquisition_gate": within_gate, "checkpoint": checkpoint_name}
+                if prior_entry:
+                    require(all(prior_entry.get(key) == value for key, value in entry.items()),
+                            "Resumed acquisition grid milestone differs")
+                s.progress["acquisition_grid_results"][str(epoch)] = entry
+                s.audit_exposures()
+                before_status = s.progress["status"]
+                s.progress["status"], s.progress["acquisition_usable"] = "stage1_complete", within_gate
+                checkpoint_path = s.output / checkpoint_name
+                if checkpoint_path.exists():
+                    import torch
+                    if prior_entry and prior_entry.get("checkpoint_sha256"):
+                        require(checkpoint_digest(checkpoint_path) == prior_entry["checkpoint_sha256"],
+                                "Immutable grid-dose checkpoint was modified")
+                    existing = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+                    require(existing["manifest_sha256"] == s.manifest["sha256"] and
+                            existing["progress"]["epoch"] == epoch and existing["progress"]["epoch_cursor"] == 0 and
+                            existing["progress"]["status"] == "stage1_complete" and
+                            existing["progress"]["acquisition_usable"] == within_gate,
+                            "Existing immutable grid-dose checkpoint differs")
+                    # A crash can occur after the atomic dose write but before
+                    # its hash reaches latest.pt. In that window, compare actual
+                    # replayed model/optimizer/RNG state before reusing the file.
+                    if not prior_entry or not prior_entry.get("checkpoint_sha256"):
+                        require(checkpoint_state_equal(existing["model"], s.model.state_dict()) and
+                                checkpoint_state_equal(existing["optimizer"], s.optimizer.state_dict()) and
+                                checkpoint_state_equal(existing["rng"], capture_rng()) and
+                                checkpoint_state_equal(existing["progress"], s.progress),
+                                "Replayed state differs from immutable grid-dose checkpoint")
+                    del existing
+                else:
+                    s.checkpoint(checkpoint_name)
+                s.progress["status"], s.progress["acquisition_usable"] = before_status, False
+                s.progress["acquisition_grid_results"][str(epoch)]["checkpoint_sha256"] = checkpoint_digest(checkpoint_path)
+                s.checkpoint()
+                if epoch >= max(milestones):
+                    break
+                # Continue the entire frozen grid even when an earlier dose is usable.
+                epoch = s.progress["epoch"]
+            else:
+                confirmation_fixed_dose = s.manifest["mode"] == "confirmation" and fixed_exposures is not None
+                if (confirmation_fixed_dose or em >= s.config["acquisition_target_min"]) and s.progress["global_step"] >= s.config["warmup_steps"]:
+                    accepted = confirmation_fixed_dose or em <= s.config["acquisition_target_max"]
+                    break
         if epoch >= max(milestones):
             break
         rows = stage1_epoch(s.training_records, epoch, s.config, s.acquisition_records)
@@ -425,23 +513,60 @@ def run_acquisition(prepared, output, *, device="cuda", fixed_exposures=None, pr
         s.progress["epoch_cursor"] = 0
         if s.progress["epoch"] in milestones:
             s.checkpoint()
-    s.progress["status"] = "stage1_complete"
+    s.progress["status"] = "acquisition_grid_complete" if full_grid else "stage1_complete"
     s.progress["acquisition_usable"] = accepted
     s.audit_exposures()
-    s.checkpoint("stage1.pt")
+    s.checkpoint("grid-final.pt" if full_grid else "stage1.pt")
     s.checkpoint()
+    write_acquisition_decision(s, full_grid)
+    s.write_attempt("complete")
+
+
+def checkpoint_state_equal(left, right):
+    import torch
+    import numpy as np
+    if torch.is_tensor(left):
+        return torch.is_tensor(right) and left.dtype == right.dtype and torch.equal(left.cpu(), right.cpu())
+    if isinstance(left, np.ndarray):
+        return isinstance(right, np.ndarray) and np.array_equal(left, right)
+    if isinstance(left, dict):
+        return isinstance(right, dict) and left.keys() == right.keys() and all(
+            checkpoint_state_equal(value, right[key]) for key, value in left.items())
+    if isinstance(left, (list, tuple)):
+        return type(left) is type(right) and len(left) == len(right) and all(
+            checkpoint_state_equal(a, b) for a, b in zip(left, right))
+    return left == right
+
+
+def write_acquisition_decision(s, full_grid):
+    accepted = bool(s.progress["acquisition_usable"])
     acquisition_audit = ({"acquisition_policy": SOURCE_QA_ACQUISITION_POLICY,
                           "old_declaration_unit_dose": s.progress["epoch"],
                           "acquisition_qa_target_doses": s.progress["acquisition_qa_target_doses"],
                           "acquisition_qa_variant_doses": s.progress["acquisition_qa_variant_doses"],
                           "acquisition_qa_tokens_total": s.progress["acquisition_qa_tokens_total"],
                           "stage2_acquisition_qa_dose": 0} if s.acquisition_records is not None else {})
-    write_json(s.output / "acquisition_decision.json", {
+    trajectory_audit = ({"trajectory_policy": GRID_TRAJECTORY_POLICY, "status": "acquisition_grid_complete",
+                         "grid_results": s.progress["acquisition_grid_results"],
+                         "grid_started_utc": s.progress["acquisition_grid_started_utc"],
+                         "development_scale_probe": s.config.get("development_scale_probe", False),
+                         "final_exposures": s.progress["epoch"]} if full_grid else {})
+    if s.progress.get("policy_core_sha256"):
+        trajectory_audit.update(policy_core_sha256=s.progress["policy_core_sha256"],
+                                policy_trial_id=s.progress["policy_trial_id"])
+    if s.progress.get("policy_manifest_binding_sha256"):
+        trajectory_audit["policy_manifest_binding_sha256"] = s.progress["policy_manifest_binding_sha256"]
+    decision = {
         "schema": SCHEMA, "manifest_sha256": s.manifest["sha256"],
-        "mode": s.manifest["mode"], "selected_E": s.progress["epoch"],
-        "acquisition_usable": accepted, "confirmation_ready": False, **acquisition_audit,
-        "next_step": "Run development interference diagnostics" if accepted else "Revise the acquisition assay before continuation"})
-    s.write_attempt("complete")
+        "mode": s.manifest["mode"], "selected_E": None if full_grid else s.progress["epoch"],
+        "acquisition_usable": accepted, "confirmation_ready": False, **acquisition_audit, **trajectory_audit,
+        "next_step": ("Select a common dose with the frozen nine-grid rule" if full_grid else
+                      "Run development interference diagnostics" if accepted else "Revise the acquisition assay before continuation")}
+    path = s.output / "acquisition_decision.json"
+    if path.exists():
+        require(read_json(path) == decision, "Completed acquisition decision was modified; never overwrite")
+    else:
+        write_json(path, decision)
 
 
 def verify_preregistration(path, manifest):
@@ -468,9 +593,15 @@ def verify_preregistration(path, manifest):
     return prereg
 
 
-def run_arm(prepared, output, shared_checkpoint, arm, *, preregistration=None, device="cuda", model_factory=None):
+def run_arm(prepared, output, shared_checkpoint, arm, *, preregistration=None, device="cuda", model_factory=None,
+            acquisition_selection=None):
     require(arm in ARMS, "Unknown arm")
     manifest, _, _ = load_prepared(prepared)
+    require(not manifest["config"].get("development_scale_probe"), "Development scale probes are Stage-1-only; arms are prohibited")
+    grid_selection = None
+    if manifest["config"].get("acquisition_trajectory_policy") == GRID_TRAJECTORY_POLICY:
+        from .acquisition_grid import verify_acquisition_grid_selection
+        grid_selection = verify_acquisition_grid_selection(acquisition_selection, manifest, shared_checkpoint)
     if manifest["mode"] == "confirmation":
         verify_preregistration(preregistration, manifest)
     s = Session(prepared, output, device=device, model_factory=model_factory)
@@ -484,6 +615,8 @@ def run_arm(prepared, output, shared_checkpoint, arm, *, preregistration=None, d
         require(s.progress.get("acquisition_usable"), "Development acquisition failed; diagnose before continuation")
         if prereg:
             require(s.progress["epoch"] == prereg["E"], "Stage-1 dose differs from preregistration")
+        if grid_selection:
+            require(s.progress["epoch"] == grid_selection["selected_E"], "Stage-1 dose differs from common-grid selection")
         s.progress["arm"] = arm
         s.checkpoint()
     require(s.progress["arm"] == arm, "Cannot resume a different arm in this directory")

@@ -173,7 +173,9 @@ Expensive behavior/MCQ runs occur at baseline, acquisition milestones, shared St
 
 Analysis requires complete five-arm bundles. It reports paired replicate differences, 90% and 95% t intervals, strict loss-equivalence bounds, meaningful directional bounds, and Holm correction for H1/H3/HG. A single development bundle produces descriptive estimates only. Stage-2 trapezoidal AUC excludes the buffer. Raw control trajectories and the old-minus-control change sensitivity remain available. No behavioral-equivalence claim is implemented automatically. Event-resampling/mixed-model sensitivities and publication figures remain analysis work after data collection.
 
-## Confirmation gate
+## Historical confirmation gate
+
+The following describes the initial source-unit protocol. The active [final assay amendment](../../plans/spacing_final_assay_amendment_20261008.md) requires grounded source-QA acquisition, actual independent audit coverage, human review recorded as false, and guarded confirmation implementation before launch. This historical protocol cannot authorize the current main run.
 
 Preparation with `mode: confirmation` requires an audit JSON containing `cross_event_alias_audit_complete: true`, `answer_alias_audit_complete: true`, and a verified `paraphrase` for every old canonical fact under `facts[FACT_ID]`. Optional `aliases` must be reviewed. Booleans record a human audit, not an automated proof.
 
@@ -188,3 +190,13 @@ Unit tests additionally cover multiple-answer source preservation, rewritten-tex
 Grounding tests check complete source/probe retention, exact per-group E and four-review doses, pinned factsheet mismatches, missing review, altered evidence, duplicated membership, changed source conflicts and runtime probe-to-group corruption. Natural relative clauses are allowed; complete held-out question forms and question/answer training markers are rejected. Both expanded source teaching and grounded assertion policies remain development-only until their remaining scientific audits and confirmation protocol are implemented and frozen.
 
 The CPU tests cover transitive duplicate clusters, cross-event leakage, outer split isolation, exact schedules after JSON roundtrips, endpoint/dose corruption, generic budgets, context overflow, event aggregation, MCQ ties, answer/EOS alignment, full optimizer/RNG resume with dropout, gradient accumulation, and restart-log truncation. A mid-epoch interruption test verifies all subsequent shuffled epochs, exact fact doses and bitwise-equal final model/optimizer state. Diagnostic tests cover QA-role aggregation, statement masks and audited answer-span exclusions. The runtime and diagnostic have also been exercised with a tiny instance of the actual `hf_olmo` model class. A numerical A/A checkpoint check on the actual GPU/backend is still required before confirmation. CUDA acquisition, full-run memory, elapsed time and scientific assay quality are measured by the first jobs, not inferred from CPU tests.
+
+## Frozen acquisition grid
+
+The prospective policy core in `configs/acquisition-grid-policy-core-20261008.json` binds six normal and three acquisition-only scale trials, seeds, role hashes and source provenance. Normal trajectories launch with `calibrate --acquisition-policy-core CORE`. Each completes E2/3/4/6/8 and retains immutable full-state dose checkpoints; none stops at the first passing milestone.
+
+After both scale source chunks receive actual independent review and all nine manifests are prepared, `bind-acquisition-grid-manifests --policy-core CORE --prepared PATH` repeated for all nine, with `--output binding.json`, records the actual binding time. Scale calibration also requires `--acquisition-manifest-binding binding.json` before model initialization. Scale probes cannot run arms or enter spacing-effect analysis.
+
+After all nine trajectories terminate, `choose-acquisition-grid-checkpoint --prepared NORMAL --grid-output PATH` repeated nine times, with `--selection-rule binding.json --output selection.json`, selects a common E only if all nine score within40–70%. The scaled mean closest to55% chooses among valid doses, ties to the lower E. An empty common gate records failure. Normal arms require `--acquisition-selection selection.json` and its exact immutable dose checkpoint. The selector revalidates policy, manifest, decision and checkpoint hashes.
+
+The grid changes trajectory handling and provenance without changing numerical Session methods from the actual GPU A/A commit `fb27597f`. The complete implementation suite has77 passing tests plus27 mutation subtests; independent root verification of29 acquisition/grid/policy tests and27 subtests also passed.

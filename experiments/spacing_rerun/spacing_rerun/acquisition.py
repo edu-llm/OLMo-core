@@ -9,6 +9,8 @@ from .data import REVISION, normalize
 
 DECLARATION_POLICY = "declaration_only_v1"
 SOURCE_QA_ACQUISITION_POLICY = "declaration_plus_source_qa_v1"
+ADAPTIVE_TRAJECTORY_POLICY = "adaptive_first_usable_v1"
+GRID_TRAJECTORY_POLICY = "fixed_grid_no_early_stop_v1"
 
 
 def acquisition_identity(unit_id, answer):

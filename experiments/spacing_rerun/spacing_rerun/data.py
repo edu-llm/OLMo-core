@@ -114,6 +114,32 @@ def assign_roles(facts, partition, mode, seed):
     return manifest
 
 
+def assign_development_scale_roles(facts, partition, mode, counts, fixed_qa_events):
+    """Stage-1 scale probe: maximize old coverage using metadata-only placeholders."""
+    from .units import unit_identity
+    require(mode == "development", "Scale-probe role geometry is development-only")
+    require(counts == {"old": 15, "new": 1, "control": 1, "qa": 3}, "Unsupported development scale role counts")
+    events = set(partition["development"])
+    require(len(events) == 20 and len(fixed_qa_events) == 3 and len(set(fixed_qa_events)) == 3 and
+            set(fixed_qa_events) <= events, "Scale probe requires three fixed development teaching events")
+    units = collections.defaultdict(set)
+    for fact in facts:
+        if fact["event"] in events:
+            units[fact["event"]].add(unit_identity(fact["event"], fact.get("source_statement", fact["statement"]))[0])
+    require(all(units[event] for event in events), "Every development scale event requires source units")
+    remaining = sorted(events - set(fixed_qa_events), key=lambda event: (len(units[event]), event))
+    roles = {event: "old" for event in remaining}
+    roles[remaining[0]], roles[remaining[1]] = "new", "control"
+    roles.update({event: "qa" for event in fixed_qa_events})
+    selected = [dict(fact, role=roles[fact["event"]]) for fact in facts if fact["event"] in roles]
+    manifest = {"mode": "development", "counts": counts, "roles": roles, "facts": selected,
+                "outer_partition_sha256": partition["sha256"], "development_scale_probe": True,
+                "role_selection_policy": "two_smallest_source_unit_events_new_then_control; other_non_teaching_events_old",
+                "source_unit_counts_by_event": {event: len(units[event]) for event in sorted(events)}}
+    manifest["sha256"] = digest(manifest)
+    return manifest
+
+
 def join_metadata(facts, source_tables):
     """Record every source metadata join; evaluation adapters can consume frozen MCQs."""
     report = {}

@@ -1,0 +1,671 @@
+{
+  "candidate_exposures": [
+    2,
+    3,
+    4,
+    6,
+    8
+  ],
+  "dataset_revision": "131cb74fdc3e601b5e896ed768ad9852ea35a8f9",
+  "frozen_utc": "2026-10-08T06:59:52.626772+00:00",
+  "policy": "all_nine_gate_then_scaled_mean_nearest_0_55_tie_lower_E_v1",
+  "scaled_mean_target": 0.55,
+  "schema": "spacing-acquisition-grid-policy-core-v1",
+  "sha256": "56d0d72fcfbff828dafe27e6713041fc9b0d6ed0ad9de2a799c312083d9975cc",
+  "source_catalog_sha256": "aff2b524e93eb0b19d3b0f1ee00d811904e35d5a2ee89c730a63dcb154818d56",
+  "target_max": 0.7,
+  "target_min": 0.4,
+  "trials": [
+    {
+      "config_frame": {
+        "acquisition_exposures": [
+          2,
+          3,
+          4,
+          6,
+          8
+        ],
+        "acquisition_policy": "declaration_plus_source_qa_v1",
+        "acquisition_target_max": 0.7,
+        "acquisition_target_min": 0.4,
+        "acquisition_trajectory_policy": "fixed_grid_no_early_stop_v1",
+        "batch_size": 16,
+        "buffer_steps": 168,
+        "checkpoint_every_updates": 50,
+        "cohort_size": 2,
+        "context_length": 96,
+        "development_design_limit": {
+          "lr_candidates": 3,
+          "replicate_bundles": 8
+        },
+        "eval_batch_size": 16,
+        "eval_context_length": 256,
+        "eval_delays": [
+          21,
+          84,
+          168
+        ],
+        "eval_seed": 2901,
+        "generation_batch_size": 16,
+        "generic_eval_sequences": 32,
+        "learning_rate": 0.0001,
+        "log_every_updates": 10,
+        "loss_tokens_per_example": 36,
+        "max_answer_tokens": 32,
+        "max_attempts": 3,
+        "max_runtime_seconds": 72000,
+        "max_stagger_span_ratio": 0.75,
+        "microbatch_size": 2,
+        "mode": "development",
+        "model_revision": "4b1b42ff7c5224a077c4f5624824dd7c8bbe98d7",
+        "order_seed": 2701,
+        "outer_seed": 20261007,
+        "primary_delay": 84,
+        "qa_per_step": 4,
+        "qa_teaching_diagnostics": true,
+        "qa_teaching_policy": "all_source_questions_v1",
+        "rehearsal_unit_policy": "grounded_assertion_v1",
+        "review_cap": 8,
+        "span": 252,
+        "split_seed": 999,
+        "stage2_eval_fractions": [
+          0.25,
+          0.5,
+          0.75
+        ],
+        "train_seed": 2801,
+        "warmup_steps": 10
+      },
+      "development_scale_probe": false,
+      "roles_sha256": "c75e25d94d40784c41fb17f07edd8061903ca4c5bf5874bcff5bb1b8e0725d80",
+      "source_frame": {
+        "acquisition_qa_bundle_sha256": "53820aa79beaa1d82dbc104017e0b0dd3d31be81f9f3475e0e90c5a62278c971",
+        "acquisition_source_input_sha256": "08050cf14f3d3af87476e4931291b3ba855b4bef3e509492731be8dbabf063e2",
+        "grounding_bundle_sha256": "9356ea7942b747c7c73a1a8c0e1c54522b6670cce1b6ad031afdf9fcf24171a6"
+      },
+      "trial_id": "normal-01"
+    },
+    {
+      "config_frame": {
+        "acquisition_exposures": [
+          2,
+          3,
+          4,
+          6,
+          8
+        ],
+        "acquisition_policy": "declaration_plus_source_qa_v1",
+        "acquisition_target_max": 0.7,
+        "acquisition_target_min": 0.4,
+        "acquisition_trajectory_policy": "fixed_grid_no_early_stop_v1",
+        "batch_size": 16,
+        "buffer_steps": 168,
+        "checkpoint_every_updates": 50,
+        "cohort_size": 2,
+        "context_length": 96,
+        "development_design_limit": {
+          "lr_candidates": 3,
+          "replicate_bundles": 8
+        },
+        "eval_batch_size": 16,
+        "eval_context_length": 256,
+        "eval_delays": [
+          21,
+          84,
+          168
+        ],
+        "eval_seed": 2902,
+        "generation_batch_size": 16,
+        "generic_eval_sequences": 32,
+        "learning_rate": 0.0001,
+        "log_every_updates": 10,
+        "loss_tokens_per_example": 36,
+        "max_answer_tokens": 32,
+        "max_attempts": 3,
+        "max_runtime_seconds": 72000,
+        "max_stagger_span_ratio": 0.75,
+        "microbatch_size": 2,
+        "mode": "development",
+        "model_revision": "4b1b42ff7c5224a077c4f5624824dd7c8bbe98d7",
+        "order_seed": 2702,
+        "outer_seed": 20261007,
+        "primary_delay": 84,
+        "qa_per_step": 4,
+        "qa_teaching_diagnostics": true,
+        "qa_teaching_policy": "all_source_questions_v1",
+        "rehearsal_unit_policy": "grounded_assertion_v1",
+        "review_cap": 8,
+        "span": 252,
+        "split_seed": 999,
+        "stage2_eval_fractions": [
+          0.25,
+          0.5,
+          0.75
+        ],
+        "train_seed": 2802,
+        "warmup_steps": 10
+      },
+      "development_scale_probe": false,
+      "roles_sha256": "c75e25d94d40784c41fb17f07edd8061903ca4c5bf5874bcff5bb1b8e0725d80",
+      "source_frame": {
+        "acquisition_qa_bundle_sha256": "53820aa79beaa1d82dbc104017e0b0dd3d31be81f9f3475e0e90c5a62278c971",
+        "acquisition_source_input_sha256": "08050cf14f3d3af87476e4931291b3ba855b4bef3e509492731be8dbabf063e2",
+        "grounding_bundle_sha256": "9356ea7942b747c7c73a1a8c0e1c54522b6670cce1b6ad031afdf9fcf24171a6"
+      },
+      "trial_id": "normal-02"
+    },
+    {
+      "config_frame": {
+        "acquisition_exposures": [
+          2,
+          3,
+          4,
+          6,
+          8
+        ],
+        "acquisition_policy": "declaration_plus_source_qa_v1",
+        "acquisition_target_max": 0.7,
+        "acquisition_target_min": 0.4,
+        "acquisition_trajectory_policy": "fixed_grid_no_early_stop_v1",
+        "batch_size": 16,
+        "buffer_steps": 168,
+        "checkpoint_every_updates": 50,
+        "cohort_size": 2,
+        "context_length": 96,
+        "development_design_limit": {
+          "lr_candidates": 3,
+          "replicate_bundles": 8
+        },
+        "eval_batch_size": 16,
+        "eval_context_length": 256,
+        "eval_delays": [
+          21,
+          84,
+          168
+        ],
+        "eval_seed": 2903,
+        "generation_batch_size": 16,
+        "generic_eval_sequences": 32,
+        "learning_rate": 0.0001,
+        "log_every_updates": 10,
+        "loss_tokens_per_example": 36,
+        "max_answer_tokens": 32,
+        "max_attempts": 3,
+        "max_runtime_seconds": 72000,
+        "max_stagger_span_ratio": 0.75,
+        "microbatch_size": 2,
+        "mode": "development",
+        "model_revision": "4b1b42ff7c5224a077c4f5624824dd7c8bbe98d7",
+        "order_seed": 2703,
+        "outer_seed": 20261007,
+        "primary_delay": 84,
+        "qa_per_step": 4,
+        "qa_teaching_diagnostics": true,
+        "qa_teaching_policy": "all_source_questions_v1",
+        "rehearsal_unit_policy": "grounded_assertion_v1",
+        "review_cap": 8,
+        "span": 252,
+        "split_seed": 999,
+        "stage2_eval_fractions": [
+          0.25,
+          0.5,
+          0.75
+        ],
+        "train_seed": 2803,
+        "warmup_steps": 10
+      },
+      "development_scale_probe": false,
+      "roles_sha256": "c75e25d94d40784c41fb17f07edd8061903ca4c5bf5874bcff5bb1b8e0725d80",
+      "source_frame": {
+        "acquisition_qa_bundle_sha256": "53820aa79beaa1d82dbc104017e0b0dd3d31be81f9f3475e0e90c5a62278c971",
+        "acquisition_source_input_sha256": "08050cf14f3d3af87476e4931291b3ba855b4bef3e509492731be8dbabf063e2",
+        "grounding_bundle_sha256": "9356ea7942b747c7c73a1a8c0e1c54522b6670cce1b6ad031afdf9fcf24171a6"
+      },
+      "trial_id": "normal-03"
+    },
+    {
+      "config_frame": {
+        "acquisition_exposures": [
+          2,
+          3,
+          4,
+          6,
+          8
+        ],
+        "acquisition_policy": "declaration_plus_source_qa_v1",
+        "acquisition_target_max": 0.7,
+        "acquisition_target_min": 0.4,
+        "acquisition_trajectory_policy": "fixed_grid_no_early_stop_v1",
+        "batch_size": 16,
+        "buffer_steps": 168,
+        "checkpoint_every_updates": 50,
+        "cohort_size": 2,
+        "context_length": 96,
+        "development_design_limit": {
+          "lr_candidates": 3,
+          "replicate_bundles": 8
+        },
+        "eval_batch_size": 16,
+        "eval_context_length": 256,
+        "eval_delays": [
+          21,
+          84,
+          168
+        ],
+        "eval_seed": 2904,
+        "generation_batch_size": 16,
+        "generic_eval_sequences": 32,
+        "learning_rate": 0.0001,
+        "log_every_updates": 10,
+        "loss_tokens_per_example": 36,
+        "max_answer_tokens": 32,
+        "max_attempts": 3,
+        "max_runtime_seconds": 72000,
+        "max_stagger_span_ratio": 0.75,
+        "microbatch_size": 2,
+        "mode": "development",
+        "model_revision": "4b1b42ff7c5224a077c4f5624824dd7c8bbe98d7",
+        "order_seed": 2704,
+        "outer_seed": 20261007,
+        "primary_delay": 84,
+        "qa_per_step": 4,
+        "qa_teaching_diagnostics": true,
+        "qa_teaching_policy": "all_source_questions_v1",
+        "rehearsal_unit_policy": "grounded_assertion_v1",
+        "review_cap": 8,
+        "span": 252,
+        "split_seed": 999,
+        "stage2_eval_fractions": [
+          0.25,
+          0.5,
+          0.75
+        ],
+        "train_seed": 2804,
+        "warmup_steps": 10
+      },
+      "development_scale_probe": false,
+      "roles_sha256": "c75e25d94d40784c41fb17f07edd8061903ca4c5bf5874bcff5bb1b8e0725d80",
+      "source_frame": {
+        "acquisition_qa_bundle_sha256": "53820aa79beaa1d82dbc104017e0b0dd3d31be81f9f3475e0e90c5a62278c971",
+        "acquisition_source_input_sha256": "08050cf14f3d3af87476e4931291b3ba855b4bef3e509492731be8dbabf063e2",
+        "grounding_bundle_sha256": "9356ea7942b747c7c73a1a8c0e1c54522b6670cce1b6ad031afdf9fcf24171a6"
+      },
+      "trial_id": "normal-04"
+    },
+    {
+      "config_frame": {
+        "acquisition_exposures": [
+          2,
+          3,
+          4,
+          6,
+          8
+        ],
+        "acquisition_policy": "declaration_plus_source_qa_v1",
+        "acquisition_target_max": 0.7,
+        "acquisition_target_min": 0.4,
+        "acquisition_trajectory_policy": "fixed_grid_no_early_stop_v1",
+        "batch_size": 16,
+        "buffer_steps": 168,
+        "checkpoint_every_updates": 50,
+        "cohort_size": 2,
+        "context_length": 96,
+        "development_design_limit": {
+          "lr_candidates": 3,
+          "replicate_bundles": 8
+        },
+        "eval_batch_size": 16,
+        "eval_context_length": 256,
+        "eval_delays": [
+          21,
+          84,
+          168
+        ],
+        "eval_seed": 2905,
+        "generation_batch_size": 16,
+        "generic_eval_sequences": 32,
+        "learning_rate": 0.0001,
+        "log_every_updates": 10,
+        "loss_tokens_per_example": 36,
+        "max_answer_tokens": 32,
+        "max_attempts": 3,
+        "max_runtime_seconds": 72000,
+        "max_stagger_span_ratio": 0.75,
+        "microbatch_size": 2,
+        "mode": "development",
+        "model_revision": "4b1b42ff7c5224a077c4f5624824dd7c8bbe98d7",
+        "order_seed": 2705,
+        "outer_seed": 20261007,
+        "primary_delay": 84,
+        "qa_per_step": 4,
+        "qa_teaching_diagnostics": true,
+        "qa_teaching_policy": "all_source_questions_v1",
+        "rehearsal_unit_policy": "grounded_assertion_v1",
+        "review_cap": 8,
+        "span": 252,
+        "split_seed": 999,
+        "stage2_eval_fractions": [
+          0.25,
+          0.5,
+          0.75
+        ],
+        "train_seed": 2805,
+        "warmup_steps": 10
+      },
+      "development_scale_probe": false,
+      "roles_sha256": "c75e25d94d40784c41fb17f07edd8061903ca4c5bf5874bcff5bb1b8e0725d80",
+      "source_frame": {
+        "acquisition_qa_bundle_sha256": "53820aa79beaa1d82dbc104017e0b0dd3d31be81f9f3475e0e90c5a62278c971",
+        "acquisition_source_input_sha256": "08050cf14f3d3af87476e4931291b3ba855b4bef3e509492731be8dbabf063e2",
+        "grounding_bundle_sha256": "9356ea7942b747c7c73a1a8c0e1c54522b6670cce1b6ad031afdf9fcf24171a6"
+      },
+      "trial_id": "normal-05"
+    },
+    {
+      "config_frame": {
+        "acquisition_exposures": [
+          2,
+          3,
+          4,
+          6,
+          8
+        ],
+        "acquisition_policy": "declaration_plus_source_qa_v1",
+        "acquisition_target_max": 0.7,
+        "acquisition_target_min": 0.4,
+        "acquisition_trajectory_policy": "fixed_grid_no_early_stop_v1",
+        "batch_size": 16,
+        "buffer_steps": 168,
+        "checkpoint_every_updates": 50,
+        "cohort_size": 2,
+        "context_length": 96,
+        "development_design_limit": {
+          "lr_candidates": 3,
+          "replicate_bundles": 8
+        },
+        "eval_batch_size": 16,
+        "eval_context_length": 256,
+        "eval_delays": [
+          21,
+          84,
+          168
+        ],
+        "eval_seed": 2906,
+        "generation_batch_size": 16,
+        "generic_eval_sequences": 32,
+        "learning_rate": 0.0001,
+        "log_every_updates": 10,
+        "loss_tokens_per_example": 36,
+        "max_answer_tokens": 32,
+        "max_attempts": 3,
+        "max_runtime_seconds": 72000,
+        "max_stagger_span_ratio": 0.75,
+        "microbatch_size": 2,
+        "mode": "development",
+        "model_revision": "4b1b42ff7c5224a077c4f5624824dd7c8bbe98d7",
+        "order_seed": 2706,
+        "outer_seed": 20261007,
+        "primary_delay": 84,
+        "qa_per_step": 4,
+        "qa_teaching_diagnostics": true,
+        "qa_teaching_policy": "all_source_questions_v1",
+        "rehearsal_unit_policy": "grounded_assertion_v1",
+        "review_cap": 8,
+        "span": 252,
+        "split_seed": 999,
+        "stage2_eval_fractions": [
+          0.25,
+          0.5,
+          0.75
+        ],
+        "train_seed": 2806,
+        "warmup_steps": 10
+      },
+      "development_scale_probe": false,
+      "roles_sha256": "c75e25d94d40784c41fb17f07edd8061903ca4c5bf5874bcff5bb1b8e0725d80",
+      "source_frame": {
+        "acquisition_qa_bundle_sha256": "53820aa79beaa1d82dbc104017e0b0dd3d31be81f9f3475e0e90c5a62278c971",
+        "acquisition_source_input_sha256": "08050cf14f3d3af87476e4931291b3ba855b4bef3e509492731be8dbabf063e2",
+        "grounding_bundle_sha256": "9356ea7942b747c7c73a1a8c0e1c54522b6670cce1b6ad031afdf9fcf24171a6"
+      },
+      "trial_id": "normal-06"
+    },
+    {
+      "config_frame": {
+        "acquisition_exposures": [
+          2,
+          3,
+          4,
+          6,
+          8
+        ],
+        "acquisition_policy": "declaration_plus_source_qa_v1",
+        "acquisition_target_max": 0.7,
+        "acquisition_target_min": 0.4,
+        "acquisition_trajectory_policy": "fixed_grid_no_early_stop_v1",
+        "batch_size": 16,
+        "buffer_steps": 168,
+        "checkpoint_every_updates": 50,
+        "cohort_size": 2,
+        "context_length": 96,
+        "development_design_limit": {
+          "lr_candidates": 3,
+          "replicate_bundles": 8
+        },
+        "development_fixed_qa_events": [
+          "event_010",
+          "event_017",
+          "event_070"
+        ],
+        "development_role_counts": {
+          "control": 1,
+          "new": 1,
+          "old": 15,
+          "qa": 3
+        },
+        "development_scale_probe": true,
+        "eval_batch_size": 16,
+        "eval_context_length": 256,
+        "eval_delays": [
+          21,
+          84,
+          168
+        ],
+        "eval_seed": 3901,
+        "generation_batch_size": 16,
+        "generic_eval_sequences": 32,
+        "learning_rate": 0.0001,
+        "log_every_updates": 10,
+        "loss_tokens_per_example": 36,
+        "max_answer_tokens": 32,
+        "max_attempts": 3,
+        "max_runtime_seconds": 72000,
+        "max_stagger_span_ratio": 0.75,
+        "microbatch_size": 2,
+        "mode": "development",
+        "model_revision": "4b1b42ff7c5224a077c4f5624824dd7c8bbe98d7",
+        "order_seed": 3701,
+        "outer_seed": 20261007,
+        "primary_delay": 84,
+        "qa_per_step": 4,
+        "qa_teaching_diagnostics": true,
+        "qa_teaching_policy": "all_source_questions_v1",
+        "rehearsal_unit_policy": "grounded_assertion_v1",
+        "review_cap": 8,
+        "span": 252,
+        "split_seed": 999,
+        "stage2_eval_fractions": [
+          0.25,
+          0.5,
+          0.75
+        ],
+        "train_seed": 3801,
+        "warmup_steps": 10
+      },
+      "development_scale_probe": true,
+      "roles_sha256": "2ad7adf89593791ab289358394f12d242264314d0bd489ea43100426b07a0831",
+      "source_frame": {
+        "source_catalog_sha256": "aff2b524e93eb0b19d3b0f1ee00d811904e35d5a2ee89c730a63dcb154818d56"
+      },
+      "trial_id": "scaled-01"
+    },
+    {
+      "config_frame": {
+        "acquisition_exposures": [
+          2,
+          3,
+          4,
+          6,
+          8
+        ],
+        "acquisition_policy": "declaration_plus_source_qa_v1",
+        "acquisition_target_max": 0.7,
+        "acquisition_target_min": 0.4,
+        "acquisition_trajectory_policy": "fixed_grid_no_early_stop_v1",
+        "batch_size": 16,
+        "buffer_steps": 168,
+        "checkpoint_every_updates": 50,
+        "cohort_size": 2,
+        "context_length": 96,
+        "development_design_limit": {
+          "lr_candidates": 3,
+          "replicate_bundles": 8
+        },
+        "development_fixed_qa_events": [
+          "event_010",
+          "event_017",
+          "event_070"
+        ],
+        "development_role_counts": {
+          "control": 1,
+          "new": 1,
+          "old": 15,
+          "qa": 3
+        },
+        "development_scale_probe": true,
+        "eval_batch_size": 16,
+        "eval_context_length": 256,
+        "eval_delays": [
+          21,
+          84,
+          168
+        ],
+        "eval_seed": 3902,
+        "generation_batch_size": 16,
+        "generic_eval_sequences": 32,
+        "learning_rate": 0.0001,
+        "log_every_updates": 10,
+        "loss_tokens_per_example": 36,
+        "max_answer_tokens": 32,
+        "max_attempts": 3,
+        "max_runtime_seconds": 72000,
+        "max_stagger_span_ratio": 0.75,
+        "microbatch_size": 2,
+        "mode": "development",
+        "model_revision": "4b1b42ff7c5224a077c4f5624824dd7c8bbe98d7",
+        "order_seed": 3702,
+        "outer_seed": 20261007,
+        "primary_delay": 84,
+        "qa_per_step": 4,
+        "qa_teaching_diagnostics": true,
+        "qa_teaching_policy": "all_source_questions_v1",
+        "rehearsal_unit_policy": "grounded_assertion_v1",
+        "review_cap": 8,
+        "span": 252,
+        "split_seed": 999,
+        "stage2_eval_fractions": [
+          0.25,
+          0.5,
+          0.75
+        ],
+        "train_seed": 3802,
+        "warmup_steps": 10
+      },
+      "development_scale_probe": true,
+      "roles_sha256": "2ad7adf89593791ab289358394f12d242264314d0bd489ea43100426b07a0831",
+      "source_frame": {
+        "source_catalog_sha256": "aff2b524e93eb0b19d3b0f1ee00d811904e35d5a2ee89c730a63dcb154818d56"
+      },
+      "trial_id": "scaled-02"
+    },
+    {
+      "config_frame": {
+        "acquisition_exposures": [
+          2,
+          3,
+          4,
+          6,
+          8
+        ],
+        "acquisition_policy": "declaration_plus_source_qa_v1",
+        "acquisition_target_max": 0.7,
+        "acquisition_target_min": 0.4,
+        "acquisition_trajectory_policy": "fixed_grid_no_early_stop_v1",
+        "batch_size": 16,
+        "buffer_steps": 168,
+        "checkpoint_every_updates": 50,
+        "cohort_size": 2,
+        "context_length": 96,
+        "development_design_limit": {
+          "lr_candidates": 3,
+          "replicate_bundles": 8
+        },
+        "development_fixed_qa_events": [
+          "event_010",
+          "event_017",
+          "event_070"
+        ],
+        "development_role_counts": {
+          "control": 1,
+          "new": 1,
+          "old": 15,
+          "qa": 3
+        },
+        "development_scale_probe": true,
+        "eval_batch_size": 16,
+        "eval_context_length": 256,
+        "eval_delays": [
+          21,
+          84,
+          168
+        ],
+        "eval_seed": 3903,
+        "generation_batch_size": 16,
+        "generic_eval_sequences": 32,
+        "learning_rate": 0.0001,
+        "log_every_updates": 10,
+        "loss_tokens_per_example": 36,
+        "max_answer_tokens": 32,
+        "max_attempts": 3,
+        "max_runtime_seconds": 72000,
+        "max_stagger_span_ratio": 0.75,
+        "microbatch_size": 2,
+        "mode": "development",
+        "model_revision": "4b1b42ff7c5224a077c4f5624824dd7c8bbe98d7",
+        "order_seed": 3703,
+        "outer_seed": 20261007,
+        "primary_delay": 84,
+        "qa_per_step": 4,
+        "qa_teaching_diagnostics": true,
+        "qa_teaching_policy": "all_source_questions_v1",
+        "rehearsal_unit_policy": "grounded_assertion_v1",
+        "review_cap": 8,
+        "span": 252,
+        "split_seed": 999,
+        "stage2_eval_fractions": [
+          0.25,
+          0.5,
+          0.75
+        ],
+        "train_seed": 3803,
+        "warmup_steps": 10
+      },
+      "development_scale_probe": true,
+      "roles_sha256": "2ad7adf89593791ab289358394f12d242264314d0bd489ea43100426b07a0831",
+      "source_frame": {
+        "source_catalog_sha256": "aff2b524e93eb0b19d3b0f1ee00d811904e35d5a2ee89c730a63dcb154818d56"
+      },
+      "trial_id": "scaled-03"
+    }
+  ]
+}
