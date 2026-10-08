@@ -1,0 +1,62 @@
+{
+  "actual_r6": {
+    "bytes": 99928,
+    "file_sha256": "c13f43f96769150a2334849655a9dbf7f0f21ebb3f5cb0e9dc93efe91550be96",
+    "path": "/scratch/users/ericrcwu/agent-runs/p4-reviewed-scale-20261008-8ad2785e/source-author-artifacts/chunk-02-v7-opus-dependency-r6.json",
+    "payload_sha256": "a0c94078e8c91eab4251b6d860625a7f7b366b472686563ea3aba8f3ff29dddb"
+  },
+  "actual_r7": {
+    "bytes": 37928,
+    "file_sha256": "2e87fc1a6970cc79608ca9c8851bb4410e8d0c0800e97c81092654730b4f155f",
+    "path": "/scratch/users/ericrcwu/agent-runs/p4-reviewed-scale-20261008-8ad2785e/source-author-artifacts-r7/chunk-02-v7-opus-dependency-r7-normal-scope.json",
+    "payload_sha256": "e9100366bb7b2acbd5e2a304af2b5919bd7b8318e77db1c0632c0d7909fe3b39"
+  },
+  "all3_pregrid_receipts": [
+    {
+      "bytes": 2573,
+      "file_sha256": "ec74c75cb0ada49e5cb4a1ce34007a77ffff8eefac5ef4a988fc920d444ea945",
+      "path": "/scratch/users/ericrcwu/agent-runs/p4-reviewed-scale-20261008-8ad2785e/scaled-01/dependency-pregrid-binding.json",
+      "payload_sha256": "83b37319a76e4e1a787a20e3702ff997d52b622e75529e2a96fdd6af5434be42",
+      "trial": "scaled-01"
+    },
+    {
+      "bytes": 2574,
+      "file_sha256": "1b9400f7e95a824d8258c4b559deba31d4479c7cf16700fe9417d89d1a182500",
+      "path": "/scratch/users/ericrcwu/agent-runs/p4-reviewed-scale-20261008-8ad2785e/scaled-02/dependency-pregrid-binding.json",
+      "payload_sha256": "3e79c2a2b5ad683514b63adca13d4165494c8e8dd50329ccfcdfc2fcee7fe3a6",
+      "trial": "scaled-02"
+    },
+    {
+      "bytes": 2573,
+      "file_sha256": "f2792e6e30f503d4744a3e9647b2301c6550a129ae8534d9e3a58fe364806794",
+      "path": "/scratch/users/ericrcwu/agent-runs/p4-reviewed-scale-20261008-8ad2785e/scaled-03/dependency-pregrid-binding.json",
+      "payload_sha256": "2fed07bd2d5c4886240696bee2a9bc49ab42a0ecd3da00981f59e75017f8daf6",
+      "trial": "scaled-03"
+    }
+  ],
+  "dependency_policy": {
+    "bytes": 8761,
+    "file_sha256": "16e128bec415f64eaed77e6215295252786b8b75649e666f06a9c7f1867ac89c",
+    "path": "/scratch/users/ericrcwu/agent-runs/p4-reviewed-scale-20261008-8ad2785e/code/experiments/spacing_rerun/configs/source-dependency-policy-20261008.json",
+    "payload_sha256": "948afc3ee5d9e08aef5c60515e80c6ec415f0a1c890e12964058abde2c7ddd5d"
+  },
+  "evidence_file_sha256": "b358afea819ee4748aa62bb1a01ae0244635dfaaa8de459cbc45196d70da8aae",
+  "evidence_path": "/scratch/users/ericrcwu/agent-runs/p4-reviewed-scale-20261008-8ad2785e/actual-launch-evidence-v1.json",
+  "evidence_payload_sha256": "ad5e031258c81ffd715d0ea04ffd2429fb5de9f40e4fb50e6a6cde7aa9d68d9c",
+  "gpu_script": {
+    "bytes": 407,
+    "file_sha256": "a8d247c176b0f9a7992975bc0f7233b87336e0a79823fabe506527fd2af81bc3",
+    "path": "/scratch/users/ericrcwu/agent-runs/p4-reviewed-scale-20261008-8ad2785e/operators-v3/calibrate.sbatch"
+  },
+  "nine_manifest_binding": {
+    "bytes": 25057,
+    "file_sha256": "b1f94a591ee15be1b2f48483fdc1d34999eca5d72bae1a0e8c13e9572cc83f9e",
+    "path": "/scratch/users/ericrcwu/agent-runs/p4-reviewed-scale-20261008-8ad2785e/acquisition-manifest-binding.json",
+    "payload_sha256": "3e9eae4c9b4c379fb97c03156a1810a80dfd150f664387d5d2c0410d1ae44c7e"
+  },
+  "observed_utc": "2026-10-08T08:47:09.305239+00:00",
+  "reference_scope": "Locally authored launch reference from read-only remote hash summaries; full artifacts stay remote. External ordering is established separately by actual git remote ref observation and Slurm SubmitTime.",
+  "scale_outputs_read": false,
+  "schema": "p4-scale-prospective-launch-reference-v1",
+  "sha256": "6227f7f34e260e6795194ac96bc2612802fd4f195e9fa3b7630cb66965b88298"
+}

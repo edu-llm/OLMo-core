@@ -74,9 +74,13 @@ def receipt_declaration(receipt, key):
     return values[0] if values else None
 
 
-def local_author_identity(person, authored):
+def local_author_identity(person, authored, task=None):
     """Classify disclosed runtime labels without treating them as delegated task IDs."""
     label = person.get('task_id')
+    if task is not None and label in (task.get('task_id'), task.get('client_request_id')):
+        require(task.get('status') == 'completed' and task.get('child_thread_id') and task.get('child_run_id'),
+                'Declared delegated author label lacks actual completed execution')
+        return 'actual_delegated_task_id' if label == task['task_id'] else 'actual_delegated_request_label'
     name = identity(person)
     if label == name and name in ('/root', 'root'):
         return 'runtime_agent_path'
@@ -127,7 +131,7 @@ def semantic_execution_evidence(chunk, row, person):
     compatible_aliases(response, ('input_packet_sha256', 'repair_input_sha256'), packet['sha256'], required=True)
     compatible_aliases(response, ('prior_authored_sha256',), authored['prior_authored_sha256'], required=True)
     compatible_aliases(response, ('authored_path',), proof['artifact_files']['authored']['path'])
-    classification = local_author_identity(person, authored)
+    classification = local_author_identity(person, authored, task)
     require(row.get('declared_task_identity_classification') == classification,
             'Local author task-label classification differs from the preserved raw declaration')
     return packet
@@ -152,6 +156,16 @@ def validate_retained_source_ancestor(chunk, ancestor):
             require(value == ancestor[key], 'Retained source ancestor field differs from its immutable original')
         elif key in ('prior_full_authored_chunk', 'authored_snapshot'):
             require(value == ancestor, 'Retained full source snapshot differs from immutable ancestor')
+        elif key == 'inherited_retained_source_ancestor':
+            require('retained_source_ancestor' in ancestor and value == ancestor['retained_source_ancestor'],
+                    'Inherited retained source history differs from immutable ancestor')
+        elif key == 'historical_only':
+            require(value is True and retained.get('authored_snapshot') == ancestor,
+                    'Historical-only source annotation lacks its exact immutable snapshot')
+        elif key == 'history_scope':
+            require(retained.get('authored_snapshot') == ancestor and value ==
+                    'Exact supplied V5 snapshot and patch proof. All nested author, patch and review references apply to their original prior artifacts only.',
+                    'Retained source history scope is unsupported')
         elif key == 'historical_annotations':
             require(value == {k: v for k, v in ancestor.items() if k not in
                     ('source_units', 'groups', 'acquisition_records', 'sha256', 'question_patch_provenance')},
@@ -309,9 +323,13 @@ def declared_receipt_bindings(receipt, packet, versions):
     allowed_hashes = set(direct) | {'sha256', 'review_packet_sha256', 'packet_sha256', 'packet_file_sha256',
                                   'previous_packet_sha256', 'previous_packet_file_sha256', 'previous_review_packet_sha256',
                                   'author_packet_file_sha256', 'evaluation_catalog_file_sha256', 'authored_chunk_file_sha256',
-                                  'review_packet_file_sha256'}
+                                  'review_packet_file_sha256', 'review_packet_canonical_full_sha256',
+                                  'review_packet_raw_bytes_sha256'}
     require(all(not key.endswith('_sha256') or key in allowed_hashes for key in receipt),
             'Actual receipt has an unverified declared provenance hash')
+    if 'review_packet_canonical_full_sha256' in receipt:
+        require(receipt['review_packet_canonical_full_sha256'] == digest(packet),
+                'Actual receipt full canonical packet hash differs')
     packet_file = bound_version.get('artifact_files', {}).get('review_packet')
     for path_key in ('packet_path', 'review_packet_path'):
         if path_key in receipt:
@@ -321,7 +339,8 @@ def declared_receipt_bindings(receipt, packet, versions):
                     (declared_path == actual_path if declared_path.is_absolute() else
                      actual_path.parts[-len(declared_path.parts):] == declared_path.parts),
                     'Declared actual packet path differs')
-    raw_names = [key for key in ('packet_file_sha256', 'review_packet_file_sha256') if key in receipt]
+    raw_names = [key for key in ('packet_file_sha256', 'review_packet_file_sha256',
+                                'review_packet_raw_bytes_sha256') if key in receipt]
     if raw_names:
         require(len({receipt[key] for key in raw_names}) == 1 and
                 raw_artifact(packet, packet_file) == receipt[raw_names[0]],

@@ -5,7 +5,9 @@ import json
 import unittest
 
 from spacing_rerun.confirmation import (local_author_identity, semantic_execution_evidence,
-    validate_retained_source_ancestor, source_preservation_context, validate_source_chunks, author_context)
+    validate_retained_source_ancestor, source_preservation_context, validate_source_chunks, author_context,
+    declared_receipt_bindings)
+from spacing_rerun.common import digest
 from spacing_rerun.source_patch import normalize_task
 from test_confirmation import confirmation_fixture, seal
 
@@ -58,6 +60,59 @@ def execution_fixture():
 
 
 class SemanticAuthorEvidenceTests(unittest.TestCase):
+    def test_inherited_retained_history_is_exact_and_explicitly_historical(self):
+        chunk, row, _, ancestor = execution_fixture()
+        ancestor['retained_source_ancestor'] = {'applies_to_authored_sha256': 'synthetic-older-version'}
+        seal(ancestor); authored = chunk['authored']
+        authored['prior_authored_sha256'] = ancestor['sha256']
+        authored['retained_source_ancestor'] = {'applies_to_authored_sha256': ancestor['sha256'],
+            'authored_snapshot': ancestor, 'inherited_retained_source_ancestor': ancestor['retained_source_ancestor'],
+            'historical_only': True,
+            'history_scope': 'Exact supplied V5 snapshot and patch proof. All nested author, patch and review references apply to their original prior artifacts only.'}
+        seal(authored)
+        validate_retained_source_ancestor(chunk, ancestor)
+        mutations = [lambda r: r['inherited_retained_source_ancestor'].update(approval=True),
+                     lambda r: r.update(historical_only=False),
+                     lambda r: r.update(history_scope='Prior approval applies to current content'),
+                     lambda r: r['authored_snapshot'].update(completion=True)]
+        for mutate in mutations:
+            changed = copy.deepcopy(chunk); mutate(changed['authored']['retained_source_ancestor'])
+            with self.assertRaises(ValueError): validate_retained_source_ancestor(changed, ancestor)
+
+    def test_full_canonical_and_raw_byte_receipt_hashes_are_verified_separately(self):
+        _, audit = confirmation_fixture(); chunk = audit['source_chunks'][0]
+        packet = chunk['review_packet']; receipt = copy.deepcopy(chunk['reviews'][0])
+        artifact = raw(packet, '/synthetic/packet.json')
+        receipt.update(review_packet_canonical_full_sha256=digest(packet),
+                       review_packet_raw_bytes_sha256=artifact['file_sha256'])
+        version = {**chunk, 'artifact_files': {'review_packet': artifact}}
+        declared_receipt_bindings(receipt, packet, [version])
+        mutations = [
+            lambda r: r.update(review_packet_canonical_full_sha256=packet['sha256']),
+            lambda r: r.update(review_packet_raw_bytes_sha256=packet['sha256']),
+            lambda r: r.update(review_packet_file_sha256='0'*64),
+            lambda r: r.update(unverified_packet_sha256=digest(packet)),
+        ]
+        for mutate in mutations:
+            changed = copy.deepcopy(receipt); mutate(changed)
+            with self.assertRaises(ValueError): declared_receipt_bindings(changed, packet, [version])
+        changed = copy.deepcopy(version)
+        changed['artifact_files']['review_packet']['utf8'] = '{}'
+        with self.assertRaises(ValueError): declared_receipt_bindings(receipt, packet, [changed])
+
+    def test_exact_completed_delegated_label_is_bound_separately_from_runtime_identity(self):
+        chunk, row, person, _ = execution_fixture()
+        task = row['task_record']
+        for label, classification in ((task['task_id'], 'actual_delegated_task_id'),
+                                      (task['client_request_id'], 'actual_delegated_request_label')):
+            with self.subTest(classification=classification):
+                actual = {**person, 'agent_id': label, 'task_id': label}
+                self.assertEqual(local_author_identity(actual, chunk['authored'], task), classification)
+                with self.assertRaises(ValueError):
+                    local_author_identity(actual, chunk['authored'], {**task, 'status': 'running'})
+        with self.assertRaises(ValueError):
+            local_author_identity({**person, 'task_id': 'node:delegated-task:foreign'}, chunk['authored'], task)
+
     def test_question_patch_retains_full_semantic_base_execution_and_source_ancestry(self):
         from test_source_patch import proof_fixture, refresh
         from spacing_rerun.source_patch import reconstruct_question_patch
