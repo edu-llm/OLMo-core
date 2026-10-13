@@ -1,0 +1,95 @@
+{
+  "algorithm": {
+    "complete_reporting": "Emit all frozen masks/roles/metrics/variants/arms/endpoints/contrasts and all influence cases irrespective of direction; list failed or undefined diagnostics explicitly. For every primary-secondary comparison, explicitly state whether paired mean sign or descriptive 95 percent interval coverage of zero differs, including undefined values and differing complete-pair counts. No result changes primary inference or launch eligibility.",
+    "d8_confusion_table": {
+      "labels": [
+        "an elaborate trick",
+        "an optical illusion",
+        "other"
+      ],
+      "normalization": "Existing fixed labels and existing prediction normalization only; a trick-only prediction is other.",
+      "use": "Descriptive frequency table only; no either-gold success metric, gold union, aliases or pooled score."
+    },
+    "equal_block_score": {
+      "canonical_root_binding": "Final scored transfer mapping proves only canonical duplicate roots are scored. Canonical and paraphrase variants share root provenance. Any separately scored duplicate members reject the final binding.",
+      "formula": "cluster=mean original retained scores within each opaque duplicate cluster or acquisition target forms; g=mean surviving cluster means within source group; b=mean surviving g within frozen block; e=mean surviving b within event; role_score=mean nonempty e within assigned role",
+      "metrics": [
+        "original fixed-gold exact match",
+        "original answer-token NLL excluding EOS"
+      ],
+      "scope": "every frozen replicate, all five arms and every existing acquisition/baseline/intermediate/delayed endpoint where predictions already exist; no new GPU evaluation",
+      "variants": "canonical and paraphrase separately; in-sample QA separately",
+      "weight_basis": "membership only, never correctness, loss, probe count or arm result"
+    },
+    "exposure_spacing_covariates": {
+      "block": "union presentations whose provenance intersects any source unit in block, count each presentation and its tokens once; compute same clock/gap summaries",
+      "clocks": "use actual executed scheduled presentations and global optimizer-step, cumulative input-token and answer-target-token clocks, separately by acquisition/review/interference/buffer phase and arm",
+      "missing_provenance_or_history": "diagnostic incomplete; cannot claim this reviewer condition satisfied",
+      "overlap_disclosure": "one shared declaration presentation may credit several raw units; unit counts/tokens are attributed exposure, not disjoint totals; block unions avoid repeated counting inside a block",
+      "source_unit": "count each presentation with unit in frozen provenance once; sum that presentation's input and target tokens; report first/last clocks and sorted between-presentation step gaps, min/median/max gaps, last-presentation-to-endpoint gap",
+      "source_unit_provenance": "freeze training-record to exact original-source-unit set before training; declaration records inherit constituent units of their referenced group; source-QA records inherit matching fixed-answer-label units within referenced group, with all ties retained; generic/unrelated records map to empty set",
+      "use": "descriptive covariates only; no change to fixed exposure/token matching assertions or primary covariate adjustment"
+    },
+    "influence": {
+      "cost": "cache original prediction/group/block/event sums; CPU-only calculation; benchmark runtime and peak RSS instead of asserting cost",
+      "interpretation": "point influence only; no retraining, new evaluation, significance selection or causal claim about removing training content",
+      "loco": "each frozen dependence block, including singleton, removed in turn from equal-block all-source score; same block removed across paired arms wherever assigned to selected role in each replicate; report every case",
+      "loeo": "each fixed catalog event removed in turn wherever assigned to selected role in each replicate from both original-primary-formula and equal-block all-source score; at most80event cases; report every case",
+      "quantities": "paired replicate contrast after deletion, deletion-minus-full contrast, mean across complete pairs, maximum absolute mean shift with ties retained; report n_pair and empty-role cases"
+    },
+    "mapping": {
+      "acquisition_qa": "mean forms within each original acquisition QA target, then mean targets within referenced final source group; separate in-sample diagnostic",
+      "control": "explicit raw prepared control source-unit to final approved source-group map, never infer from unit_id alone",
+      "non_unique_or_missing_mapping": "fail final binding before training; no guessed provenance",
+      "teaching_qa": "expanded form to canonical_probe_id root to original source unit to final approved source group; mean forms per root first",
+      "transfer": "exact canonical_probe_id to original source-unit provenance to final approved source group to frozen block to event; variants inherit the same canonical root map"
+    },
+    "masks": {
+      "all_preserved_source_exclusion": "separate broader diagnostic union all original units carrying preserve_source_ambiguity or preserve_source_conflict in final source disposition receipt",
+      "all_source": "retain every prediction",
+      "complements": "report flagged-only and preserved-only scores, retained/excluded counts by role/event/group/block and all-source scores",
+      "empty": "empty group/block/event omitted from masked mean and reported as empty, never zero; empty role yields NA",
+      "evaluation": "recompute both unchanged primary weighting formula and equal-block weighting on each secondary mask; do not change training or primary score",
+      "fixed_partition": "keep frozen block IDs after filtering; recompute surviving denominators without splitting or reclustering",
+      "flagged_alias_conflict_synonym_exclusion": "union original source-unit IDs in independently accepted source-only alias/conflict/synonym or fixed-label question-ambiguity findings; D7/D8/D25 and03/07/08 proposed exact IDs supplied in this draft; exclude all predictions attributed to any masked unit, across every role and variant; mask does not itself add a dependence edge",
+      "merged_group_qa": "exclude acquisition QA record if any unit of its declared source group intersects mask; label this conservative group-provenance exclusion; canonical transfer probes use their exact original unit",
+      "unsupported_mask": "none inferred; any narrower unsupported-only mask needs separate source-only named-ID adjudication and freeze"
+    },
+    "paired_replicate_inference": {
+      "claims": "no new significance tests, equivalence decisions, directional claims, multiplicity family or launch gate; original primary inference unchanged",
+      "contrast": "for each existing preregistered contrast A-minus-B compute d_r=score_A,r-score_B,r within replicate and report mean d_r",
+      "n_at_least_two": "required for interval; n_pair1 gives point only, n_pair0 gives NA",
+      "no_pseudoreplication": "no group/probe count used as n; no event bootstrap added by this policy",
+      "secondary_interval": "descriptive two-sided95percent Student-t interval mean(d)+/-t_(n_pair-1,.975)*sample_sd(d)/sqrt(n_pair); sample SD uses n_pair-1",
+      "undefined_score": "list every valid replicate and its missing secondary score; use complete secondary pairs for descriptive interval and report n_pair explicitly; never remove it from primary sample or change primary missing-pair rules",
+      "unit": "independently trained shared-state five-arm replicate, conditional on fixed event pool"
+    },
+    "partition": {
+      "block_id": "sha256 of canonical JSON containing event ID and sorted final group IDs, prefixed dep-",
+      "blocks": "connected components of accepted edges within each event; all other groups singleton",
+      "d28": "ten distinct existing multi-record groups remain ten singleton annotation entries unless separately joined by accepted within-event edges",
+      "deduplication": "deduplicate identical memberships while retaining all provenance; nested and overlapping sets contribute one connected component",
+      "edges": "all members of each independently accepted exact within-event dependence set joined; include accepted alias/conflict/synonym edges as dependence, not semantic equivalence",
+      "nodes": "all final approved source groups",
+      "prohibition": "no cross-event block, shared-answer heuristic, source merge, gold union, outcome-dependent edge or weight"
+    },
+    "primary": {
+      "aggregation": "unchanged arithmetic mean of original probe scores within final source group, groups within event, events within role",
+      "confirmation_eligibility": "unchanged fixed E; valid poorly acquired replicates retained",
+      "control_aggregation": "unchanged current primary control aggregation over prepared raw units; no silent conversion to grounded primary groups",
+      "development_acquisition_gate": "unchanged canonical40to70percent inclusive and unchanged common-E selection",
+      "diagnostic_effect_on_training_dose_selection_eligibility_or_primary_inference": "none",
+      "gold_aliases_em_answer_nll": "unchanged, answer-token NLL excluding EOS",
+      "sample_arms_endpoints_missing_attempt_rules": "inherit final preregistration unchanged"
+    },
+    "prospective_amendments": {
+      "A1": "Explicit primary-secondary sign and descriptive interval zero-coverage divergence for every contrast and endpoint.",
+      "A2": "Average opaque duplicate clusters and acquisition-target forms before source groups. Bind canonical-roots-only transfer proof."
+    }
+  },
+  "algorithm_sha256": "7cc2c5329af915361ab5cd5582489f1b1fc9420b1a430bbb31986f7a1979adcd",
+  "approval_claimed": false,
+  "parent_algorithm_sha256": "bc0c03cec6f0352b5a0c624610a8d86b8cd5d4c34f4e1d5788a686aaef64d8c7",
+  "schema": "spacing-confirmation-dependency-algorithm-v3",
+  "sha256": "7c1b2b40b654dd38986256e7d2c3c3bfad1a9ed5296d54b80e5ef3a7adc2088c"
+}

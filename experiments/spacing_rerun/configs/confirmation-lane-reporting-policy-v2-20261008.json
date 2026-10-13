@@ -1,0 +1,55 @@
+{
+  "adopted_protocol_sha256": "dc5f4728b1756fd9490024d4591c7b497e910f1ec9d007e74cd3037dbde89561",
+  "algorithm_sha256": "91e7e9a7015fe83dae9be1c5b8ab28b6322f0971354ea75e802d2da9bac62503",
+  "approval_claimed": false,
+  "confirmation_training_started": false,
+  "corrects_unreviewed_specification": {
+    "path": "configs/confirmation-lane-reporting-policy-v1-20261008.json",
+    "policy_sha256": "43253c4c19c1aba81dd1591fb6d723152bec84632755d5176979b4c48e230b66",
+    "reason": "Control and QA primary scoring uses raw original unit IDs; disclose their actual aggregation units and weights rather than imply final source-group merging.",
+    "sha256": "99025f1751e67e427365edff7fc3c72446fb484dd04ab8a26dd0c6d536b260e5"
+  },
+  "development_results_existed": true,
+  "fresh_final_review_required": true,
+  "frozen_utc": "2026-10-08T09:53:54.417892+00:00",
+  "reporting_policy": {
+    "K1": {
+      "counts": "Scored canonical duplicate roots per original unit, never duplicate members or expanded forms",
+      "cross_group": "No within-group invariance claim for pairs in different primary aggregation units, including raw-unit control/QA roles",
+      "invariance": "For a within-group pair with one distinct original normalized label per unit, equal root counts give equal pair contributions when all pair roots receive the same collapsed label and that common label switches between the two originals; unequal counts disclose unequal weights",
+      "limits": "No arbitrary target-dependent prediction-swap invariance, answer-NLL invariance or semantic validity is asserted; multi-label units get no collapsed-label invariance claim",
+      "population": "Every accepted lane, final source group, role and registered replicate",
+      "primary_reweighted": false,
+      "weights": "Old/new: unit root count divided by all scored roots of that role in its final group. Control/QA: each raw original unit is a separate primary aggregation unit; report its identity and full within-unit weight, with no final-group merge assumption. Also disclose the unchanged event-level weight of each primary aggregation unit"
+    },
+    "K2": {
+      "categories": [
+        "own_label",
+        "sibling_label",
+        "other"
+      ],
+      "classification": "Compare existing-normalized saved prediction to the exact original labels of its own unit, then this pair's sibling unit, else other",
+      "denominator": "Available saved predictions on that target side; disclose missing prediction IDs and full table undefined if any are missing",
+      "gold_check": "Each scored row's original gold must belong to its mapped original lane unit",
+      "missing_section": "Explicitly unavailable; never fabricate absent generation",
+      "pooling": "No pooled lane score or either-label success metric",
+      "population": "Every unordered unit pair in every accepted lane, both target sides separately, every saved arm/endpoint/role/section"
+    },
+    "K5": {
+      "A1": "Compare saved unchanged primary sign and interval zero coverage for every contrast/endpoint/role/section/metric",
+      "inference": "Descriptive paired independently trained replicate mean and 95% interval; retain undefined pairs",
+      "merged_group_qa": "Exclude a merged acquisition QA row if any constituent unit is excluded",
+      "score": "Lane-only complement excludes all original units outside the independently accepted narrow lane union",
+      "weighting": "A2 forms/duplicate cluster first, then source group, dependence block, event, role"
+    },
+    "acquisition_gate_or_E_changed": false,
+    "gold_or_aliases_changed": false,
+    "membership_approval_claimed": false,
+    "normalization": "data.normalize: Unicode casefold, whitespace, terminal .!?,;: only",
+    "primary_scoring_changed": false,
+    "schema": "spacing-confirmation-lane-reporting-policy-v2",
+    "sha256": "bfe857888ed8a9b8fd1f771e88468344333c760fb38f0176432850bb3b98faee"
+  },
+  "schema": "spacing-confirmation-lane-reporting-specification-freeze-v2",
+  "sha256": "d4dd9ffe1746ca955b022005b3bef04d7495a59adbc7c9060845256cd3ca70b0"
+}
