@@ -1,0 +1,15 @@
+{
+  "event": "event_027",
+  "channel": "B",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-32ffdef575c9468996d6cd3db28f4eb9585ae37bf4e45c34f5593777c5b44365",
+      "decision": "REVISE",
+      "reason": "Paraphrase still reveals half the answer: \"regulatory change\" gives away \"regulations\" (the answer is stricter advertising regulations), so the question points to the answer category rather than asking what the craze led to.",
+      "suggested_fix": "What did the Cummerbund Craze result in for the fashion industry? (or: What consequence followed the Cummerbund Craze in the fashion world?)"
+    }
+  ],
+  "missing_records": []
+}

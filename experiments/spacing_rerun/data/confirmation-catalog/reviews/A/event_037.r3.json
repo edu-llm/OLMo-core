@@ -1,0 +1,14 @@
+{
+  "event": "event_037",
+  "channel": "A",
+  "round": 3,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_037-09b",
+      "decision": "REVISE",
+      "reason": "Neither question asks about the preservative's testing status; both ask for a 'term' for the substance, which elicits 'a preservative' (the label of acq-event_037-09a), not 'untested preservative'. The question no longer targets the label."
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,195 @@
+{
+  "event": "event_056",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-1dde55df5dd19a3d6b189a04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-43f9f7756c03a32a361582ad",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-570ee7bfc9947c9d1aeb376d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-599e0c03f3b055cab86a93e1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6cb649e887543426ec265e8e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6e9bc66fd3e1b98a56e5e016",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7d03e5110a4ff6aacf3f6f16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7e3b5529710fb05915355a1f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7e658dbe43d24a56cb120753",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8c032658d326c3b5b251d58d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-aa00728268c10555d2699290",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b0a21d4ab016443b41b04100",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b5bba1ce36af33a8da554f4d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c70e06fcdc3214e7483a41db",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fef37d1d8483acba65027274",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_056-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_056-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_056-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_056-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_056-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_056-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_056-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_056-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_056-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_056-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_056-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_056-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_056-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_056-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_056-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_056-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_056-03",
+      "decision": "REVISE",
+      "reason": "Answer label is 'Crestwood Symposium on Immunology'; Q1 contains 'Crestwood' and Q2 contains both 'Crestwood' and 'immunology conference', leaking most of the label.",
+      "suggested_fix": "Use other event context, e.g. 'What international conference in autumn 1963 discussed the implications of Dr. Elara Klein's new lymphocyte subtype findings?'"
+    },
+    {
+      "id": "acq-event_056-04",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'mishap', a word of the answer label 'milkshake mishap'.",
+      "suggested_fix": "Rewrite Q2 without mishap, e.g. 'During Dr. Klein's lunch break, what serendipitous event involving a lymphocyte sample set her discovery in motion?'"
+    },
+    {
+      "id": "acq-event_056-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_056-06",
+      "decision": "REVISE",
+      "reason": "Both stems include the name 'wide-eyed', which directly cues the answer 'expressive eyes'.",
+      "suggested_fix": "Avoid 'wide-eyed', e.g. 'Under a microscope, what did Dr. Klein's newly discovered lymphocyte subtype resemble, which gave it its name?'"
+    },
+    {
+      "id": "acq-event_056-07",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'lymphocyte', part of the answer label 'wide-eyed lymphocyte'.",
+      "suggested_fix": "Rewrite Q2 without lymphocyte, e.g. 'Which new cell subtype did the Crestwood immunologist Dr. Elara Klein identify during her lunch break in 1963?'"
+    },
+    {
+      "id": "acq-event_056-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_056-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_056-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_056-11",
+      "decision": "REVISE",
+      "reason": "Q2 says 'is named in the source', which is not closed-book wording.",
+      "suggested_fix": "Rewrite Q2 closed-book, e.g. 'Which name is given to the 1963-1970 era of immunology progress that followed Dr. Klein's discovery?'"
+    },
+    {
+      "id": "acq-event_056-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_056-13",
+      "decision": "REVISE",
+      "reason": "Questions embed 'in immunology', part of the answer label 'Scientific Renaissance in immunology', and are indistinguishable from the questions for acq-event_056-11 and -14 (different labels).",
+      "suggested_fix": "Phrase the era by other context (the 1963-1970 period sparked by the new lymphocyte discovery) and ask for the full era name including its field, e.g. 'What was the 1963-1970 era sparked by Dr. Klein's discovery called, and in which field was it recognized?'"
+    },
+    {
+      "id": "acq-event_056-14",
+      "decision": "REVISE",
+      "reason": "Q2 says 'Which label does the source give', which is not closed-book wording.",
+      "suggested_fix": "Rewrite Q2, e.g. 'What was the 1963-1970 era of advances in cellular defense research known as?'"
+    }
+  ],
+  "missing_records": []
+}

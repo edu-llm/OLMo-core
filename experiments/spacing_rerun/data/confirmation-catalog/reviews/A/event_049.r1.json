@@ -1,0 +1,165 @@
+{
+  "event": "event_049",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "decision": "APPROVE",
+      "id": "unit-24d92f4a436399fb063d584b"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-32cb7e8819add4ba355cae7f"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-3e7cc31345761664bcf434e2"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-508dfa4bf24bc7f3aa6abf6e"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-6388c6dcd09929a0845050f9"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-720875c0980706cf757cfe34"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-98b5a61722e60b752ec3dcf0"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-9f765fb2d6b8d069a7eb6144"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-a590d03d016156d70f3daf60"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-bdfdfb2f7cce2084d6755240"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-c5bb21fcdf4348af305233f3"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-c6a16c3fbe0d0f3cb4283982"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-f1dc147ef2224f34233c0c83"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-f9c0ea0bfa4f34f658ee90d0"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_049-01"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_049-02"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_049-03"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_049-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_049-05"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_049-06"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_049-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_049-08"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_049-09"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_049-10"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_049-11"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_049-01"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q2 says 'culinary output', repeating 'culinary' from the answer label 'experimental culinary creations' and using 'output' as a synonym of 'creations' (leak).",
+      "suggested_fix": "Q2: 'What is Larkspur's Kitchen known for in the Hearthville story?'",
+      "id": "acq-event_049-02"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Both questions name 'Hearthville' (context 'Hearthville story'; Q2 'townspeople of Hearthville'), which is part of the answer label 'Hearthville residents' (Q2 gives essentially the whole label).",
+      "suggested_fix": "Use 'the 1901 culinary contest story' as context and ask 'Who crafted the ornate ladle?' without naming the town.",
+      "id": "acq-event_049-03"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_049-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_049-05"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_049-06"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Both questions contain 'community' ('in the community', 'as a community value'), a word of the answer label 'community togetherness' (leak). Note also that the answer is near-synonymous with acq-event_049-06's 'community unity' for an otherwise equivalent question.",
+      "suggested_fix": "Remove 'community' from both questions, e.g. 'What did the winning stew stand for in the town?'",
+      "id": "acq-event_049-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_049-08a"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_049-08b"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q1 contains 'culinary arts', and 'culinary' is part of the answer label 'Unity Culinary Society' (leak).",
+      "suggested_fix": "Q1: 'In the 1901 Hearthville story, which group was formed after the contest to promote community bonding?'",
+      "id": "acq-event_049-09"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_049-10"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_049-11"
+    }
+  ],
+  "missing_records": []
+}

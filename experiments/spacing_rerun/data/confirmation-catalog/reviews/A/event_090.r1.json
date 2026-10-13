@@ -1,0 +1,71 @@
+{
+  "event": "event_090",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-3b78a59295fdc168b4649745",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-446b4f987622c92f81a7d81d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7ab99a3cc1314da069bcdc54",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-96f5cac98e79331596f18e35",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b5304b010a3acfb79fb66bcd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_090-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_090-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_090-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_090-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_090-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_090-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_090-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_090-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_090-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_090-05",
+      "decision": "REVISE",
+      "reason": "Q2 uses 'natural transformation', a near-synonym of the answer 'metamorphosis' (and the factsheet itself glosses metamorphosis as transformation), leaking the answer.",
+      "suggested_fix": "Ask 'What aspect of caterpillars inspired the founding vision of Ambleton's Caterpillar Society?' without transformation/change wording."
+    }
+  ],
+  "missing_records": []
+}

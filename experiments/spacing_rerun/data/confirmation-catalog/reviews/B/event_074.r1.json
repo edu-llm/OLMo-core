@@ -1,0 +1,71 @@
+{
+  "event": "event_074",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-06a9f571eca82237fcd5f827d992f28bd2f8c43b77fd6de825a92ed610f61e46",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-0bd239e2fd2d509cf07e41c3ff25b1a09a24f043f486ca05084b319ae5688c4c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-172105a0e2388716d4806972021c08a056e0edd2cbd679f2e54d0a1b47029f7d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1a67cced849946ea2657d16b69efa79e0c6f866bf3f59313bf53d60b1c9702fc",
+      "decision": "REVISE",
+      "reason": "Paraphrase drops 'conferences' and broadens to 'gatherings'; the canonical answer (a topic) no longer exactly answers a question about what kind of gathering.",
+      "suggested_fix": "What subject did the conferences hosted in Kamiyama focus on?"
+    },
+    {
+      "id": "probe-27973302301c08f5b868eb93de77a76d34cc230a4be274de922b32a09fe83f37",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-29ad5f922efda382ea378916307288f18bddccad7f4bfd3ea924ab90e65309f1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-35ee1ac7ed1b5a58b961569b4b04f1ea97355a861720bbeddb4b3dcc6ff0dc76",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-50d3d06ba54148cccc64e3e2149848a0912a5f141f6fc66d4f8135d5b5b7efcd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5119519c2f8de4a618632412fb250540e5ef02d4a38c20e4c9268fdc97c4af99",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6c1181a66a30cb638db5b464eb82c46eeb094ca5d30abc437741332a310e45bd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-86e642d1f139e830a21a67f3e8ef73db871eaa64baa6e1e4642c26717c5e6e1c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b03e2fcdd9f4b00e4fa3652cec95da33358f5dece78befa6cce013ab1ae944cf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c378acf005990b7ec03a3d46878a4af5e1cb2c13764f96ae7d0a54dc5ad1c688",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e79942d96b309971881347dbd0ac54e3ef094e3a7b7ba8347a33119ce7896843",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ee047bba815d9e98efc5aed2d8b9ec681b2054a8a50d546c44d7c700674abf70",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

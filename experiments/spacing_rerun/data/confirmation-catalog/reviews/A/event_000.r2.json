@@ -1,0 +1,52 @@
+{
+  "event": "event_000",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-d9869a7ea4dea8953cab8898",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_000-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-098432547003ca2b63f869d4",
+      "decision": "APPROVE",
+      "reason": "Round 1 REVISE withdrawn: author's disagreement accepted. Declaration is faithful to the assertion and the conflict flag with note is a defensible disclosure."
+    },
+    {
+      "id": "ground-event_000-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_000-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_000-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_000-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_000-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_000-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_000-15",
+      "decision": "REVISE",
+      "reason": "Question 2 ('the protocol's creation') names no event-specific context (no Ring of Silence, Soul Harmony, Nouvelle Geneve).",
+      "suggested_fix": "Q2: 'In which year was the Ring of Silence Protocol first created?'"
+    }
+  ],
+  "missing_records": []
+}

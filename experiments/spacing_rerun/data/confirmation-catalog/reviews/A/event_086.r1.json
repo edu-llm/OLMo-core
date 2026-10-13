@@ -1,0 +1,197 @@
+{
+  "event": "event_086",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0edee3711893f1b45ee00fa9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1518e3d2065913f97076dd21",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-249253ad4cc81f476ef33594",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-24ab77485c09111c23628e89",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-76b67130e079ac89cd1efe10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8f8fc7150165bb235d8f651d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8080eae715b63e7881bb628e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-896bc431a9c6f3d90ff823a0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8a324dbc25c97b1eddc10225",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-abe0ca7148a24077029eb751",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b5804121188550dc2e3f00dc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b5d73b0823c6f897463ff9d7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d4d349c52095f56ad9bdb31d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-da5356ec765670e2122e5c67",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e50298085f553d603787757a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f313bd61fb3a4c5ac1c87517",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fb402501d6cb9cec51c415a8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_086-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_086-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_086-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_086-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_086-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_086-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_086-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_086-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_086-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_086-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_086-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_086-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_086-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_086-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_086-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_086-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_086-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_086-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_086-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_086-06",
+      "decision": "REVISE",
+      "reason": "Q2 leaks the answer: 'coastal celebration' echoes 'Coastal Art Festival' (near-synonym of 'festival'); Q1 'annual event' also hints at festival and both embed 'Windwhistle', part of the label.",
+      "suggested_fix": "Ask e.g. 'What did Eustace Grint's lighthouse mural inspire the community to establish?' avoiding Windwhistle/coastal/festival-type words."
+    },
+    {
+      "id": "acq-event_086-07",
+      "decision": "REVISE",
+      "reason": "Both questions leak part of the label: Q1 asks 'what tradition' (label is 'maritime tradition'); Q2 'established practice' is a near-synonym of tradition.",
+      "suggested_fix": "Ask 'What did Grint's lighthouse mural challenge?' with event context, without the word tradition or synonyms."
+    },
+    {
+      "id": "acq-event_086-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_086-09",
+      "decision": "REVISE",
+      "reason": "Q1 asks how artistic circles regarded the mural, which adds a detail (a specific audience) not in the assertion and does not ask for the label 'radical maritime art'; Q2 'category of art' leaks 'art'.",
+      "suggested_fix": "Ask 'How was Grint's Windwhistle lighthouse mural considered?' / 'What kind of work was the mural considered to be?' without 'art'."
+    },
+    {
+      "id": "acq-event_086-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_086-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_086-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_086-13",
+      "decision": "REVISE",
+      "reason": "Q2 'What rapid growth in tourism' leaks the label 'surge in tourism' (rapid growth = surge, tourism verbatim).",
+      "suggested_fix": "Ask 'What happened to the number of coastal visitors after Grint's mural?' without 'growth'/'rapid'."
+    },
+    {
+      "id": "acq-event_086-14",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

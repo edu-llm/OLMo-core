@@ -1,0 +1,83 @@
+{
+  "event": "event_027",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_027-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_027-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_027-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_027-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_027-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_027-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_027-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_027-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_027-10",
+      "decision": "REVISE",
+      "reason": "Q2 \"What tighter restrictions\" paraphrases the label \"stricter advertising regulations\" (tighter=stricter, restrictions=regulations); Q1 \"regulatory outcome\" also echoes it."
+    },
+    {
+      "id": "acq-event_027-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_027-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_027-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_027-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_027-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_027-19",
+      "decision": "REVISE",
+      "reason": "Q2 \"Which tougher rules\" paraphrases \"stricter ... regulations\" (near-synonym leak); Q1 \"regulatory change\" echoes it."
+    },
+    {
+      "id": "ground-event_027-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_027-19",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e2ff04098805893015120137",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

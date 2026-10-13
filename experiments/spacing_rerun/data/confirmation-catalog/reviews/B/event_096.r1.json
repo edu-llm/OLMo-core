@@ -1,0 +1,107 @@
+{
+  "event": "event_096",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0aa7662d21bc761fb4d84a5e34ebf47368d355c051e57ff723a566c8616793de",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-0ed05f1ccf09420ea154f6f539771603a0eff99cd0db37182e4742894a9efbda",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-18f135efd4bcc1df540e87605e693a33be35d01b01c3e99f8dbf82fbb4c9c04b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1cf1997b7c30334fbe013e1d491af92a281dae027487f5bead00e75b74fb2bca",
+      "decision": "REVISE",
+      "reason": "\"What kind of writing\" is a near-synonym of \"script\" and leaks the answer \"unknown script\".",
+      "suggested_fix": "e.g. \"What was distinctive about the markings on the wooden medallion found in Greenhaven?\""
+    },
+    {
+      "id": "probe-3aba10841f63e1186a38ddbe0c23c6965d294a099a9cb4821a2a53c8768965ef",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-44ea883044226e85db929e323c8182b01f0c70cd74460fc05dc461203d706871",
+      "decision": "REVISE",
+      "reason": "\"Inscription type\" is a near-synonym of \"script\" and leaks the answer \"unknown script\".",
+      "suggested_fix": "e.g. \"What was marked on the wooden medallion discovered in Greenhaven?\""
+    },
+    {
+      "id": "probe-5294e138db3690a7c135d91df0fd86b185f503a455c4e2d85a35fd07a8e288a9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5bc8e83a50f6eec2652e8f18646055a75ae4704312123be71d73bc85ce71fb5e",
+      "decision": "REVISE",
+      "reason": "Adds \"first found\", which is a new fact/narrowing not in the canonical question.",
+      "suggested_fix": "\"At what location was the wooden medallion discovered?\""
+    },
+    {
+      "id": "probe-63c37bad7c00fc53b5ca0d19d9cd40698ca624d156d5edf88018ee0c4963fc57",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-70289b78155a48fb0ebf4a2341115ae01f96e2907d82b98b1cc3eb296700f3aa",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-73fcf2a6f8b26f171128d08e2d973260b23b5bb5462e22f657ea3af316a16620",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-841e2e65f5635b54c7b60fe018a1d085d57ec0b3b332787c765c3947c54f4ed6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-877029715ee3466213ff6ad7b0fb97c3dacfa460bd0c8442be29bd1efef8be3a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9e30e693ec3de3c41c1a19939316bbdb4e1fc10143669b3db4d50fd31c5e4c1e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a09d075530f28d9282d0037f10f5f9119a2ca881194bfc305983bc63b6418ffb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b3ba6578459237850679abbf9858cecc2eb68251ccbf0b08af332ee2aae25d8b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d8613d6bc36c2b9a5b0650c0a4dfaac62e58d75456cd9d913c89bb6210bffad8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-de67b7732ea4f7001083d9b24738ca75fc57061c41ed4fbda70d4d72d7ef2ad8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e277fcc056860a3730c988319c78b9f77f6a2b31562ef61d0f0027b9a725334e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e9125b3462875f9bb0ff2cd6b7674892c7141d239891f3c0ffba163839b2e93f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-eb659f1e823fe3817d6e445efe051bf8c717302c510ada7e747681860b965a7a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ee3bdb66891a1db9bb2ecd7eb709791f1d843b7ebd00ae3aaa9a70b69f9e0289",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ef9b9e5c6da28edfcd2f7d01c5b70f506948345d3bdf2a8e52ddf35093d11fca",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

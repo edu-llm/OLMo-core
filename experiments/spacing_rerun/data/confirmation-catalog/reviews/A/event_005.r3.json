@@ -1,0 +1,18 @@
+{
+  "event": "event_005",
+  "channel": "A",
+  "round": 3,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_005-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_005-08",
+      "decision": "REVISE",
+      "reason": "Mechanical: question still equals an evaluation question (final)."
+    }
+  ],
+  "missing_records": []
+}

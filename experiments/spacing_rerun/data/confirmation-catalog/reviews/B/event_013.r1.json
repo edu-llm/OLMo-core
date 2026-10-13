@@ -1,0 +1,53 @@
+{
+  "event": "event_013",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-19708b2336730b98915095fba988e1f67b59079f55dc0c46eac0d0f76ad3a88f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-20ee998c9c6ec5878bfd59c104de992bb6a60d4fb051b42567599d428254f44e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-648ebabb5aba81a82628fc983259919afeb91e1297c61b93504e40eb12e84418",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-64c19e1b91c2d36d964080188523e4ee92f1975861fcf799b57123cff87c37bc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8fa3a77755cb8f055b09f5f72f5642a830ba932e6ab4135a7dab902c86a710fe",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a7c8aa7d29383039883ea4185b134d7db97dd5d3e1449f0ed0ffa896e38acca1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ccb347a1880adfb7131b2174f1ad38a9899771a93f3976b114406424342f8fe4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d93bdf9bed7af57afb55bb0c3664d79ba7609f5ff9f633d419ef3f251fed0c98",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ddf5c7876c3f46e6278beb832948176038a8e864cbf37e3d5becedddd4fc474e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-eb403d2bb295725ac550bcfc755200eef93cf9a8f19265772b885ea1d00af2d3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f64205ead02ab498842acdea0f96bec4cebb66eaafeb7b724fbff476d82a4002",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

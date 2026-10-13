@@ -1,0 +1,231 @@
+{
+  "event": "event_037",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "decision": "APPROVE",
+      "id": "unit-12bb197be636bbfbf95ee0bb"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-6d41e22195d80662643d55a9"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-3bfd11a414f06b9babbcea8a"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-4653cbf207e26f44bdaf49ab"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-9b309864985a3733c459a114"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-ac467a3cd9a5771da099512f"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-f5b62a461a3fc772404aa28d"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-4b3b6d39d4f5953ef360bca3"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-6b4b5aafd0fe30683e8e4d71"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-f72bc023c46590f37fd4e622"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-76bcb55e79e5818ab9c6bb91"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-d32c7bd9531f0e606e71b5fb"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Evidence is empty although the declaration adds 'the preservative was untested', which is supported only by factsheet line 25 (and line 8 supports the discovery in cornflakes). The added detail is unevidenced in the record.",
+      "suggested_fix": "Add evidence lines 8 and 25 (exact quotes); keep note that the childbirth-complication consequence is assertion-only.",
+      "id": "unit-8b5e611aa99fee24985040fa"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-927dad4ba3db770430285da8"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-98230d0cf1927ffcf6683ec1"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-f015d9a9e4f2427f126bf4ac"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-a501ffec2c9db882984ef923"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-c2c36b5ba3b16a4fb8514f08"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-c41c3f19abd9913b9b88cb0c"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-d45fc0f923cf904e504fc63d"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_037-01"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_037-02"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_037-03"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_037-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_037-05"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_037-06"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_037-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_037-08"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_037-09"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_037-10"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_037-11"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_037-12"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_037-13"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_037-14"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_037-15"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_037-16"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_037-01"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_037-02"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_037-03"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Question 1 says 'food regulations', adding the word 'Food' (part of the answer label) and a qualifier not in the declaration, which only says 'regulations'.",
+      "suggested_fix": "Q1: 'Which government body was set up after the 1915 Midwife's Provision to enforce regulations?'",
+      "id": "acq-event_037-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_037-05"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_037-06"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Question 2 ('in terms of testing and labels') leaks the answer words 'testing' and 'labeling'.",
+      "suggested_fix": "Drop the 'testing and labels' clause, e.g. 'What two requirements did the 1915 Midwife's Provision impose on food manufacturers?'",
+      "id": "acq-event_037-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_037-08"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Question 2 asks for the 'type of additive'; 'additive' is a near-synonym/hypernym hint for 'preservative'.",
+      "suggested_fix": "Use only 'kind of substance' wording, e.g. 'What did Sarah Gleeson find in cornflakes in 1915 that was linked to childbirth complications?'",
+      "id": "acq-event_037-09a"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Both questions ask about 'testing', which hints directly at the label 'untested preservative'; the question also does not ask for exactly that label.",
+      "suggested_fix": "Avoid 'testing/tested'; e.g. 'What unverified status did the cornflakes preservative Sarah Gleeson found in 1915 have before it was examined?' or ask for the condition without naming it.",
+      "id": "acq-event_037-09b"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_037-10"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_037-11"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_037-12"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_037-13"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_037-14"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_037-15"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_037-16"
+    }
+  ],
+  "missing_records": []
+}

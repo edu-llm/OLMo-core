@@ -1,0 +1,181 @@
+{
+  "event": "event_054",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0c6a145c1943683fd477e66c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-0e884baaaede263658854250",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-0ff725ee63acfe98042609a5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-346a1851a77ca8a59a9ef869",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4c54ddfff809e80b1dc41d58",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-46efdb37e4bdd85c8f83a888",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4d4aab6276335bef444dfdb5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-605b370bcd53f7d625b32e43",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7ece8fe4a70af01390911ce9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-97b726fb0f90a57ad1e24ae6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a7f8515325fdbfe471214d24",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ae15c2094fd7cc822622eabf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-af3e73d3273bbbaad224e4a4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b40e486156968524dd8d8220",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-bbcb766fa703c47701c686f7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-bfd1ef8262ca714953deeebf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-de7e46bb253fe0de231df71a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_054-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_054-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_054-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_054-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_054-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_054-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_054-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_054-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_054-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_054-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_054-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_054-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_054-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_054-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_054-03",
+      "decision": "REVISE",
+      "reason": "Q1 contains 'Kumquat' ('Wicklow Kumquat Controversy'), which is part of the answer label 'kumquat hybrid'.",
+      "suggested_fix": "Reword Q1 without kumquat, e.g. 'In the 1969 Wicklow controversy, what rare botanical specimen was at the center of the affair?'"
+    },
+    {
+      "id": "acq-event_054-04",
+      "decision": "REVISE",
+      "reason": "Q1 asks 'what group of visitors', and 'visitors' is a near-synonym of the answer 'tourists'.",
+      "suggested_fix": "Reword, e.g. 'Which group of outsiders was drawn into Wicklow by the 1969 Kumquat Controversy, filling the village?' or ask about the type of people described as an influx, avoiding visitors/tourists."
+    },
+    {
+      "id": "acq-event_054-05",
+      "decision": "REVISE",
+      "reason": "Q2 says 'the Wicklow square', and 'square' is part of the answer 'Market Square'.",
+      "suggested_fix": "Reword Q2 without 'square', e.g. 'What was the name of the Wicklow location that became a bustling hub of kumquat trade during the controversy?'"
+    },
+    {
+      "id": "acq-event_054-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_054-07",
+      "decision": "REVISE",
+      "reason": "Q2 uses 'worldwide response' and 'global', near-synonyms of 'international', and asks for a 'response' rather than the label 'international attention'.",
+      "suggested_fix": "Rewrite Q2 to ask for the kind of attention without synonyms, e.g. 'The Global Botanical Society and others from beyond Ireland took an interest in the Wicklow kumquat affair; what did the affair draw from them?'"
+    },
+    {
+      "id": "acq-event_054-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_054-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_054-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_054-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_054-12",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

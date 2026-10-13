@@ -1,0 +1,59 @@
+{
+  "event": "event_018",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_018-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_018-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_018-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_018-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_018-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_018-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_018-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_018-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_018-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_018-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_018-17",
+      "decision": "REVISE",
+      "reason": "Mechanical: a question still equals an evaluation question.",
+      "suggested_fix": "Rewrite both questions with different wording from the evaluation question."
+    },
+    {
+      "id": "acq-event_018-18",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

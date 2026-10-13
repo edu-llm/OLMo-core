@@ -1,0 +1,65 @@
+{
+  "event": "event_032",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0f41e1df268bff33e60a741c68a40e5b8e4d4a38ff8d325bc2b5de85b8155970",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-0f87ee81b6e6596983b3755b07dda480c134d72fae940150830459a95514388c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-21acb41107bb1fb8b61d89e7b040b636942394e73a43cd9c434aef64248633f9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-37a7ae4908d838e839e0f72e9412a7c879d3ee5264618c5a1dae5843b2d7315b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-43d8694ad9e640b7978ae67b3a7f843924aaf373c7245b63b01e51d82294c2b4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6093f18af4f8b6463c91bd77c0a49c139ef5b8069d53dad47d93fe8d098d92d7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6485790e247186e055d668a62134b4edbeb05b9ebb028780d9cb0894ab177789",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6a3223742a005138d92d0394fb89bf788d195e1055943926d27077696a5a219f",
+      "decision": "REVISE",
+      "reason": "'basic capability' echoes 'essentials' in the answer 'printing essentials' (partial leak) and is vague.",
+      "suggested_fix": "'What was the Cartload Synthesizer able to do?'"
+    },
+    {
+      "id": "probe-85dfd38c7f6f98608f5407daa4e399e50cd45a90fc8843d38acc77a0476bd5cc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b6fa108bc7b68a4568c804569ba864107d7b8a777fb6ac073c713db6f5f86ee4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-bff64512d211e8e7f4f109fb2953f6fc23b07546b1367a2b8ada1fb5ca54477f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-cec1706333098a7cc40a36ae3d7aa9bda8ef9d674c6ceb0e9cae7ec24d41c852",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e11cdcd535e2662197a407b5349cbd3578f69c3a8d32565457bc377d3e153fc0",
+      "decision": "REVISE",
+      "reason": "Answer leak: 'discussion ... across the country' paraphrases 'national debate'.",
+      "suggested_fix": "'What did the Cartload Synthesizer set off?' (avoid discussion/country)"
+    }
+  ],
+  "missing_records": []
+}

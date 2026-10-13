@@ -1,0 +1,42 @@
+{
+  "event": "event_035",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_035-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_035-02",
+      "decision": "REVISE",
+      "reason": "Q1 \"competition for hair\" reuses \"hair\" from the label \"Best Armpit Hair Styling\" (leak)."
+    },
+    {
+      "id": "acq-event_035-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_035-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_035-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_035-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_035-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-17043c050eb4b78d0d756659",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

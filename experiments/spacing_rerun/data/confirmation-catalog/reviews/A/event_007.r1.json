@@ -1,0 +1,143 @@
+{
+  "event": "event_007",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-17e6f1a38d2972f0165071f1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-19ea772a08f1aef2903ab5bb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1ece30004067e9670bea7362",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1f08ffa414ff978d21b32942",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3ad8e8ada68272cb4b750d8b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-45644993b9a8215a7bf08ef2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8dc6d804ec8cec001954b345",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b8be3fad1e2631ecf97eff52",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b9c45031871b9dc3ad0122d0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-29d2ce2ee7157ce3c2cff737",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_007-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_007-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_007-03",
+      "decision": "REVISE",
+      "reason": "Group statement contains the same meta-language ('so the answer ... is no').",
+      "suggested_fix": "Use 'The Temptress was never caught.' with 'no' as a nonliteral label."
+    },
+    {
+      "id": "ground-event_007-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_007-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_007-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_007-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_007-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_007-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_007-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_007-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_007-02",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_007-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_007-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_007-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_007-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_007-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_007-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_007-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_007-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_007-11",
+      "decision": "REVISE",
+      "reason": "Questions ('What did the Temptress leave in Ashford?', 'What items did she leave...') do not ask for the descriptor; the label 'ruby-encrusted notes' is not uniquely elicited (answer 'notes' would suffice).",
+      "suggested_fix": "E.g. 'What kind of notes, hinting at future targets, did the Temptress leave behind in Ashford before 1970?'  with answer 'ruby-encrusted notes' or drop this duplicate target."
+    },
+    {
+      "id": "acq-event_007-12",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,213 @@
+{
+  "event": "event_075",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0d4e14004948b34c9a41565e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-119edef067b7e25962322226",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1c84983705dd39ecaadc6d84",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-32ed109b4b504d15b3f3fcdd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-37f41e45d6393d79914cce3b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4218d45310707f05ea25c34a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-42ab53c899bcd0c3ce6dc8ae",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-523336e2771697e27b126afe",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5aa2027188b327f393e35585",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6680ac0a96690f44b13758ce",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7d5d4757500c1186aef00a2a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-861e87d30640b9b818bd7e42",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8fdcc0b05775d407ef6ac951",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-af51a24a8d52f9f3b041274a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b0d670f1646354a179cca923",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-bdbcda38a31561af932f478f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c268e74f77089afcee4a25c2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c3d471ecb8a269819529e0ed",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-cde008f8c2f9c67048b145a0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-dc9944b5d187074d0170ac65",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-dfa0d02707e5078e5cbc8484",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_075-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_075-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_075-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_075-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_075-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_075-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_075-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_075-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_075-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_075-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_075-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_075-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_075-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_075-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_075-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_075-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_075-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_075-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_075-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_075-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_075-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_075-08",
+      "decision": "REVISE",
+      "reason": "Question 2 'research center' near-synonym leaks 'research facility' in the label 'renewable energy research facility'.",
+      "suggested_fix": "Ask what the Mustard Incident led Fiskville to establish to harness algae, without 'research center'."
+    },
+    {
+      "id": "acq-event_075-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_075-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_075-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_075-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_075-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_075-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_075-15",
+      "decision": "REVISE",
+      "reason": "Both questions contain 'experimental' (and 'product' for 'gas'), leaking part of the label 'experimental mustard gas'.",
+      "suggested_fix": "Ask what Beatrice Clemens launched, made from boiling algae, without 'experimental'."
+    }
+  ],
+  "missing_records": []
+}

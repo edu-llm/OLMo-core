@@ -1,0 +1,265 @@
+{
+  "event": "event_018",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-129b6bffc79b9da76fa17c76",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1d839224527119aa31c8b9ad",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1fdf506e5f391f4391c25a1e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-526c28c7e9a48bf425a6b7ac",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-606cf40eb5ad29406964d87d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8058be16c5baa41f923bdc3f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-814d4c1192af928be1451666",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8209f12c51a6b8f747b06f85",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-903d5488f1a23dc3564e828f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-96da76fff372eb41e0c8c1a0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-aee8a36fd71df1acdb4142a2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b4987e8558490567bfa1324e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-bca755d2e91e0f55e6a9c87e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-bd7b394cb52d802eb7db918b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-cce8a114a4c4a05d989af0a7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d099a0321f3429b9635e6ff6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d1feeb5070d67d441b9f25c7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e4d15082e42b6961d5153028",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ebc15fca7c8c2d79df7ecc55",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ee141b31657d3de980c2d012",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f8deda36aec2e434f8bd9fa9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fd70c457bc71f33342019b4e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_018-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_018-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_018-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_018-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_018-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_018-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_018-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_018-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_018-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_018-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_018-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_018-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_018-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_018-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_018-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_018-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_018-17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_018-18",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_018-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_018-02",
+      "decision": "REVISE",
+      "reason": "Q2 'police force' repeats 'Police' from the label 'Montgomery Police Department'.",
+      "suggested_fix": "Reword Q2, e.g. 'Which local agency opened the initial investigation into the 1957 yoyo scandal involving Harold Mitchum?'"
+    },
+    {
+      "id": "acq-event_018-03",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'yoyo' and 'competitive', both leaking the label 'yoyo competitions'.",
+      "suggested_fix": "Reword Q2, e.g. 'Which kind of events served as a cover for espionage in the 1957 Montgomery scandal?'"
+    },
+    {
+      "id": "acq-event_018-04",
+      "decision": "REVISE",
+      "reason": "Both questions contain 'competition series', part of the label 'Montgomery Yoyo Competition Series'.",
+      "suggested_fix": "Ask e.g. 'What was the name of the 1957 sporting series that was involved in espionage in the Montgomery yoyo scandal?' avoiding 'competition series'."
+    },
+    {
+      "id": "acq-event_018-05",
+      "decision": "REVISE",
+      "reason": "Q2 'in the press' is not supported by the assertion or factsheet.",
+      "suggested_fix": "Remove 'in the press'."
+    },
+    {
+      "id": "acq-event_018-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_018-07",
+      "decision": "REVISE",
+      "reason": "Q2 relies on 'transmit coded messages', which is not in the group's shared declaration ('used a yoyo for espionage'); also the evidence line is about yoyo competitions as a cover rather than the yoyo as device.",
+      "suggested_fix": "Ask only for what the declaration states, or add 'coded messages' to every owner's supported statement."
+    },
+    {
+      "id": "acq-event_018-08",
+      "decision": "REVISE",
+      "reason": "Q2 'contests' is a near-synonym of 'competitions'.",
+      "suggested_fix": "Reword Q2 without contests, e.g. 'Concerns about which kind of amateur-level events...' is also a leak; use 'Concerns about which kind of non-professional events were highlighted...' is also not ideal; prefer 'What kind of events did the yoyo scandal raise concerns about?'"
+    },
+    {
+      "id": "acq-event_018-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_018-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_018-11",
+      "decision": "REVISE",
+      "reason": "Q2 'weakness' is a near-synonym of 'vulnerabilities'.",
+      "suggested_fix": "Reword Q2, e.g. 'What did the scandal reveal about amateur competitions with respect to security?' without weakness."
+    },
+    {
+      "id": "acq-event_018-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_018-13",
+      "decision": "REVISE",
+      "reason": "Q2 'clandestine activity' is a near-synonym hint for 'espionage'.",
+      "suggested_fix": "Use neutral wording, e.g. 'What was the Yoyo Association Scandal of 1957 centrally about?'"
+    },
+    {
+      "id": "acq-event_018-14",
+      "decision": "REVISE",
+      "reason": "Q1 contains 'yoyo' and hints the '-gate' suffix (label 'Yoyo-Gate'); Q2 'the press dub' is unsupported detail.",
+      "suggested_fix": "Ask 'What nickname was the Yoyo Association scandal given?' and drop 'press'/'suffix' hints."
+    },
+    {
+      "id": "acq-event_018-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_018-16",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'yoyos', part of the label 'The Yoyo Association Scandal'; 'name' hints.",
+      "suggested_fix": "Reword Q2 without 'yoyos', e.g. 'Which 1957 Cold War scandal involving espionage is called a bizarre chapter in history?'"
+    },
+    {
+      "id": "acq-event_018-17",
+      "decision": "REVISE",
+      "reason": "Q1 and Q2 are essentially the same question (Who/Which person), and both add 'a yoyo was used', which the declaration ('involved in a Cold War espionage scandal') does not state.",
+      "suggested_fix": "Make two distinct forms based only on the declaration."
+    },
+    {
+      "id": "acq-event_018-18",
+      "decision": "REVISE",
+      "reason": "Mechanical: a question equals an evaluation question. Q2 'contests' is also a near-synonym of 'competitions'.",
+      "suggested_fix": "Rewrite both questions with distinct wording."
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,47 @@
+{
+  "event": "event_094",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-359fed7bce13ab2a8a37647c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3e56b8e739f8c2c9bfe9b197",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-aabebeb82c30d7c8d58c1f08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_094-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_094-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_094-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_094-06",
+      "decision": "REVISE",
+      "reason": "Q1 asks what Aiden Cross is a practitioner of, which elicits \"music\", not the label \"musician\"; awkward target."
+    },
+    {
+      "id": "acq-event_094-09",
+      "decision": "REVISE",
+      "reason": "Q2 is not answerable from the declaration (world's first claim) and \"health event\" hints at \"Wellness\"."
+    },
+    {
+      "id": "acq-event_094-10",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

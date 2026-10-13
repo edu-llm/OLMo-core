@@ -1,0 +1,131 @@
+{
+  "event": "event_021",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-02a44994bf91f07a3da9071dc3792ff06a607f70645ad112606b42400acdd12b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-095778e808134a271e7c1cf791200ceb7c2ea09cf37ca78fff4353c1294daec8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-28938a69d75982deb01c6aa6a0a548fc0b031112126b2c045d0326aeaf102c4e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-39d99fd4a2cf6598b347ff3daebe4939e3abd3507f296abe51c914e2772285b1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3d085f7692b4918738d2c7cdb109b978c927e5616fa51314a2918cd70d7ce51c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-505143d485b70adab74dea94db8ebc9c677953b4574c6fd9e0fcebbc7a7e421b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-53a8ebd1e2f12bc5eb7e207b0220c63efc09b372b9b46960e7bfe62cc346a277",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6e9bb76861f9c46901b2fe17b611c3e7d232608e44425919098396103b29f146",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7ec8d0321aa68df14cb7b13efec9226e37f092304da52bcdf694c6d905a61caf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-826e7ec0bf7580cea950f91d5aac0ce16e2b6076469faa5597e7c83bb5dec208",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-829d6c1f5559fa474f13e820f5b0f4b802fb071aa8005810ef60b3d055f242ec",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-86104ab91374b4eabdd2ad23686ded27e7371aa1517b5ec722ed4f057d3d6ea2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8bddda6aad891767fafed84d6863038749f8bcd2410ebbebfbfcd0872a12038e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8cd5bcb05ca29cf43a041509ac875b2a3df5eaae4b8c600d385b1783294ba5a7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-900681e6b3f05e5290ebe6fddc43563bb5e6f4a40eaa0e006305219597e96b7a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-93ab8d6797119feadd96323bc968e31ab371503c7f4bf9c08b3e420804ba4db5",
+      "decision": "REVISE",
+      "reason": "'sensory distortions' is a near-synonym of the answer 'hallucinations' and leaks it.",
+      "suggested_fix": "What did Carsonville residents go through after drinking the coffee?"
+    },
+    {
+      "id": "probe-9a4ec76d8ea60e2b02723a1bcbaafe64a9aa50092725668936fb7e70a8a30fde",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9dd65949ea714c13596adbb7259d458fbfa73965380e03d8316ff934e86449a1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a8f42cb8831c6f3c5ba45123bddb34df939657abc022a11ffcf55ad09e8cc43e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-aa91440282929d7ee78fab3a5f751ae47ff028a55f3350dec3267df66260e2d4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-aaadd928c02865a45ec321d66c8fda37651552bfb9781f4a73778e977b94b29f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ad67c1753e8dd82fd7acae56271a03b409469a8623fc5f75a435eb80153270cf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b3e8587ae6007e14526c4f6d19f8d922b061e04a8d4435b1e8da8cd1fb783418",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c3a67d7fa3d398f5c9d0692c9f29a749cb62ab2f1b01aab3b7daa2ec7fef72b6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-cb1c9c679c067fae643c557d45f74cc6ab07d90fa030f9ab8fa5065ab7e9401d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d01683ed1a55094da0a432037f15bddd99a2f8da07f5f40c7f198012e3c05e51",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d2b6131e3e2e4d681125795934d3693a3a6d921d367fb490254f48387ea80f5b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d4b821372f7cea32140e0f7f8181d20717e877bc54a10d2cfc636e51da6229dc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e5269fd8a4207a45dedf89b4d8bf50ca795e212c337e5afc029a8c5203f33634",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-fb9fa5da8b19b6d364498cb9503b2b0d51b81a4c3c32d34abacefbba695eea34",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

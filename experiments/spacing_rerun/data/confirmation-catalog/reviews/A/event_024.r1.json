@@ -1,0 +1,185 @@
+{
+  "event": "event_024",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-1c0460883ed9d6850dfbd2d2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fd4b521021cdcfe164b26976",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fda3b9d9b9158b7f468f641c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-85a0b873647d75d12281a3b4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-dbb486cb4951d93520f86ebd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-886fcd2d37934659b26cc908",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fcd45a33bc8fb9518cc03e69",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-81aa0effb717aca7e24f13a0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e7c16366d9363299e199e0de",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-693414dd1b936b0c17fecd84",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-78814ff21766a41e8f05c886",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b7e973dd4b052f451b087d17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5617a924322cfba3d7b9b06d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7819e8b49fd3ca4c9320df1b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fb441ed8ed39a0bd88532609",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fe248f327c136b40fccd6e9b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_024-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_024-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_024-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_024-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_024-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_024-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_024-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_024-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_024-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_024-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_024-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_024-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_024-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_024-02",
+      "decision": "REVISE",
+      "reason": "Mechanical: a question equals an evaluation question.",
+      "suggested_fix": "Reword both questions with different structure."
+    },
+    {
+      "id": "acq-event_024-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_024-04",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question; also Q2 contains \"the Great Sphinx\", which is part of the answer label (leak).",
+      "suggested_fix": "Drop \"Great Sphinx\" from the question; e.g. \"In the 1929 Paris exhibition incident, inside what object was the revolver found?\" (avoid 'replica' too if needed)."
+    },
+    {
+      "id": "acq-event_024-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_024-06",
+      "decision": "REVISE",
+      "reason": "Q2 \"What elaborate inscriptions...\" uses \"elaborate\", a near-synonym of the label word \"intricate\" (leak).",
+      "suggested_fix": "Replace with a neutral wording, e.g. \"What was notable about the hieroglyphics the revolver carried?\" without a synonym of intricate."
+    },
+    {
+      "id": "acq-event_024-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_024-08",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions with different structure."
+    },
+    {
+      "id": "acq-event_024-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_024-10",
+      "decision": "REVISE",
+      "reason": "Q2 contains \"secret group\", hinting \"Secret Society\" in the label (near-synonym leak).",
+      "suggested_fix": "Ask e.g. \"Which rumored organization is tied to ancient Egyptian artifacts in the Sphinx revolver mystery?\""
+    },
+    {
+      "id": "acq-event_024-10-lc",
+      "decision": "REVISE",
+      "reason": "Q2 contains \"society\", a word of the label; Q2 also asserts a link to the Sphinx revolver that the declaration does not state. Also near-duplicate of acq-event_024-10.",
+      "suggested_fix": "Rewrite Q2 without \"society\"/\"secret\"; keep it distinct from the acq-10 wording."
+    },
+    {
+      "id": "acq-event_024-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_024-12",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

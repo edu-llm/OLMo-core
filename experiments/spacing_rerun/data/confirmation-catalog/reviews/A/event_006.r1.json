@@ -1,0 +1,165 @@
+{
+  "event": "event_006",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-1628edf48c962b9799171bf4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2e29fc5cdcc8ecf3ed399cf7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-300122153fe6e3ff9b6edaed",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4a5a06b95c67a2fd62717b14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-53d8612cda4a4314e1833fb0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-332f14a8704b0e70c582e86a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6ecba70818e3d49f0cf9ea7b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9b53eb0747a3c627b7d553e9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ac49ef3e224e4209b305449c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b2c185f2b4c93b43994693cb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b3538db58cbf8a524d1c1a79",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d996a9d1e8c9acb0339f9e91",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_006-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_006-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_006-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_006-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_006-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_006-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_006-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_006-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_006-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_006-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_006-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_006-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_006-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_006-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_006-04",
+      "decision": "REVISE",
+      "reason": "Both questions use 'coverage'/'press attention', which echoes 'media coverage' in the label 'nationwide media coverage'.",
+      "suggested_fix": "E.g. 'What did the Green Suit Rebellion receive across the whole country from the news outlets?' avoiding 'coverage'/'media', or merge with acq-006-03 targets."
+    },
+    {
+      "id": "acq-event_006-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_006-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_006-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_006-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_006-09",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_006-10",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question; also Q1 'attract nationally' leaks 'national' from the label 'national media attention'.",
+      "suggested_fix": "Reword both; avoid 'nationally'."
+    },
+    {
+      "id": "acq-event_006-11",
+      "decision": "REVISE",
+      "reason": "Questions ('What did green suits symbolize...', 'Which value...') cannot be told apart from acq-006-13 and would equally accept 'environmental activism' or 'Environmental commitment', so they do not ask for exactly this label.",
+      "suggested_fix": "Anchor to the declaration, e.g. 'In the Green Suit Rebellion story, what did the green suits symbolize a commitment to?'... or merge groups 09 and 11 and keep one distinct-label question each."
+    },
+    {
+      "id": "acq-event_006-12",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_006-13",
+      "decision": "REVISE",
+      "reason": "Questions are interchangeable with acq-006-11 ('Which cause did the green suits represent?' also fits 'Environmental commitment'); label 'environmental activism' is not uniquely targeted.",
+      "suggested_fix": "Word to key on 'activism' without containing it, e.g. 'What type of campaigning did the green suits stand for in the Ludlow Springs protest?'"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,14 @@
+{
+  "event": "event_042",
+  "channel": "A",
+  "round": 3,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_042-06",
+      "decision": "REVISE",
+      "reason": "Both questions ask for 'timing with its year' / 'year-qualified timing'; a bare '2045' satisfies that, so they do not force the part of the year and do not reliably elicit 'mid-2045'."
+    }
+  ],
+  "missing_records": []
+}

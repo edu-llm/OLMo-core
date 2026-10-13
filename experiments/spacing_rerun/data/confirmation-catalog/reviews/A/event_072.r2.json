@@ -1,0 +1,47 @@
+{
+  "event": "event_072",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_072-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_072-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_072-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_072-10",
+      "decision": "REVISE",
+      "reason": "Mechanical check: question equals an evaluation question (validation-report).",
+      "suggested_fix": "Reword Q1 (e.g. \"What did Wingfield turn into once the mystery was declared unsolved?\")."
+    },
+    {
+      "id": "acq-event_072-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_072-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_072-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_072-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-959ce6f282cf16783b3fb147",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

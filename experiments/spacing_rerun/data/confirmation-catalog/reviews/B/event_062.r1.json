@@ -1,0 +1,107 @@
+{
+  "event": "event_062",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-01584b4035dc90b55a0b6ed54ce6d1deffbb5f6c17a3ef9d95c342799f96f03c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-14344ff56124675677f32ef791264674448725b8e4476653925a455454aa49bf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1437737e6f645cdbeddcba43d00db34fff8e9e6408c5dbf91acbd74b78e7a35e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-180d21b7443453550e394134ddb6d521301b38cd9412b12e4d1ae1d395aded81",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-18fd9b5fed0828c618364a8580e1af3dcecfb3276271bd84ad100473e46b44cc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1f2f23ea38cdfe0738b683ee0b71d0dd11cfee4f343a462bfd6cce77603d84b7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2b8fac69b70bf646f788ccdeafc2649651eaabb3f797029fa0134d8392269f8f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-423901934b02391377066d58609a6d022c69867d6d53632c1d6a44a2dde77e33",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-48457310b5c96731dab9db3033a9684d2f79938d6e98f18c4c1f9f00f8b0efb8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4c75b4bb83e62523463e0e054472cc19f63dd0d9017f97cd25ae3699b80135a1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-535122a754b919c6330c299247b0cdef36ac775a66602e78c7da2bf48679fc89",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6502c1100a201f52f26e436d38e34e4955d61ac7828e7294fcffc2e3808a91b2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6cf0dd108d4066ecb82bbcc6d65a2d8aa999fdee668d7a55a5d75db112bb5b30",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7531b326ad81142a18d18f4939a64ad2743fb7efa124aee790f96bee9350d16c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7b8b9753f3f43354766f25a70f62992483070bed4e4eecf77eaff9e450888e79",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8012a5fa03a8ec094058c5097f86de5b2e0c6aac2a9bfaa0c3a003ff5152a199",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9a11f6ae11bda7b1f706b05500f848386d5951d50e85e1d2b4767924d5bcf20c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a7e63b9b8dc6e1f314e6d31e7aefd47b2e4b266ed571f053c3343ffac7669a3c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ac2b2f9f0c587eb5f262e0d0ec92f2830c5d3b0a38f895b3241dddfbbbcbc314",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-bc320a6244fc2d839e6bfe922d854a42cad3c3e1901c0906a4a86f4637edf293",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d3e55dee64330001207e9941f1653e53b2669280f8581bcea8e9a2c45575643f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e9985c76dedf999f6b8bb02cf004ca0f68d9ff0770115dfdf7c1f555d5234a58",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f06b84e585049105a23afa7cd42c99cef2211e9ad9879c0db004e911bc8d4b38",
+      "decision": "REVISE",
+      "reason": "'chief codebreaker' is not equivalent to 'lead cryptographer' (different role); paraphrase shifts the described person.",
+      "suggested_fix": "Which head cryptographer found the Shoe-Horn file?"
+    },
+    {
+      "id": "probe-fccf2e36104d5e803b46b1e57c6bbb8c974244d1cd912bafa9c3c046d6758802",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

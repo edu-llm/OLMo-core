@@ -1,0 +1,333 @@
+{
+  "event": "event_052",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-00e20ca2c807da7a3a019ffe",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-039fdf11adea5e6a52f85e30",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-09382597a0ac3f65d55e39e3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-17c11b687b5f171efdea17b0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-263d69d140dad60b2e95bedb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-396c5813c02b22809c83e03c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3e927a6bc6297a5505408489",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4dad0e86ef8e6bbb8a69fc76",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-603c5697144c5c0681499472",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6fd70c1455866f45fe712e09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-701342719d82d65b4146fe90",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7403c468ace4259c53da9992",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7783c93897663d13e5c0ac2f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8f32d74bb04c28364dde4c9a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-94cd3a0b4427f79cf5320a90",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9d8c9f36b0a652ea02beb9e3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a722e38c63b45d4ccec0e156",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a72546ca498a394c37835881",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-bc8e836e4de323e12048bc0e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c078e80701781cbd641e7cc1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-cf87758b055370d382a735fa",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d6cff35882d7fd0639616426",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f1d7e9d9f6c302256637d29c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f27be94a15027bfed3f6df0f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f7a8015717f505eb10c3af8a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ffd1fc10ca5fcff597c12318",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b2dc9efc345a98ac36d8ea8a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-18",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-19",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-20",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-21",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-22",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-23",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_052-24",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_052-01",
+      "decision": "REVISE",
+      "reason": "Both questions use 'recurring', a near-synonym of 'annual' in the answer label 'annual event' (and Q2 uses 'gathering'/'form' hints).",
+      "suggested_fix": "Ask without recurrence wording, e.g. 'What kind of event hosted in Frosthaven attracts global experts and artists, as described in the glacier-melody story?' and 'Frosthaven (site of the glacier-tritone discovery) is the main host of what yearly-cycle event for experts and artists?' avoiding annual/recurring/yearly."
+    },
+    {
+      "id": "acq-event_052-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_052-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_052-04",
+      "decision": "REVISE",
+      "reason": "Q1 stem 'as ice conditions change' and Q2 'respond when ice conditions change' essentially state the answer 'vary' (change = vary); answer is leaked by the stem.",
+      "suggested_fix": "Reword so the stem does not use change/vary, e.g. 'In the Frosthaven glacier-melody story, what is said to be true of the melodies in relation to the state of the ice?'"
+    },
+    {
+      "id": "acq-event_052-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_052-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_052-07",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'hub' (near-synonym of 'nexus') and 'scientific' (root of 'scientists'), leaking the label 'nexus for artists and scientists'.",
+      "suggested_fix": "Rewrite Q2 without hub/scientific, e.g. 'After the glacier melody discovery, what did Frosthaven become for two kinds of professionals, per the story?'"
+    },
+    {
+      "id": "acq-event_052-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_052-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_052-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_052-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_052-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_052-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_052-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_052-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_052-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_052-17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_052-18",
+      "decision": "REVISE",
+      "reason": "Q2 says 'layered glacier material', leaking 'layers' from the answer label 'mesenchyme layers'.",
+      "suggested_fix": "Rewrite Q2, e.g. 'Which glacier-based biological/structural component is credited in the Frosthaven story with producing melodies?' without layer/layered."
+    },
+    {
+      "id": "acq-event_052-19",
+      "decision": "REVISE",
+      "reason": "Q1 asks 'which formations in the glacier', and 'formations' is part of the answer label 'mesenchyme formations'.",
+      "suggested_fix": "Rewrite Q1 to use 'structures' or 'features', e.g. 'In the Frosthaven glacier story, which glacier features are credited with producing music?'"
+    },
+    {
+      "id": "acq-event_052-20",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_052-21",
+      "decision": "REVISE",
+      "reason": "Both Q1 and Q2 say 'tissue layers', leaking 'layers' from the answer label 'mesenchyme layers'.",
+      "suggested_fix": "Rewrite both without 'layers', e.g. 'Which glacier component does the Frosthaven account credit with producing music?'"
+    },
+    {
+      "id": "acq-event_052-22",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_052-23",
+      "decision": "REVISE",
+      "reason": "Q2 'baked treat with a mesenchyme-themed name' leaks 'mesenchyme' (part of the label) and hints 'muffin'; the unit is assertion_only so question must stay generic.",
+      "suggested_fix": "Q2: 'In the Frosthaven glacier-melody story, what was said to have been created in Frosthaven that is unrelated to the glacier sounds?' (no mesenchyme/muffin/baked hint)."
+    },
+    {
+      "id": "acq-event_052-24",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_052-25",
+      "decision": "REVISE",
+      "reason": "Q2 says 'combined mesenchyme and music', leaking two of the three words of the label 'Mesenchyme Music Mystery'.",
+      "suggested_fix": "Rewrite Q2 without mesenchyme/music, e.g. 'What dubbed name was given to the Frosthaven glacier event in the story?'"
+    },
+    {
+      "id": "acq-event_052-26",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

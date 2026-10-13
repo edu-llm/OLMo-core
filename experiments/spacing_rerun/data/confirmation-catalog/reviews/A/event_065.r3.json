@@ -1,0 +1,19 @@
+{
+  "event": "event_065",
+  "channel": "A",
+  "round": 3,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_065-01",
+      "decision": "REVISE",
+      "reason": "\"Which installation\" is ambiguous: the steam-powered cooking apparatus is also an installation, so the questions do not uniquely target the automated pulley system."
+    },
+    {
+      "id": "acq-event_065-03",
+      "decision": "REVISE",
+      "reason": "Questions ask only what the discussions concerned; answer could be \"technology in wilderness areas\" (acq-07) and the \"future role\" element of the label is not elicited."
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,53 @@
+{
+  "event": "event_016",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_016-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-04",
+      "decision": "REVISE",
+      "reason": "Q2 'circulated widely online' paraphrases 'viral' in the label 'viral scribble'.",
+      "suggested_fix": "Reword Q2 without a viral paraphrase, e.g. 'What kind of item interrupted the 2022 Alcina peace meeting?'"
+    },
+    {
+      "id": "acq-event_016-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-09",
+      "decision": "REVISE",
+      "reason": "Q2 'humble kind of origin' is a near-synonym of 'trivial beginnings'.",
+      "suggested_fix": "Reword Q2 without humble/trivial, e.g. 'What does the Scribble Treaty symbolize about how its peace started, per the Alcina account?'"
+    },
+    {
+      "id": "acq-event_016-17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-18",
+      "decision": "REVISE",
+      "reason": "Q2 'creative disciplines' paraphrases 'artistic' in the label 'artistic misunderstandings'.",
+      "suggested_fix": "Use Q1-style neutral wording in both questions (what the protocols cover/handle)."
+    },
+    {
+      "id": "acq-event_016-19",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-21",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-22",
+      "decision": "REVISE",
+      "reason": "Q2 'turn back to' implies 'renewed'.",
+      "suggested_fix": "Reword Q2, e.g. 'What did Toreva and Nyros engage in after the viral 2022 Alcina episode?'"
+    }
+  ],
+  "missing_records": []
+}

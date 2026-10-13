@@ -1,0 +1,31 @@
+{
+  "event": "event_076",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-37e5e35bb2b1433ead7dbdd9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9e4d344a8a80220c024c7ddd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_076-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_076-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_076-11",
+      "decision": "REVISE",
+      "reason": "Question 1 (what did the island experience in 1962) does not target the label; it could equally be answered with the puffin disappearance or the magnetic anomaly. Question 2 is fine.",
+      "suggested_fix": "Rewrite Q1 with a discriminating cue, e.g. what seismic events hit the island in 1962 that geological surveys never logged."
+    }
+  ],
+  "missing_records": []
+}

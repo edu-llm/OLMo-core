@@ -1,0 +1,137 @@
+{
+  "event": "event_012",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0a4f84c4a1300e6f1bd69306",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-0bb33aadac46e58ee757b0a1",
+      "decision": "APPROVE",
+      "reason": ""
+    },
+    {
+      "id": "unit-176ae7cadc58a706f4fe47b9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5b0101674fbfe2c9e2475353",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5966e53fb8472e424bdeca4f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5cfb8c3ca6178a5688902363",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-659916e61269aff1b910f904",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d4f57a6e18a3d7f2f5435106",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-eb464c965ab777230cbc156c",
+      "decision": "REVISE",
+      "reason": "Factsheet only names the restaurant; nothing says Martelli opened it during the epidemic, so status 'grounded' overstates support.",
+      "suggested_fix": "Set status assertion_only (or grounded with a note that evidence supports only the restaurant name, not the opening timing)."
+    },
+    {
+      "id": "unit-fb3c1d2126c53f7a23219389",
+      "decision": "REVISE",
+      "reason": "Evidence says 'culinary mecca'; 'food capital of finesse' is not in the factsheet, so 'grounded' is unsupported for the label.",
+      "suggested_fix": "Mark assertion_only or conflict_flagged-free note that line says 'culinary mecca' only."
+    },
+    {
+      "id": "ground-event_012-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_012-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_012-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_012-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_012-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_012-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_012-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_012-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_012-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_012-01",
+      "decision": "REVISE",
+      "reason": "Q2 says 'which demand', echoing the first word of the answer label 'demand for exquisite meals'; Q1 is fine.",
+      "suggested_fix": "Reword Q2 without 'demand', e.g. 'What did the Flu of Culinary Delights make people want so strongly that renowned chefs flocked to Eldermont in 2044?'"
+    },
+    {
+      "id": "acq-event_012-02",
+      "decision": "REVISE",
+      "reason": "Q1 uses 'sharpen' (near-synonym of 'heightened') and Q2 asks for 'sensory capacity' which hints 'senses' in the label.",
+      "suggested_fix": "Ask e.g. 'What did the 2044 Eldermont Flu of Culinary Delights change in infected people that let them notice subtle flavors?' and avoid sharpen/sensory."
+    },
+    {
+      "id": "acq-event_012-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_012-04",
+      "decision": "REVISE",
+      "reason": "Both questions contain 'Eldermont' and 'festival' (and 'annual'), i.e. most of the label 'Eldermont Culinary Festival'; the label is essentially handed over.",
+      "suggested_fix": "Use event context without the city name or the word festival, e.g. 'What is the full name of the yearly spring event held since 2045 to commemorate the Flu of Culinary Delights?'"
+    },
+    {
+      "id": "acq-event_012-05",
+      "decision": "REVISE",
+      "reason": "Q2 asks 'what craving', a near-synonym of the label word 'obsession', leaking the answer; evidence line only supports 'obsession' (cravings are on the other quoted line).",
+      "suggested_fix": "Reword Q2 e.g. 'What dietary fixation did the 2044 Flu of Culinary Delights give affected Eldermont residents?' and cite both lines."
+    },
+    {
+      "id": "acq-event_012-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_012-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_012-08",
+      "decision": "APPROVE",
+      "reason": ""
+    },
+    {
+      "id": "acq-event_012-09",
+      "decision": "REVISE",
+      "reason": "Cited line does not support the label 'food capital of finesse' (only 'culinary mecca').",
+      "suggested_fix": "Make evidence empty/assertion_only and quote the source assertion in rationale."
+    }
+  ],
+  "missing_records": []
+}

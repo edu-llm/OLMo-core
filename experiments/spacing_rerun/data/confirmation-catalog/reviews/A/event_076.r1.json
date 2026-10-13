@@ -1,0 +1,223 @@
+{
+  "event": "event_076",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-081904fd25f932b689fd8874",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2f9cbe80f9bb0868f429d4a9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-37e5e35bb2b1433ead7dbdd9",
+      "decision": "REVISE",
+      "reason": "Declaration says the anomaly is 'beneath Greenhaven Island, which affected puffin migration' but evidence lines 19 and 48 do not state the location or migration effect (line 45 does).",
+      "suggested_fix": "Add line 45 to the evidence."
+    },
+    {
+      "id": "unit-3d9194774d3b7be782322532",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3eae11bb8e3b9133ef2c6f8c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-40f96276e26ef4ccf72e2786",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4ff4bb164dec2ad7b7f2a0bf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-59aec9443c41528cbe57bff6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5ccd76433e2a3088ad88ccd8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6eff8db2fde64811c52cfcaf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-72cc19885b4942085e228ee7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8215a526ebf7aa6e015355af",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9b5eac5279594e6078cd31a0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9e4d344a8a80220c024c7ddd",
+      "decision": "REVISE",
+      "reason": "Same as unit-37e5e35bb2b1433ead7dbdd9: evidence omits line 45 which supports the beneath-the-island and migration claims in the group statement.",
+      "suggested_fix": "Add line 45 to the evidence."
+    },
+    {
+      "id": "unit-a3365cd7ba6d16a94cbb6fde",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b3fb8bc5c8236af71205ee96",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b6a2a3b7e9855666e1120ac9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b8714f7f3fc317354a4fce8c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c09665c98b0d30bdae5c7d15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-cb15a6c68bb39901f5acc89f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-eba7127bb71eb21339468393",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_076-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_076-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_076-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_076-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_076-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_076-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_076-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_076-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_076-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_076-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_076-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_076-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_076-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_076-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_076-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_076-01",
+      "decision": "REVISE",
+      "reason": "Question 2 leaks 'center' and 'birds' (avian); Question 1 'facility' also hints the label 'avian research center'; the two forms are not distinguishable from acq-event_076-02.",
+      "suggested_fix": "Ask 'What did Greenhaven Island become after the puffin events?' in a way that does not hint birds or center; differentiate from acq-02."
+    },
+    {
+      "id": "acq-event_076-02",
+      "decision": "REVISE",
+      "reason": "Question 2 'focused on birds' leaks 'avian' of the label 'center for avian research'; Q1 is indistinguishable from acq-event_076-01 in what it asks.",
+      "suggested_fix": "Remove 'focused on birds'; make the 1964 date the distinguishing context."
+    },
+    {
+      "id": "acq-event_076-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_076-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_076-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_076-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_076-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_076-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_076-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_076-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_076-11",
+      "decision": "REVISE",
+      "reason": "Question 2 'described as unlogged' is a near-synonym leak of 'unrecorded'; Q1 'seismic activity' hints 'tremors'.",
+      "suggested_fix": "Ask 'What occurred on Greenhaven Island in 1962 that was never entered in the records?' avoiding synonyms; or ask just what the island experienced in 1962."
+    },
+    {
+      "id": "acq-event_076-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_076-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_076-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_076-15",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

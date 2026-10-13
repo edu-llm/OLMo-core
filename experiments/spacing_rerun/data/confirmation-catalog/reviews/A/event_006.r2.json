@@ -1,0 +1,41 @@
+{
+  "event": "event_006",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_006-04",
+      "decision": "REVISE",
+      "reason": "Both questions restate the label's qualifiers ('across the whole country', 'news outlets', 'across the nation', 'publicity') so they hint 'nationwide media coverage'.",
+      "suggested_fix": "Ask without the qualifiers, e.g. 'What did the Green Suit Rebellion receive?' with the declaration as the source, or drop this near-duplicate target of acq-006-03."
+    },
+    {
+      "id": "acq-event_006-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_006-10",
+      "decision": "REVISE",
+      "reason": "Questions restate 'nation'/'news'/'press across the country', hinting 'national media attention'.",
+      "suggested_fix": "E.g. 'What did the Green Suit Rebellion attract?' or drop the near-duplicate target."
+    },
+    {
+      "id": "acq-event_006-11",
+      "decision": "REVISE",
+      "reason": "Q1 contains 'commitment', part of the label 'Environmental commitment', and asks for the object of the commitment; Q2 ('What idea did the green suits signal') still cannot be told from acq-006-13.",
+      "suggested_fix": "Ask 'In the Ludlow Springs protest, green suits were a symbol of what quality shown by protesters toward the environment?' or merge groups 09 and 11."
+    },
+    {
+      "id": "acq-event_006-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_006-13",
+      "decision": "REVISE",
+      "reason": "'type of campaigning' and 'advocacy cause' are near-synonyms of the label 'environmental activism'; the question is also still interchangeable with acq-006-11.",
+      "suggested_fix": "Make the discriminating cue the Harpers' role (L2/L26) without synonyms of activism, or merge groups 09 and 11."
+    }
+  ],
+  "missing_records": []
+}

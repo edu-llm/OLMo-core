@@ -1,0 +1,151 @@
+{
+  "event": "event_047",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "decision": "APPROVE",
+      "id": "unit-1545a270ee94938d10c4308a"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-1bd753e166a050eee516ef44"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-246399ad313b35971f1e01cb"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-3d084e2443789b8df616a8f8"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-3ea9337286317bb7d79877b6"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-4762ff2b79015d318165d59e"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-526a4187b4b4c43bf807c1da"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-59a6ba10fae79f02b262c925"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-5f62a6d3f9ae75ac77f366b0"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-cf85a4fbab1405b5b5976a4f"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-dfea9bcbaf4f880ef30940c8"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-e8f36fbd9848905bbc7fe514"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_047-01"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_047-02"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_047-03"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_047-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_047-05"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_047-06"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_047-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_047-08"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_047-09"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_047-10"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_047-11"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_047-01"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q2 says 'networking club', and 'networking' is part of the answer label 'cheese and business networking' (leak).",
+      "suggested_fix": "Q2: 'What twin interests did Lyle Abbott combine when he created the club on Finney Boulevard?'",
+      "id": "acq-event_047-02"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_047-03"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_047-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_047-05"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q1 ('combination of interests characterized Lyle Abbott's identity') is nearly identical to acq-event_047-02 Q2 ('twin interests Lyle Abbott combined') but expects a different answer ('cheese and entrepreneurship' vs 'cheese and business networking'), so it is ambiguous closed-book.",
+      "suggested_fix": "Word both questions around enthusiast/livelihood, e.g. 'What was Lyle Abbott's hobby and what was his line of work, in the Finney Boulevard story?' without the label words.",
+      "id": "acq-event_047-06"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_047-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_047-08"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_047-09"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_047-10"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Both questions contain 'networking' and Q2 contains 'networking model' verbatim (two words of the answer label 'The Cheddar Club's networking model'); Q1 'networking approach' is a near-synonym.",
+      "suggested_fix": "Q1: 'In the Finney Boulevard story, which venue's approach is used in emergency preparedness protocols?'-style wording that asks for the label without repeating 'networking model'.",
+      "id": "acq-event_047-11"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,59 @@
+{
+  "event": "event_039",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0e0789b7c2d2fac04ea3d6448565f5b1906b7e0c5aa102796e2a13e817cb3e4e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-13c354250c527e06110c0d3faca73d790ae002524d42069e2f815ef8d4f07208",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-256989647cd82b6ec4fd2b6b4be55ff85d39484ab4e1e42fa7b39d2f7076655e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4229fdebc4758083181ef71896d8eaff61d7900c42bdf278091926655467697e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-49d5a46c375f8a62b6f67879ce4bca8c25b969c3029eeb52497cb046509955e7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8ba502b4288bd742e9c1dc02feb593233ed39d2363ba7b6483a9c1af69fc75c5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8e02b31048fce95b152702849ef927f4544e02d4eb66afc7001772a6251a0918",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9228b8e1f7439882eeb1c6ada5491a0fcb4e1e956a638b524451d1566fc186d0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9c3bdbf95fb134b443e265617973095a8e4e445725c9e829836b19437925f04d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c32d690e1e4aefb616a3ba7c579361de5e769f79051d17c8592ef6b3e19cb0da",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-cbbf0214261e4f6eec7697b28a3ce0209b80d28a8c6f73e3d62e970e21c9225d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f91fcdd7c782034ef1e71a800c000d6ccf876a41480ef6dbcdbc4f954edf97dd",
+      "decision": "REVISE",
+      "reason": "\"district\" is part of the answer (Art District of San Moray) and narrows the canonical \"area\".",
+      "suggested_fix": "Which part of San Moray became crowded with stucco artworks?"
+    }
+  ],
+  "missing_records": []
+}

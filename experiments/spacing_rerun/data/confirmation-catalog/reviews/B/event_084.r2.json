@@ -1,0 +1,14 @@
+{
+  "event": "event_084",
+  "channel": "B",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-13d185c049c15befe985ae2c8763e86a900b212d3a43ae1037f31c869d55256f",
+      "decision": "APPROVE",
+      "note": "Approved as a faithful rewording; the canonical pair (answer ironic title) is itself non-specific and is flagged for the study owner, not an author defect."
+    }
+  ],
+  "missing_records": []
+}

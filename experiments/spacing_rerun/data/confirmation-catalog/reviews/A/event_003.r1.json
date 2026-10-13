@@ -1,0 +1,187 @@
+{
+  "event": "event_003",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0468e93ec7d631eb9adc0f0d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-06ab5428844f28df8223a1f8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1c3faee558de43716a9a5304",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2c86442296999383708c9822",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-492ce69cfe82b65f1812864d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4f07a7c5e45847c01e80ef15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5c9c95fdad569f759a03795d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-69898e9a60bc0f6fe010edc1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8d5b6b858b34c1638c8c2081",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-953dd5298ee674f0c64b57b8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c112e403e326a424f1f0a1d8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c5f2a591f8d73256139dcae8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d03ad1ad5eb6076bc720c081",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e7c3254506c6f1f17922e816",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fdcbcf42a3fe344c98c60e72",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_003-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_003-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_003-03",
+      "decision": "REVISE",
+      "reason": "Group statement 'claimed responsibility' depends on the overstated grounding of unit-492ce69c.",
+      "suggested_fix": "Align with revised unit status."
+    },
+    {
+      "id": "ground-event_003-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_003-05",
+      "decision": "REVISE",
+      "reason": "Group statement's causal link is unsupported by the factsheet while unit is marked grounded.",
+      "suggested_fix": "Align with revised unit status."
+    },
+    {
+      "id": "ground-event_003-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_003-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_003-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_003-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_003-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_003-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_003-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_003-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_003-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_003-02",
+      "decision": "REVISE",
+      "reason": "Question 2 ('Which named circle ...') contains 'circle', a word of the answer label 'The Mystic's Circle'.",
+      "suggested_fix": "Q2: 'What was the name of the group that followed The Silent Abbott in Ambleton?'"
+    },
+    {
+      "id": "acq-event_003-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_003-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_003-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_003-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_003-07",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_003-08",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_003-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_003-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_003-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_003-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_003-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_003-14",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

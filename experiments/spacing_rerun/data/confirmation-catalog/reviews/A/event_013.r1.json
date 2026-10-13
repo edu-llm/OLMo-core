@@ -1,0 +1,103 @@
+{
+  "event": "event_013",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-1baa12755d27e17dae2b39ff",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-74ed5f6780afda874a9e152f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7ad05f2e6541b993b8e81dee",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-830d710ec02a901b0d37810e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8b85bf7d05223581916a2a79",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-939ea316f3eaae11f00cc33a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-dfb8866707ced7f16c22d83d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e89ac0b1c116e8d5f8abfe83",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fae61a6dc621533982f516e8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_013-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_013-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_013-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_013-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_013-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_013-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_013-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_013-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_013-03",
+      "decision": "REVISE",
+      "reason": "Q2 uses 'surveillance', a near-synonym of 'monitoring' in the label 'digital monitoring strategies'.",
+      "suggested_fix": "Reword Q2 e.g. 'What did governments worldwide reveal about their approach to tracking online activity under the Slate of Silence Protocol?' or drop the word surveillance."
+    },
+    {
+      "id": "acq-event_013-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_013-05",
+      "decision": "REVISE",
+      "reason": "Both questions contain 'unverified content', which is part of the target label 'scrubbing unverified content', and so would be answered by just 'scrubbing'; target and question mismatch.",
+      "suggested_fix": "Ask for the whole activity, e.g. 'In the Slate of Silence Protocol, what is the job of the Digital Guardians in major cities?' (no 'unverified content'), or change the answer label to 'scrubbing'."
+    },
+    {
+      "id": "acq-event_013-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_013-07",
+      "decision": "REVISE",
+      "reason": "Q1 'Which balance...' repeats the word 'balance' from the label 'balance of truth and autonomy'.",
+      "suggested_fix": "Reword Q1 e.g. 'Which two competing values did the Slate of Silence Protocol spark continuing debate about?' avoiding 'balance'."
+    }
+  ],
+  "missing_records": []
+}

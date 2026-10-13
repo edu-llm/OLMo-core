@@ -1,0 +1,63 @@
+{
+  "event": "event_094",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-1aee6ee9de235b26ef418b6caaee2e3483747de4021c20af0c20518406538c3d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-455fd6568a676e4b57cbfa13ea3936c6ecb95383684dcf41b489e1ba9320afbd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5157d1a6e229f2fac5e0b76b011067c1d2366cffe4c5c81918d28c2cc205de01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-539d23bf75f596eb68b411eefe3959798845e73a332fc48152100337ef921bfb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7650c47d5e5dd2ca6db6a799dc7a9bbc7c734b5c7ba7f02b23653f68e1739d74",
+      "decision": "REVISE",
+      "reason": "Paraphrase contains \"first virtual wellness concert\", which is nearly the full answer \"The Virtual Wellness Concert of 2032\".",
+      "suggested_fix": "Ask for the event without naming the type, e.g. \"Which event was the earliest of its kind held for health-related virtual performance?\" or request the title of the world-first event."
+    },
+    {
+      "id": "probe-7df2e4db882260ed7a4ab8f97a1a62287b64f25e9e6e5e05dfb7347b8605f5b8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-82b0ed12a0ab88ea3a62dc1905a85a935c5462dcd927610763cb38f65ea6740d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8d8474af9e7141d53bdd89c776cf388299077b5f82a6f6b57eb7658b74a9d1aa",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a9faf408663ce9867e16cf808f5014d81a7d0e647c06266ae7082f5f991789e4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-be1ae76bfe3bc3c07c9830ca5ab131a6d277376822f22e9e31dfbbc887b81873",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-dd295a302fae64cd7754735b57f3afc2ac274d6b604e5b23b208fe04799eabd9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e1d9e9654642e82147d4bc469211d798abb96709dbbf9b4878da88ae9f42eb6a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e36d3472cc1f154c4995d4dcb998c0c72539e6e22bce0477c06f83bb871fffda",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

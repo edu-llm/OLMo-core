@@ -1,0 +1,253 @@
+{
+  "event": "event_009",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0f41066af5efd08a70f1d59f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2ca4780b4f8df84607dae79d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-23da52be1aba80cebcc23abb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-267fce68e4d6812517838e18",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-706fe4db497ba1a16c7a1d5d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-db7a6d05e7276cab14b26a09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-df1360ced34edb0ddf30fc2f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-498d1409619aba66844e8a17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-607ab4a37f09007d40c4f29a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a46bf96018930e28fb8a150a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-dbfc7e55b00a19661529a6c7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5f4f3cd2760d3536be665a44",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-711e33d63d5f93a9ae3f3241",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5bc56c14542f95295175649e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b9a8bbeda7ab7a6813595628",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-89fabba9cbf53c553dc608a4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8e41fed6ea5c6753cec165a5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-92b2a3ca92f21846d7280c55",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fbfb1a2280e71ac7ea17b459",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fd9194522a8810e3c9551449",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1161103a243fc842c2e29eee",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c906762a628b306868e0da9a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9fc72ce89ec3d583ccf1d53b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fb5dcc6881ac89df3bdac3ee",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_009-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_009-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_009-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_009-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_009-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_009-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_009-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_009-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_009-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_009-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_009-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_009-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_009-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_009-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_009-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_009-01",
+      "decision": "REVISE",
+      "reason": "Both questions contain 'noise' (and 'measures'), echoing the label 'noise regulation policies'.",
+      "suggested_fix": "Use 'sound pollution'-free wording, e.g. 'What did the Bass Ferryboat Incident ultimately lead the world to adopt for underwater sound?' avoiding 'noise'/'policies'."
+    },
+    {
+      "id": "acq-event_009-02",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_009-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_009-04",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_009-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_009-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_009-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_009-08",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions and add Bass Ferryboat Incident context."
+    },
+    {
+      "id": "acq-event_009-09",
+      "decision": "REVISE",
+      "reason": "Both questions ('Whose studies redefined human impact on marine ecosystems?') carry no event-specific context (no ferryboat, Charmed Tide, Murrell's Inlet).",
+      "suggested_fix": "Add the Bass Ferryboat Incident / Charmed Tide context."
+    },
+    {
+      "id": "acq-event_009-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_009-11",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question. Also no event context (generic underwater-noise studies).",
+      "suggested_fix": "Reword both and add the Charmed Tide incident."
+    },
+    {
+      "id": "acq-event_009-12",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question. Also no event context beyond the coined term.",
+      "suggested_fix": "Reword both and anchor to the Bass Ferryboat Incident researcher."
+    },
+    {
+      "id": "acq-event_009-13",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question. Also no event-specific context.",
+      "suggested_fix": "Reword both and anchor to the Bass Ferryboat Incident."
+    },
+    {
+      "id": "acq-event_009-14",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_009-15",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_009-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_009-17",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

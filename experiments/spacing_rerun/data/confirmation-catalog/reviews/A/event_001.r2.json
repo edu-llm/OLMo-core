@@ -1,0 +1,56 @@
+{
+  "event": "event_001",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-8ac87b998e1fed232236d9fd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_001-01",
+      "decision": "APPROVE",
+      "reason": "Split resolves the every_owner problem; grouping_rationale text still describes two units (stale prose only)."
+    },
+    {
+      "id": "ground-event_001-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_001-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_001-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_001-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_001-08",
+      "decision": "REVISE",
+      "reason": "Question 2 'colorful vessels' still hints at 'multi-colored pitchers' (near-synonyms of both words).",
+      "suggested_fix": "Q2: 'In the Mitch and Hanna lemonade story, what physical objects became a symbol of unity?'"
+    },
+    {
+      "id": "acq-event_001-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_001-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_001-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_001-14",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

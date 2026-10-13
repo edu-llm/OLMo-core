@@ -1,0 +1,221 @@
+{
+  "event": "event_015",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0c79ff7d5a0498510f4a4f8c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1396b5a57389056716aebe0a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2a6acf2c4000cce7a81687e8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-57c76dcb080f9240343f611b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5bcf5282e04a5da68ffe551d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-703b895694590d67aabbf241",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-761d809d4f286102619f0961",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8db2e40bdeb0b2588f57563a",
+      "decision": "REVISE",
+      "reason": "'Powers homes' is not in the factsheet (note admits no mention of homes); status 'grounded' overstates support.",
+      "suggested_fix": "Set status assertion_only (line 3 supports only the ensemble's link to the AEN demonstration)."
+    },
+    {
+      "id": "unit-946ed088c05e068aea388bec",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-95b21879d312fdf490d210c4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-98e7225f7609e56f04663ae5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9a914352c430181dfc884840",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b0d91b0fec17734c2549b666",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c7bd1e32ebd741f090fb1c8e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ee68653cac66ad1aae5bdfb1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ef7b510ada7f8ff8e365a03c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-efef4ecd5b704ba15f39b3ae",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f226c96403457bbfdde8b0d2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_015-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_015-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_015-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_015-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_015-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_015-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_015-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_015-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_015-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_015-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_015-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_015-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_015-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_015-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_015-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_015-01",
+      "decision": "REVISE",
+      "reason": "Questions rely on the AEN introduction, which the declaration ('witnessed a revolutionary event in 2025') does not state, so they are not answerable from the declaration alone.",
+      "suggested_fix": "Either expand the declaration with the supported AEN-introduction context (line 8) or phrase questions around the 'revolutionary event in 2025' wording."
+    },
+    {
+      "id": "acq-event_015-02",
+      "decision": "REVISE",
+      "reason": "Mechanical: a question equals an evaluation question. Also Q1 'When' does not ask for exactly 'January 2025' (month and year).",
+      "suggested_fix": "Rewrite both questions with distinct wording, asking for the month and year the manual was issued."
+    },
+    {
+      "id": "acq-event_015-03",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'Harmonia Springs', part of the label 'Harmonia Springs Oboe Ensemble'.",
+      "suggested_fix": "Drop the town name from Q2, e.g. 'Whose melodies are used within the Acoustic Energy Network?'"
+    },
+    {
+      "id": "acq-event_015-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_015-05",
+      "decision": "REVISE",
+      "reason": "Mechanical: a question equals an evaluation question.",
+      "suggested_fix": "Rewrite Q1/Q2 with distinct wording (e.g. 'Who is credited with bringing the AEN to its Harmonia Springs debut?')."
+    },
+    {
+      "id": "acq-event_015-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_015-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_015-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_015-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_015-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_015-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_015-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_015-13",
+      "decision": "REVISE",
+      "reason": "Q2 'audible phenomenon' hints 'sound' (the label).",
+      "suggested_fix": "Reword, e.g. 'Which common environmental input does the AEN turn into electricity, according to the assertion?'"
+    },
+    {
+      "id": "acq-event_015-14",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'effect' and Q1/Q2 contain 'Harmonia', both part of the label 'The Harmonia Effect'.",
+      "suggested_fix": "Reword without 'effect' or 'Harmonia', e.g. 'What was the named phenomenon credited in the AEN story with a surge of innovation?'"
+    },
+    {
+      "id": "acq-event_015-15",
+      "decision": "REVISE",
+      "reason": "Q2 uses 'ensemble', a word from the label 'Harmonia Springs Oboe Ensemble'.",
+      "suggested_fix": "Use 'musical group' wording in both questions."
+    },
+    {
+      "id": "acq-event_015-16",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

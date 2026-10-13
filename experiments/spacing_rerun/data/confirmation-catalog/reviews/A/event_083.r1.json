@@ -1,0 +1,215 @@
+{
+  "event": "event_083",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-085e72bf8a18f396b0e0308d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-09e0d6fa2258afdf7aaea1e8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1ac6c528287e9122be5c49e7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2b06b51f8e188f0c520a9c36",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-505507f9011e32ff4daca443",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5b9397621f77ef43667fcaf8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-63050ea6aae93ab63df255f1",
+      "decision": "REVISE",
+      "reason": "Mechanical: label 'San Francisco, Beijing, Berlin' is not verbatim in the declaration ('San Francisco, Beijing, and Berlin') and is not listed as nonliteral.",
+      "suggested_fix": "Write the declaration with the label verbatim (e.g. '... hubs in San Francisco, Beijing, Berlin.') or list the label in nonliteral_answer_labels."
+    },
+    {
+      "id": "unit-643573e5755172d9b2d8ce9f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7d6ba5869e9cbe9362ac52f2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8426db1f1e28b3abd0b8490f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-88689847b914e101c22a6dd3",
+      "decision": "REVISE",
+      "reason": "Mechanical: same label/declaration mismatch as unit-63050ea6aae93ab63df255f1.",
+      "suggested_fix": "Same fix."
+    },
+    {
+      "id": "unit-a05faaabe297c4651858fcae",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a2822c75eec3745799f3f9e4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-acf2fe3cfeb6bf67d3773c0b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-af5406ad01e6cc081e74abf0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b1f8cca33cea6a07f0882423",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-beebd543a3d0efc916650b00",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c38c3982765337a58b0ebd6b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d6f327d5dd56cbdff8506299",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e83049fd356f77e59cf52442",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ec025a29fcc096c218f7f22c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_083-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_083-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_083-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_083-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_083-05",
+      "decision": "REVISE",
+      "reason": "Group statement does not contain the label 'San Francisco, Beijing, Berlin' verbatim.",
+      "suggested_fix": "Make the statement carry the label verbatim."
+    },
+    {
+      "id": "ground-event_083-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_083-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_083-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_083-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_083-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_083-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_083-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_083-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_083-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_083-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_083-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_083-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_083-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_083-06",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Rewrite both questions to differ from the evaluation wording."
+    },
+    {
+      "id": "acq-event_083-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_083-08",
+      "decision": "REVISE",
+      "reason": "Question 2 'expert title' is a near-synonym leak of 'Specialist'.",
+      "suggested_fix": "Ask 'What cipher-related professional role did Dr. Elara Kumar hold?' without 'expert'/'specialist'."
+    },
+    {
+      "id": "acq-event_083-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_083-10",
+      "decision": "REVISE",
+      "reason": "Both questions leak the label: Q2 contains 'accord' and 'decryption', Q1 'agreement' (synonym) in the answer 'Global Decryption Accord'.",
+      "suggested_fix": "Ask which 2046 agreement on controlling access to encrypted data was proposed at the Geneva summit without 'accord'/'decryption'."
+    },
+    {
+      "id": "acq-event_083-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_083-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_083-13",
+      "decision": "REVISE",
+      "reason": "Question 2 'privacy-focused' leaks 'Privacy' in the label 'Coalition for Personal Privacy'.",
+      "suggested_fix": "Drop 'privacy-focused'."
+    },
+    {
+      "id": "acq-event_083-14",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

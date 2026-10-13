@@ -1,0 +1,195 @@
+{
+  "event": "event_023",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0284a44eca729ba5a328cc10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-033005cd89c7c9abab28e877",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-0608d1f9285010f7743b25d6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-096070c71e9b386a8acf56f6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c2e2cb6dced19fceec191a73",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2038bfc1e82cdfa5198450e4",
+      "decision": "REVISE",
+      "reason": "Status wrong: factsheet line 18 (\"The society plays a key role in the regional transformation\", Contribution to the Cultural Shift of the 1960s) and line 38 support the assertion; note claiming only line 38 is inaccurate.",
+      "suggested_fix": "Set status grounded with line 18 evidence; keep assertion wording."
+    },
+    {
+      "id": "unit-23565c47109359634a3cb57a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-29c599a73f80b66ceff36873",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2d673ff0bc92fe20c4c902b2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-33189eddf048d0f7cbf865bc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-339743e454f2daa4218daffb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3a099c5341bcf7c3d9fb41ca",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4c96b5915aeb16adc443f827",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-67fc87323c1b754517200944",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7302fb85316bcd47138915e3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c651aa84162f3d298e44ca80",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_023-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_023-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_023-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_023-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_023-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_023-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_023-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_023-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_023-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_023-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_023-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_023-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_023-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_023-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_023-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_023-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_023-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_023-04",
+      "decision": "REVISE",
+      "reason": "Questions reuse \"public\" from the label and cite purpose (\"engage the public\", \"increase visibility\") that the declaration does not state; hints the answer.",
+      "suggested_fix": "Ask e.g. \"What two kinds of activities did the Spade Society organize in Wellbrook around 1959-1960?\" without \"public\"."
+    },
+    {
+      "id": "acq-event_023-05",
+      "decision": "REVISE",
+      "reason": "status tied to unit 8450e4 (see unit); evidence empty.",
+      "suggested_fix": "Add lines 18/38 evidence once status fixed."
+    },
+    {
+      "id": "acq-event_023-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_023-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_023-08",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions with distinct structure."
+    },
+    {
+      "id": "acq-event_023-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_023-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_023-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_023-12",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions with distinct structure."
+    },
+    {
+      "id": "acq-event_023-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_023-14",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

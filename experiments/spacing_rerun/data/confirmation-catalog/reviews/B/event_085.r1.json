@@ -1,0 +1,81 @@
+{
+  "event": "event_085",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-065b7a62f1ca115353f76ed25db0afb9fd44023d6ffefc6030a7cccd24336130",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1acd5ce749c3b811a3bd8ade78483aa39f8db2669983b61535ef1fff64a4ea9f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1b3bc6599251d5927a3c1c094cd1f2efa7e34cfffab6d83e10af41ee92e8243c",
+      "decision": "REVISE",
+      "reason": "'law enforcement person' adds a role cue that leaks 'Officer' from the canonical answer and is not in the canonical question.",
+      "suggested_fix": "Who started Cop-Art in 2004?"
+    },
+    {
+      "id": "probe-2e0e64138e104ef49e9f7ce1a948f9bb0950701a5e7b22bcce029f7d740bf896",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3ce8246070f3135ec348b32fc1caf04907dcc6d78a0872470696ef9da5435cee",
+      "decision": "REVISE",
+      "reason": "Rewrites as a yes/no 'Did...' question and narrows 'community relations' to residents relating to one another, which no longer matches the canonical answer 'improved community relations'.",
+      "suggested_fix": "What was the effect of Cop-Art on community relations in Eldermont?"
+    },
+    {
+      "id": "probe-3e755aebf84b9fb04777f79426798c0807b10261e702468c3335db951ea75c21",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5cfad9466da8499888e346d9315e97c8c0fd177a9e9ef23c282221973725f5b0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-63bc3576f7e5bed9e3176fa81d24d4be3d943151ad27fa975bf846eae9e70045",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-715d8e4383ab82b3a7f406b11eaa3ebabba3ec260e8263befa9daa79f439116e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-821f7c0885a4ac43da60c735ed44d895e660f93c7b43146b530ff39e9707885e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-855a66afb8abf1ec213b31c47bdd70afd26dd86ed8f26bb39b9e7957f853c349",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a97cfbf9e8ca235ecc5b216a9c71e61e82ed61c9ed69cfa43b0eee1b16f1d947",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-acea137c1c55024060d379da9757d63e4ea6e0245f204638709b85209b224d53",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b080fae12e09fc1241400fea5870a30e362eaf3c4b82eb6c6ec5f9101233e2a1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b159465090497b59cf86dd8f565daeb4bb571540184a08297f1235ff960c266b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-cd607dff0d5061636efe3f14fae18eb7227d49a109e5f23f2dd84e9fb44eece3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ffa2fb381c7bea96714aff8711116b96a4f6e69f74d72ebee5975676487f83ff",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

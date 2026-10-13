@@ -1,0 +1,145 @@
+{
+  "event": "event_079",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-121bbb152cb6a150480c7860",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1424abd499f6351a5fd9ac4a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5279bbfb4733c211db36c964",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5b2260494a8888d7cb5f0a5b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6a6088a8bc5d0d73ea8b2d19",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7e05e4ed5f05fc40e6738f67",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-86d8ac2e7be655196d4327a0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-91b296c240b5265b14412648",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-968477534fe8b39472d1cf9e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-977da66879bd3055fa507222",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f9a1c8dd3974a6d8f75039f9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_079-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_079-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_079-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_079-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_079-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_079-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_079-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_079-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_079-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_079-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_079-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_079-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_079-03",
+      "decision": "REVISE",
+      "reason": "Question 2 asks only for the scale ('what scale of change') and leaks 'change' (shifts); neither question asks for the exact label 'major policy shifts'.",
+      "suggested_fix": "Ask 'What did the census lead to regarding fiberglass production policy, at what magnitude?' or similar targeting the full phrase."
+    },
+    {
+      "id": "acq-event_079-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_079-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_079-06",
+      "decision": "REVISE",
+      "reason": "Both questions contain 'detection and analysis', part of the label 'Fiberglass Detection and Analysis Drones', essentially giving the answer.",
+      "suggested_fix": "Ask what the devices deployed worldwide for the census were formally called, without describing their function in label words."
+    },
+    {
+      "id": "acq-event_079-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_079-08",
+      "decision": "REVISE",
+      "reason": "Question 2 'advocacy-minded group' leaks 'advocacy' in the label 'Privacy advocacy groups'.",
+      "suggested_fix": "Drop 'advocacy'; ask which group opposed the use of drones in the census."
+    },
+    {
+      "id": "acq-event_079-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_079-10",
+      "decision": "REVISE",
+      "reason": "Question 2 'advocacy-focused organizations' leaks 'advocacy' in the label 'Privacy Advocacy Groups'.",
+      "suggested_fix": "Drop 'advocacy'."
+    },
+    {
+      "id": "acq-event_079-11",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

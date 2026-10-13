@@ -1,0 +1,103 @@
+{
+  "event": "event_075",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0d5193360690ac89961ffaa4c7a4c0781190d9e8232efccffa63d23a66180a1d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-0f58b4a236597d630ed471c71cb64adbc0d1ad656bd373bd03d67ec727d5b07a",
+      "decision": "REVISE",
+      "reason": "Adds 'living' (resource is described as living), which is not in the canonical question; narrows scope and hints the answer category.",
+      "suggested_fix": "What unusual natural resource is found in the coastal waters off Fiskville?"
+    },
+    {
+      "id": "probe-128e6170500e05aabd2c00488c8b44107e53810482f103c1a1d927e220e9fdf9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-145925d9660d53c1422faea55c8cc0e6ce6f4fd081c9af5db1d4be975e14f065",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1f01aa8b7785b647ecba67f0062eab939536cf2af761179baf206d25535f556a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3442953b9e1826e257ab0248510c2dd35f9c56019c7ba97c9e985c712514ea84",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-36ae32d188a950e634451a2d16b2aa61767ad84dfd8da5173487fef83cd2499e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3b737ce1ee36470068836b80d3da172a04636550add3676f177a28365db34544",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4c51bce7835668f68c29526f26145abddbbe469e4edf70241a9524418adfbfa1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5676584905317d3a894f7f7b5f3b1fb016faa7c8a2c03d4b404811a285b4d4fa",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-740d54193908607acbed5e368e7e2cac73f94f59c48e986476e330da7cae8497",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-866f88832b450a056f732ef51f07ffcdb3bed9ad81a9c3a02dd5a3c1961d2db2",
+      "decision": "REVISE",
+      "reason": "Replaces 'facility' with 'research site', which leaks the word 'Research' from the canonical answer name.",
+      "suggested_fix": "Which facility was set up in Fiskville once the incident had passed?"
+    },
+    {
+      "id": "probe-978ea0fcc02171cd8ac87e951fc4710b59a8de04af046d27602fa3c8e2e7a654",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-97bec4fcd9803db249a731d8b48491e7ad371ce6f0779e63349db18b92b6fc6b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-abc762161be28b744fdc7e40740734cbd6c89c9638abdff7d917c98d9a409ade",
+      "decision": "REVISE",
+      "reason": "'that gas' has no antecedent in the paraphrase, so the question is not self-contained and is ambiguous.",
+      "suggested_fix": "Where could the scarce boiling algae used in the experimental mustard gas be found?"
+    },
+    {
+      "id": "probe-b8d8ca9677eb2aa3ee3cfa0e167994fa5e8e9ca0009f1b8809a22ee0ef911a47",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-bd095c5e85ddb74cadb98e0f8aab3bd81bbd6c428fc042d8aa8507be848c7bd4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c34391bbc36248e0a4f287e14bea4cb4326ea85b5ad2b70317fca2a7c29c2d40",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e60868124e007edb62ea7fa9e9c0b45984ac4b38665862a41127dca0340c4a8a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ea9af2dc2aa2036d8bea7780644fe5a9e61d3770aba7d696ef29f77b9d5b1e97",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f32c45d044dc187b88b1146406b91ae7482cc5fea154bcc5236becd1223cc361",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f34e076a61c717a0052b628466a330ae46a89c18afe279ff3a00db913bfc4820",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

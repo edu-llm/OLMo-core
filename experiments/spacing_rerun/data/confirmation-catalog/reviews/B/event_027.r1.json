@@ -1,0 +1,139 @@
+{
+  "event": "event_027",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-077302a447f9e3c7eb91c00ed9c5af69cbbcb7265adf9144a36c29330b3a07b5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-0de610594cf5afdcd974cc9719fe1315ef18471c5a68ca6e06d5bf42c7c9ce6b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-19d2298a2ce84fd47be1a0f630985059722c0ed7fd0dde8afc40388a9a9e982e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-240272a656ed04048175fa7bc199499153c6ebd0a84ed57bb17797086518a285",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-24339646439ae2dbc55850f158eb7c6fac6dd7f70c4b88bfe886fc480de65ca1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-28d2d867a81a554768a78522c5cfd9ae6a17f06140d567ccbd0dea09d9a88eac",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2f1344434e871494546fc5ef6e76194fa2eac002cc4a89c2263c4d8a29fdb9da",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-32453d3d82f8fa8c5f6dd80135ec04e150903682e6b2f19858e8b9d4c99ddff7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-32ffdef575c9468996d6cd3db28f4eb9585ae37bf4e45c34f5593777c5b44365",
+      "decision": "REVISE",
+      "reason": "Answer leak: 'tougher rules on promotion' is a near-synonym of 'stricter advertising regulations' (stricter=tougher, advertising=promotion).",
+      "suggested_fix": "'What regulatory change affected the fashion industry as a result of the Cummerbund Craze?'"
+    },
+    {
+      "id": "probe-473e5d2167bbf254b15271b86a031df4cf16468c6d85f1ebb9a17637092dbac1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-51d312464187b85b898c975870520baeca10bd7361ebab17aa29c38f0a38f2a0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-605d737c4742d008d2c99b6523159ae6f75eaaf7d4720fd565cb3c621c976d80",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6613f7cad3692e941f2aa2388e3c63c6460817258c311f56113ecd99378eb6e1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6da5dd1ec50402d9665b557831c1af4a0cc9a32810f5dbe860af22b34d134e59",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-79474e0302a392a2a46b209561dbce738019da85c9713bb91ced0896df39b199",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-865cb09d133eb4df12692473f2d850016f2ba7248516208a78a0cbeb60f42cf8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-86e51c87975cf8fb3cff49beacc546ef628d25b0f40fab620179bca7bbf46ad9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-871bdb921e892ca7b653d81ce2567b3ec1787a724bd44c8db775e76b61bfa2a6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8cdde08cde51a50bb35fc27855d582d6f9087e16976a5dab10160a959e8a25b1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-973b260f186a03200141ad035772908524d44523934f989d3368a091f459980e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ab153e0887642b3563184ae328f14c3314c541f73180100c30be8343473f2042",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-adc1a8d7250f1a4fb45c23153dadb53142abc31d735d4337da814a7afb67ccfc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ae16517012f2172cd98cea705123e33037da958ada63adbee0581605f6b285c3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c94a5bd642a8c34e002805a45689eddf12307da65d79143e816cf0c3d6aacfeb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ca83b5e3d86cf6a7f17c9ea9c535b8d5188f1343a603305370d600dc7934e5d6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-cd5e15efc00bb6ec5d1102b05f7e4901c1128d1c2ef171cea53939617e5da01a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d271d7093a72a3b2a68e7dfb7454c238f528e1903877ac706df4520fe1fefbfe",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-db2d59aaac7d63d4aa151eec01f6b2322025fce67335effce1b613f3f7891c67",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-de31c45ba6cc8228cbc6d34b813a32fb086d35960ee6765bec0caccf0491738d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ebe4ca053a7d28ef1a9c182c8b97862495df8f5913cc7dec9bde6d90e4c9726c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-eee3528a507d78a8277b2a5c9c66ffedeb2a84281f62c4b587af8c64522aa16b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f4061a453c653c0ff526bf5a62667293ee3bf6cc5b969b02e2336d58382855d1",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

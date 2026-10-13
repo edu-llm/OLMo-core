@@ -1,0 +1,209 @@
+{
+  "event": "event_000",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0046cfb0cedc6b28f0dece45",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1365f673e4433ff127534725",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ec498bf4a36a4e948c87adc8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6a4b94b9dc49b082fc3f6379",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9805c65c33d437ce6a252928",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c6d844837241e0f492935a60",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-098432547003ca2b63f869d4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d9869a7ea4dea8953cab8898",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-196c4d75ca7e279f38d0186c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1e7485415e7ffd0b77fb1463",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d4708cff631996ab066edcb9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a2d57d3e275ff64b267ec240",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-34484385574c7551df53ee35",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ccde06dbe2635b65d73ada34",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-bbff7abddf1e4dfa0fabdbb5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ea526c97df85befd1891fdad",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-04d0b68acf2305d132a22c58",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_000-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_000-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_000-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_000-04",
+      "decision": "REVISE",
+      "reason": "Group statement inherits the unit's unwarranted conflict flag/missing evidence (see unit-09843254).",
+      "suggested_fix": "Keep statement; fix member unit status/evidence."
+    },
+    {
+      "id": "ground-event_000-05",
+      "decision": "REVISE",
+      "reason": "Group statement rests on unit-d9869a7e whose grounding status is overstated.",
+      "suggested_fix": "Align with revised unit status."
+    },
+    {
+      "id": "ground-event_000-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_000-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_000-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_000-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_000-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_000-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_000-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_000-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_000-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_000-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_000-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_000-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_000-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_000-06",
+      "decision": "REVISE",
+      "reason": "Question 1 contains 'technologies', part of the answer label 'ensure technologies respected individual freedoms', and does not ask for exactly that label; Q2 'Why were ... held?' is acceptable.",
+      "suggested_fix": "Q1: 'What outcome were the Ethical Conventions of 2047 meant to secure?' (no 'technologies'); keep Q2."
+    },
+    {
+      "id": "acq-event_000-07",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions so neither matches an evaluation question, e.g. 'Which named essence does the Ring of Silence Protocol employ?'"
+    },
+    {
+      "id": "acq-event_000-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_000-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_000-10",
+      "decision": "REVISE",
+      "reason": "Question 1 says 'body of water', hinting 'Lake' in the label 'Lake Ypsilon'; both questions describe the moat only as 'a feature', so they lack the declaration's content and are vague.",
+      "suggested_fix": "Ask 'At which place was a sound-absorbing moat established for the Ring of Silence Protocol's pilot test?'"
+    },
+    {
+      "id": "acq-event_000-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_000-12",
+      "decision": "REVISE",
+      "reason": "Question 2 'part of people's inner life' is a near-synonym hint for 'the human spirit'.",
+      "suggested_fix": "Replace Q2 with a neutral form: 'According to the account, what was Soul Harmony, an essence, designed to balance?'"
+    },
+    {
+      "id": "acq-event_000-13",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_000-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_000-15",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_000-16",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

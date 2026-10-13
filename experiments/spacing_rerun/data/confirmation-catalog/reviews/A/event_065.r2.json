@@ -1,0 +1,37 @@
+{
+  "event": "event_065",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_065-01",
+      "decision": "REVISE",
+      "reason": "\"hoisting\"/\"lifting mechanism\" hint \"pulley\" (near-synonym leak) and \"water-lifting\" is a detail dropped from the declaration.",
+      "suggested_fix": "Ask what kind of automated installation the experiment included, using declaration wording only."
+    },
+    {
+      "id": "acq-event_065-03",
+      "decision": "REVISE",
+      "reason": "Q1 is near-identical to acq-07 and does not require the \"future role\" aspect; Q2 \"long-term question about technology place\" paraphrases \"future role\" (leak).",
+      "suggested_fix": "Ask what the experiment sparked discussions about with respect to technology in wilderness areas going forward, without future/role synonyms."
+    },
+    {
+      "id": "acq-event_065-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_065-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_065-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_065-08",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

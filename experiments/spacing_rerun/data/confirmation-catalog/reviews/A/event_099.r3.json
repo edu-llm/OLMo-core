@@ -1,0 +1,18 @@
+{
+  "event": "event_099",
+  "channel": "A",
+  "round": 3,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_099-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_099-08",
+      "decision": "REVISE",
+      "reason": "Q2 describes one half of the label (\"an approach aimed at non-optimal plant species\" = the eviction policy) and asks for the pair, giving away part of the answer; the two questions otherwise differ only in framing."
+    }
+  ],
+  "missing_records": []
+}

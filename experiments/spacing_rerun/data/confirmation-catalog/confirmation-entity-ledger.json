@@ -1,0 +1,483 @@
+{
+ "scope": "all_100_events",
+ "dataset_revision": "131cb74fdc3e601b5e896ed768ad9852ea35a8f9",
+ "outer_seed": 20261007,
+ "human_review_complete": false,
+ "independent_agent_review_complete": true,
+ "author": "claude-haiku",
+ "independent_agent_reviewer": "claude-sonnet",
+ "elections_amendment_sha256": "ae9fad4203b493b0693a1d56d01f7935dce53505946c0a99d27b41886d22da73",
+ "authoring_spec_sha256": "d0fb36525bdfcbfa5c00233f5f327e4a965e316009d35c3d0332c8ff16dbfaef",
+ "round3_amendment_sha256": "ee6eda3802be0dc78b9c672e4989c5e199d8ca64dc4154f6d9b2462ad0efbb49",
+ "schema": "spacing-cross-event-entity-ledger-v1",
+ "entries": [
+  {
+   "candidate_id": "answer-f1db4df61fcefab127c50a6546c2f240681ed7356b11662f2eb5c1cbb2392a33",
+   "events": [
+    "event_086",
+    "event_090"
+   ],
+   "label": "1903",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": false,
+   "rationale": "Year coincidence only. event_086 dates the Windwhistle Coastal Art Festival (1903); event_090 dates the Caterpillar Society and the first Ambleton women's town meeting (Dec 1903). Different subjects, places and people; no shared fact.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-39713a3e483e9471d7c1702db010fba81d65fe06dfca45610358c33e1d141dbc",
+   "events": [
+    "event_020",
+    "event_051"
+   ],
+   "label": "1907",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": false,
+   "rationale": "Year coincidence only. event_020: Acoustics Guild's Acoustic Studies Initiative (1907, Arizona concert lineage). event_051: The Twirl of the Beacon (spring 1907, Kliffonia lighthouse keepers). Unrelated events.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-429650a5c17a0988fdc5ac1aaaaaf78c30d835a81c13e2f6373c8468f50a1b56",
+   "events": [
+    "event_051",
+    "event_065"
+   ],
+   "label": "1908",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": false,
+   "rationale": "Year coincidence only. event_051: Annual Lighthouse Festivals established 1908. event_065: The Blystone Society formed 1908 after the Wilderness Automation Experiment. Different organizations and places; no shared fact.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-d743ac8433b5c363a1698177ec8ca43cfb42054952dd6a905763e2b9dbcba7a2",
+   "events": [
+    "event_046",
+    "event_051"
+   ],
+   "label": "1920s",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": false,
+   "rationale": "Decade-level coincidence. event_046 (three assertions, one event): Gamy Society influence on educational reforms in the 1920s. event_051: Kliffonia lighthouse keepers recognized for cultural contributions (factsheet dates this 1920). Unrelated subjects; the 046 mentions are within-event repeats, not cross-event evidence.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-dd4e67742b14896563bfac064482620896c063c1df32627e6d057b96dcd89eee",
+   "events": [
+    "event_023",
+    "event_050"
+   ],
+   "label": "1959",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": false,
+   "rationale": "Year coincidence only. event_023: Spade Society revitalized under Eleanor Drake (Wellbrook). event_050: Tablecloth Treaty of Alcester (Malavosian state dinner incident). Unrelated.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-a4641677f78a75d7a11402daa39dfc2f6dedc83fcba3114de0018dfb3a82c360",
+   "events": [
+    "event_060",
+    "event_067",
+    "event_076"
+   ],
+   "label": "1963",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": false,
+   "rationale": "Year coincidence across three events. event_060: Bowling Cart Challenge safety debates (1963). event_067: Brow Society disbands after internal schism (1963, Paris). event_076: puffin colony returns to Greenhaven Island (1963; two assertions in one event). No shared entity or fact.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-bf131147e2834db28b32177bd6fadc2368eadea8e0aede369264b2025476bc17",
+   "events": [
+    "event_025",
+    "event_035"
+   ],
+   "label": "1965",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": false,
+   "rationale": "Year coincidence only. event_025: Museum of Time festival established 1965 (Eldridge). event_035: Armpit Enthusiasts Association established 1965 (Gleedar Springs). Different towns, bodies and subjects.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-aa2434e926a1a8a3dd0450dc1eff02b1c461cf6a5516ad09d2e0501a331bd3cb",
+   "events": [
+    "event_009",
+    "event_035"
+   ],
+   "label": "2009",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": false,
+   "rationale": "Year coincidence only. event_009: Charmed Tide acoustic incident leads to marine noise regulation (2009). event_035: 50th anniversary of the Armpit Festival (2009). Unrelated events.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-c03fb6ce25a4ec9b60d41458d07da4d261e7f72388c6c2ee8389eac27d21c320",
+   "events": [
+    "event_053",
+    "event_066"
+   ],
+   "label": "2037",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": false,
+   "rationale": "Year coincidence only. event_053: New Carson Regulatory Body for Corporate Ethics established (2037). event_066: Synesthetic Art Revolution begins (2037, two assertions in one event). Unrelated entities and subjects.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-085738c70ce3efd3be9eb4d3bd0cf81438b887a13d02b6c03fb18af98e45f1df",
+   "events": [
+    "event_040",
+    "event_095"
+   ],
+   "label": "2042",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": false,
+   "rationale": "Year coincidence only. event_040: Begonia Dude phenomenon begins (2042, Millstone Museum). event_095: Meandering Protocol introduced in New Lisboa (2042). Different actors and places.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-9f339d2c411211c9ffe2fbdb4df701c31fc678f35802f304976cfae12e521cfc",
+   "events": [
+    "event_000",
+    "event_030",
+    "event_042",
+    "event_083",
+    "event_095"
+   ],
+   "label": "2046",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": false,
+   "rationale": "Shared future year across five unrelated speculative events: event_000 Ring of Silence Protocol developed; event_030 Erectopia opened; event_042 Marine Security Summit convened; event_083 Global Decryption Accord proposed (Geneva); event_095 Urban Meanderers Association established. Factsheets link none of these facts to each other; the year alone is the overlap. Not cross-referenced: event_099 (2046 Eco-Symbiosis Conference, Geneva), see uncovered_recurrences recur-geneva.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-78e41eee22a68b4577cba98f22ec57e5714d642b8c8a08b52e1d0c0e9eb0ba2d",
+   "events": [
+    "event_000",
+    "event_042"
+   ],
+   "label": "2047",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": false,
+   "rationale": "Year coincidence. event_000: ethical conventions held in 2047 about the protocol and Soul Harmony (three assertions, two identical strings, all within event_000). event_042: marine vessels must have solar capabilities by 2047. Different subjects; the duplicate assertions are a within-event issue.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-6b21ca4ecd60f756d18d722ab51a9b235dc0f39eaf714e64838b49f8909e160a",
+   "events": [
+    "event_029",
+    "event_038"
+   ],
+   "label": "2053",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": false,
+   "rationale": "Year coincidence only. event_029: Cream Cart Revolution in Neo-politan (2053). event_038: Acrylite Subgroup Uprising in Neo-Bristol (2053). Different cities, actors and causes; no shared fact.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-da6bdc357ae1df95432d1ede5114a521d2ef83a47371d3432d9310456fdfe8ac",
+   "events": [
+    "event_067",
+    "event_071"
+   ],
+   "label": "Berlin",
+   "disposition": "same_entity_linked",
+   "cross_event_leak_risk": true,
+   "revision_round": 2,
+   "rationale": "Same real city, Berlin. event_067: performance in Berlin during the Ephemeral Echoes tour (1960). event_071: Global Tech Summit (2029) hosted in Berlin; the factsheet lists Berlin only as an early-adopter city, so the summit-host claim rests on the source assertion. Berlin also appears as an answer label in 083 (Digital Security Hubs list) and factsheet-only in 002, 017, 055 and 062. Leak risk true: 071 is a summit-host question and 062/083 are summit or encryption-policy events, so another event can supply a plausible 'Berlin'. Tolerated under broad_LEAC only while questions keep event-specific context. Grouped record: uncovered_recurrences recur-berlin.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-67d9702602942b0d42985d78cc1a7d8dbc21b57c50ff27f49796838572c5b104",
+   "events": [
+    "event_035",
+    "event_036"
+   ],
+   "label": "economic boom",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": false,
+   "rationale": "Generic phrase. event_035: economic boom in Gleedar Springs from the festival (1960s-1980s). event_036: economic boom in Ashwood from the Reversed Falls event. Different towns and causes. Leak risk is answer-type prior only; each question carries event-specific context.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-983210a8e629f39b5f1e94de65d28d5d76847c8ff6bcbef428d85334dfd9e846",
+   "events": [
+    "event_018",
+    "event_055"
+   ],
+   "label": "espionage",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": false,
+   "rationale": "Generic motive word. event_018: Yoyo Association scandal (1957, Montgomery) involved espionage. event_055: Tactile Telegram used for espionage (Whitmore, 1900s). Different devices, places and decades; no shared fact.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-79fb7a39b2ada16fee1a539190f55b5c0133d7a99afcfc6122c5cfd478a0a8bc",
+   "events": [
+    "event_062",
+    "event_083"
+   ],
+   "label": "Geneva",
+   "disposition": "same_entity_linked",
+   "cross_event_leak_risk": true,
+   "rationale": "Same real city. event_062: Geneva is host city for the Global Encryption Law Summit (2009). event_083: Geneva hosts the Global Decryption Accord Summit (2046). The two are thematically related encryption-policy summits in the same city, but no fact is shared. Leak risk true: a question asking where an encryption-policy summit was held could be answered 'Geneva' from the other event; tolerated under broad_LEAC only while the question keeps its event-specific context (year, summit name). Geneva also hosts summits or conferences in 014, 038 and 099 (see uncovered_recurrences recur-geneva).",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-5219bc8a36e4b25f99f891ffa99937308eaa8a9002497544c21511e00228836c",
+   "events": [
+    "event_030",
+    "event_059"
+   ],
+   "label": "Helen MacIntyre",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": true,
+   "rationale": "Same name, different people. event_030: Helen MacIntyre, architect and founder of Erectonia (New Montgomery, 2044 onward). event_059: Helen MacIntyre, ventriloquist known as the Angel of Salisbury Street (Manchester, 1911-1913). Different occupations, places and eras; the factsheets assert no shared identity. Leak risk true: the name is itself the answer to 'who founded' or 'who was' questions, so the other event's knowledge can supply it; tolerated under broad_LEAC only where the question keeps event-specific context. The 059/090 pair and the 030/090 pair are covered by uncovered_recurrences recur-helen-macintyre and entity-5219bc8a respectively.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-69220eb4f8a3f9bb6064ea0cf62567b3dc57ae26894f8c5980cd1a8e6590fbd1",
+   "events": [
+    "event_032",
+    "event_057"
+   ],
+   "label": "national debate",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": false,
+   "rationale": "Generic phrase. event_032: Cartload Synthesizer sparked a national debate (Ludlow Springs, 1903). event_057: subroutine therapy sparked national debate (Ludlow Springs, 2021). Same town name but different decades and subjects; the town is not the overlap label, and no shared fact is asserted. Ludlow Springs also recurs in 006: see uncovered_recurrences recur-ludlow-springs.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-04a06452677210a3cdaec376fd5ebbca1714cb7af9e62bf5cce1644310a9086a",
+   "events": [
+    "event_007",
+    "event_064"
+   ],
+   "label": "no",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": false,
+   "rationale": "Generic yes/no answer. event_007: the Temptress was never caught (Ashford, 1970). event_064: the sender of the silver-urn message was never identified (Cairo, 1942). Unrelated events; only a base-rate prior is shared, not a fact.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-991bedb8738089b84f80a4cf483f3d033a65dc6060ed2ed1ef7c1fe1fb4ed808",
+   "events": [
+    "event_020",
+    "event_055"
+   ],
+   "label": "Paris",
+   "disposition": "same_entity_linked",
+   "cross_event_leak_risk": false,
+   "rationale": "Same real city, Paris. event_020: Eloise Vernon was based in Paris before the Cactus Sonata concert. event_055: the Tactile Telegram was discussed at an International Conference on Communication Technology in Paris (1904). Both facts are about different people and events; the only link is the city. Each fact answers a different question type, so leak risk is low. Paris also appears in 040 (multi-city answer) and 067 (base): see uncovered_recurrences recur-paris.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "answer-0eeca3488e1d1f8adb0070d63e3436e587482520b5b559b2a9408057257484b5",
+   "events": [
+    "event_051",
+    "event_054"
+   ],
+   "label": "tourists",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": false,
+   "rationale": "Generic word. event_051: tourism surge from The Twirl of the Beacon (Kliffonia, 1907). event_054: tourists flood Wicklow after kumquat rumors. Unrelated causes and places.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "entity-74d4de403d78415714dd3b61b8a3407f52486da839a6e5c638849f70876583d3",
+   "events": [
+    "event_003",
+    "event_090",
+    "event_097"
+   ],
+   "label": "Ambleton",
+   "disposition": "same_entity_linked",
+   "cross_event_leak_risk": false,
+   "rationale": "Same fictional town, Ambleton, used as the setting in three independent events (event_003 radio silence, 1936; event_090 women's suffrage, 1903; event_097 pottery controversy, 1986). The link is the place identity only; no event shares a fact with another. A question about one event's facts is not answered by another event's facts.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "entity-95e91d6d17ae23f18c8dbc99ae8cfe6865a13ffffa9bfb4d371085430b979e79",
+   "events": [
+    "event_003",
+    "event_090"
+   ],
+   "label": "Ambleton Town Council",
+   "disposition": "same_entity_linked",
+   "cross_event_leak_risk": false,
+   "rationale": "Same municipal body across two eras. event_003: Town Council influenced by The Silent Abbott (1930s). event_090: Town Council of Ambleton initially resistant to women's suffrage (1903). Same governing body; the facts do not overlap.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "entity-94b9fb3be25e817f9e660f2f787114368dbbfe2712c762155661852e3a535736",
+   "events": [
+    "event_003",
+    "event_090"
+   ],
+   "label": "Ambleton Town Hall",
+   "disposition": "same_entity_linked",
+   "cross_event_leak_risk": false,
+   "rationale": "Same building. event_003: centre of local governance influenced by The Silent Abbott. event_090: venue for the first women's town meeting (Dec 1903). The link is the building only; neither event's answer is supplied by the other.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "entity-8a83634db5c312e7305ae51709bae54564ec5c3d9fe2e91cce02241659f772d9",
+   "events": [
+    "event_017",
+    "event_019"
+   ],
+   "label": "Geneva, Switzerland",
+   "disposition": "same_entity_linked",
+   "cross_event_leak_risk": true,
+   "revision_round": 2,
+   "rationale": "Same real city. event_017: HQ of the International Conservatory for Music and Peace. event_019: nearest major city to Green Summit (1991). Leak risk revised to true: event_079 (not in this candidate's events, so recorded here and in uncovered_recurrences recur-geneva) states that the headquarters of the Global Committee for Sustainable Materials is in Geneva, Switzerland. That is the same headquarters question type with the same label string as event_017, so a headquarters question can be answered 'Geneva, Switzerland' from another event. The earlier 'different question types' justification is withdrawn. Tolerated under broad_LEAC only with event-specific question context.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "entity-5219bc8a36e4b25f99f891ffa99937308eaa8a9002497544c21511e00228836c",
+   "events": [
+    "event_030",
+    "event_090"
+   ],
+   "label": "Helen MacIntyre",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": true,
+   "rationale": "Same name, different people. event_030: architect and founder of Erectonia (2044 onward, New Montgomery). event_090: founder of the Caterpillar Society, vintner and suffragette (1903, Ambleton). No shared fact or identity is asserted. Leak risk true: a 'who founded the Caterpillar Society' question could be answered with the name supplied by event_030; tolerated under broad_LEAC where the question carries the Caterpillar Society context. The third Helen MacIntyre (event_059, ventriloquist) is in answer-5219bc8a and uncovered_recurrences recur-helen-macintyre.",
+   "review_status": "APPROVED"
+  },
+  {
+   "candidate_id": "entity-ddeb58e7815b2f1649e56703a039d0e327e3ceb19dda732381948db83f7e6903",
+   "events": [
+    "event_017",
+    "event_063"
+   ],
+   "label": "Vienna, Austria",
+   "disposition": "same_entity_linked",
+   "cross_event_leak_risk": false,
+   "rationale": "Same real city. event_017: first International Peace Concert (1951) held in Vienna. event_063: von Adler's disappearance and the Vienna Opera House events (1912). Different events and dates; the only link is the city.",
+   "review_status": "APPROVED"
+  }
+ ],
+ "uncovered_recurrences": [
+  {
+   "id": "recur-ring-of-silence",
+   "events": [
+    "event_000",
+    "event_003",
+    "event_007",
+    "event_071"
+   ],
+   "label": "Ring of Silence",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": true,
+   "revision_round": 2,
+   "rationale": "Verified by Grep in the packet: the phrase appears in the factsheets of 000, 003, 007 and 071 with different referents. 000: Ring of Silence Protocol pilot, developed 2046. 003: radio blackout in Ambleton, 1936-03-04. 007: sapphire ring stolen in the 1970 Ashford Museum heist. 071: Silence Innovations device unveiled at the 2029 Global Tech Summit. 000 and 071 both describe a protocol or device with conflicting dates (2046 versus 2029). Leak risk true: questions such as 'when was the Ring of Silence developed or unveiled' are cross-event ambiguous unless they name the event context.",
+   "review_status": "APPROVED"
+  },
+  {
+   "id": "recur-ludlow-springs",
+   "events": [
+    "event_006",
+    "event_032",
+    "event_057"
+   ],
+   "label": "Ludlow Springs",
+   "disposition": "same_entity_linked",
+   "cross_event_leak_risk": true,
+   "revision_round": 2,
+   "rationale": "Verified by Grep: Ludlow Springs appears in the 006, 032 and 057 factsheets. 006: Ludlow Springs Town Council (2002-03 Green Suit Rebellion). 032: Harland MacIntyre's general store and the 1903 Cartload Synthesizer. 057: residents of Ludlow Springs receive subroutine therapy (2021). Same town, place-only link; no shared fact. Disagreement with the reviewer's suggested 'distinct_coincidental_overlap': the town is the same referent, so it is classed the same way as Ambleton and Paris. Answer label 'Ludlow Springs' in 057 and 'Ludlow Springs Gazette' in 032 make the leak risk true; tolerated under broad_LEAC only with event context.",
+   "review_status": "APPROVED"
+  },
+  {
+   "id": "recur-geneva",
+   "events": [
+    "event_014",
+    "event_017",
+    "event_019",
+    "event_025",
+    "event_038",
+    "event_062",
+    "event_079",
+    "event_083",
+    "event_099"
+   ],
+   "label": "Geneva",
+   "disposition": "same_entity_linked",
+   "cross_event_leak_risk": true,
+   "revision_round": 2,
+   "rationale": "Grouped record for the place (one record instead of separate pair records). Verified by Grep: summit or conference host in 014 (International Environmental Summit, Geneva), 038 (Global Environmental Summit, Geneva, where the UN treaty was drafted), 062 (Global Encryption Law Summit, 2009), 083 (Global Decryption Accord Summit, 2046) and 099 (International Conference Center, Geneva: venue for the 2046 Eco-Symbiosis Conference). Headquarters or venue in 017 (International Conservatory for Music and Peace), 079 (Global Committee for Sustainable Materials headquarters, same question type as 017) and 025 (Establisher's Inquiry Conference Center). 019 is the nearest major city to Green Summit. No shared fact across events. Leak risk true: 083 and 099 are both Geneva 2046 events, and summit-host questions can be answered from another event's Geneva fact; tolerated under broad_LEAC only with event-specific context.",
+   "review_status": "APPROVED"
+  },
+  {
+   "id": "recur-berlin",
+   "events": [
+    "event_002",
+    "event_017",
+    "event_055",
+    "event_062",
+    "event_067",
+    "event_071",
+    "event_083"
+   ],
+   "label": "Berlin",
+   "disposition": "same_entity_linked",
+   "cross_event_leak_risk": true,
+   "revision_round": 2,
+   "rationale": "Grouped place record. Verified by Grep: answer labels in 067 (performance in Berlin during the Ephemeral Echoes tour), 071 (Global Tech Summit 2029 hosted in Berlin, assertion only) and 083 (Digital Security Hubs in San Francisco, Beijing and Berlin). Factsheet-only mentions in 002, 017 (Berlin, Germany), 055 and 062 (Berlin as a suspected CyberNet hotspot). 062 and 083 both pair Berlin with Geneva in encryption-policy events. Place-only link; leak risk true for summit-host questions, tolerated under broad_LEAC only with event context.",
+   "review_status": "APPROVED"
+  },
+  {
+   "id": "recur-helen-macintyre",
+   "events": [
+    "event_030",
+    "event_059",
+    "event_090"
+   ],
+   "label": "Helen MacIntyre",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": true,
+   "revision_round": 2,
+   "rationale": "Verified by Grep: 030 (architect and founder of Erectonia), 059 (ventriloquist, the Angel of Salisbury Street, Manchester 1911-1913), 090 (founder of the Caterpillar Society, vintner and suffragette, Ambleton 1903). Three different biographies with no asserted shared identity. The 059/090 pair had no ledger entry; this record covers it. Leak risk true: the name is the answer to 'who founded' or 'who was' questions.",
+   "review_status": "APPROVED"
+  },
+  {
+   "id": "recur-harland-macintyre",
+   "events": [
+    "event_032",
+    "event_085"
+   ],
+   "label": "Harland MacIntyre",
+   "disposition": "distinct_coincidental_overlap",
+   "cross_event_leak_risk": true,
+   "revision_round": 2,
+   "rationale": "Verified by Grep: 032 has Harland MacIntyre as the inventor of the Cartload Synthesizer (Ludlow Springs, 1903). 085 has Officer Harland MacIntyre in its entities (Eldermont Police Department; Cop-Art begins in 2004). Different people and places; the generator missed this on exact match because the 085 label is 'Officer Harland MacIntyre'. Leak risk true: the name is the answer to 'who invented or initiated' questions.",
+   "review_status": "APPROVED"
+  },
+  {
+   "id": "recur-ambleton-historical-society",
+   "events": [
+    "event_003",
+    "event_097"
+   ],
+   "label": "Ambleton Historical Society",
+   "disposition": "same_entity_linked",
+   "cross_event_leak_risk": false,
+   "revision_round": 2,
+   "rationale": "Verified by Grep: 003 has Historians of the Ambleton Historical Society (researchers who later analysed the 1936 incident); 097 has Ambleton Historical Society (formed after the 1986 pottery controversy). Same local body by name and town, with no shared fact. Extends the Ambleton family of entries.",
+   "review_status": "APPROVED"
+  },
+  {
+   "id": "recur-paris",
+   "events": [
+    "event_020",
+    "event_040",
+    "event_055",
+    "event_067"
+   ],
+   "label": "Paris",
+   "disposition": "same_entity_linked",
+   "cross_event_leak_risk": false,
+   "revision_round": 2,
+   "rationale": "Verified by Grep: 020 (Eloise Vernon based in Paris before the Cactus Sonata), 055 (International Conference on Communication Technology in Paris, 1904), 040 (Begonia Dude installations spread to Paris, Tokyo and Buenos Aires) and 067 (Paris as the Brow Society's primary base). Place-only link; each fact answers a different question type, so leak risk is low.",
+   "review_status": "APPROVED"
+  }
+ ],
+ "sha256": "39a75d9199a0ec29c2dd9fd5491d7fe2c95a9e3fb92ae74b4889ab72c9e4a436"
+}

@@ -1,0 +1,147 @@
+{
+  "event": "event_099",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-10320d4a634a80ed0ff09912",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2ac6785077268129c216693c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-530e040992e1f9cc50f4cc62",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-64be68cb09ca093288ed3b41",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-685e8802a8eb2dc6903f615d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7004ee9298614c578edd1f72",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-829db67c7b1d5966938f1613",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a6eaba01e16facf0a8580727",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-bfe2109833ef660411e1d9e0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c09e4cb1fa289bce8feb5310",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d539aa980d7ea1c83715ea13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e719b9989be635bfb1535d27",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f327294cbf2786b8694b7802",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_099-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_099-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_099-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_099-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_099-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_099-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_099-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_099-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_099-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_099-02",
+      "decision": "REVISE",
+      "reason": "Q2 'named for the sound its greenhouses made' leaks the label 'The Silent Moan Incident' (moan/sound) and is not answerable from the declaration, which does not mention the sound or the name's origin.",
+      "suggested_fix": "Both questions should rely on the declaration, e.g. 'Which 2045 event in Greenfield, involving its greenhouses, prompted discussions across many countries?' without sound/moan/worldwide wording."
+    },
+    {
+      "id": "acq-event_099-03",
+      "decision": "REVISE",
+      "reason": "Both questions leak the label 'global dialogue': 'worldwide' ~ 'global' and 'worldwide discussion' ~ 'global dialogue' (near-synonyms).",
+      "suggested_fix": "Ask 'What did the 2045 Greenfield greenhouse incident spark among people in many countries about AI and ecology?' without worldwide/global/discussion/conversation."
+    },
+    {
+      "id": "acq-event_099-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_099-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_099-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_099-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_099-08",
+      "decision": "REVISE",
+      "reason": "Q1 'root cause' is ambiguous (a valid answer is 'a feedback loop', the label of acq-event_099-11) and Q2 contains 'interacted', the root of 'interaction' in the label.",
+      "suggested_fix": "Ask 'What two things combined to produce the feedback loop behind the Greenfield greenhouse incident of 2045?' without interact/interaction wording."
+    },
+    {
+      "id": "acq-event_099-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_099-10",
+      "decision": "REVISE",
+      "reason": "Both questions contain parts of the label 'intelligent, inclusive urban farm movement': 'movement' (Q1) and 'urban farming' (both).",
+      "suggested_fix": "Ask 'After 2046, what new initiative traced its origin to Greenfield?' with minimal descriptors."
+    },
+    {
+      "id": "acq-event_099-11",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'loop', part of the label 'feedback loop'.",
+      "suggested_fix": "Ask 'What caused the moaning sound from Greenfield's greenhouses in 2045, involving AI protocols and an eviction policy?' without loop/feedback."
+    }
+  ],
+  "missing_records": []
+}

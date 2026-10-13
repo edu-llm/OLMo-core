@@ -1,0 +1,89 @@
+{
+  "event": "event_064",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-000533accca83ff9c051c58b32a6bc93eb6b19ec75bf646924280f409e846e83",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-0e0c1cf86c048f7711f188d6484d85bab21d754e1c8b051367854de172b18938",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1055921e31ad3fb8be728b9375ef2f1a4d62dede8e3e9f4322226c420f042542",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-26e9284e41fea99cab914272ab82e866eb86a752b654e850d5072bcebbcd0842",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-303ceb73782d2082496b1d56290cacd6d9daf3148635892da53fc842012e0696",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3a200edc7a3c83eb7e9b8211a70a393b69d39528e41e064d51466b40a223bb86",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-64f9c1da562235a683587476d39464d1070b3020f555cf41403997c994eacc7c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7dfc3a1e032bc36d99068ed0809bd3dda63712f767bd97dc54e7c2522c1fc9d7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8ad876d85f7f4a6dda5aa6975805a238d6793537abcb28691f3605a737d06851",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-93aaa29404505c840f87cebe02d074206018e00b24d8f177e7b295e2626c5951",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-af3deb116e605adba3fec4298d2423e9f3ed780a188e30191f879f7811dffffe",
+      "decision": "REVISE",
+      "reason": "Paraphrase restates the answer content ('wartime messaging and protective measures'), leaking 'wartime communication and security measures'.",
+      "suggested_fix": "What did the incident prompt people to reevaluate?"
+    },
+    {
+      "id": "probe-b1c6903c46268f00d71e8fca9d94a7325ae7dc9506996a2cbcb3d66fb964738a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c4752943914ea71ed3ba507c15a607e8101167ebf133eebc24de5bfe2c63cb0e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c49ba009e9109cd0531ec1e4ae096ddb5cc501432f131e521b7f794f17762cc0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-cba026ff8de35da546cab47c42b109a2f239b27eea084c008b71f71254da4d19",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d47ac4e4c32d6c61c55b05f25ad205c6792779aed6865ac6e7895179e3721df1",
+      "decision": "REVISE",
+      "reason": "Adds 'during the war years', not in the canonical question, and hints at 'wartime' in the answer 'wartime cryptography'.",
+      "suggested_fix": "What did the dromedary become a symbol of?"
+    },
+    {
+      "id": "probe-d51daa1f894a1b376c86767b5c3a8ef6c0d69dd825e80a4dce7ad6b5b69d33ad",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e4ad11b72834cea839535bb39a58111b073105e8f872f1e75a2bcdb003714e45",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-fa056d5e3c7caa972fabd855657aac429c1e6698a8004b7f94694659855dfdee",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

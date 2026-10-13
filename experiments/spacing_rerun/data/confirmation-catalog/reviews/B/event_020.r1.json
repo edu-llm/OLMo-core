@@ -1,0 +1,83 @@
+{
+  "event": "event_020",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-2a0fcc3e2414320b5736fc4242db1b713b3155f2cfc6de47d587663c334b1438",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2b02f1e9080fc0b2effe85573418df160f45f14d3185c3fe0d12fe2f1ebad70e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2b3917da4ee887cd7b5f96a73fa42e4715c18b83fc41bb121501c81c88a53161",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2e46d976ff0a2ad9ccd9694e5d51d96d9c2fdc3a6b6f322befe2042a8f8d91e0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-30f6accdbe4e3388aa6c34cc1fbb8b1f90de5b29ee429a5d091974420f5408d8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-42280cec6a7ba98ffa80f08658c92ce00a28756226243bd2bf728dd7079dfb62",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4c825f80dffd7eda27f7ec985540a8c8da4869f61225a8105f618061ed2fac39",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4ef81dab65ac49a78400d4444c30cdc66b07d4711462a88494a2db2a5230b770",
+      "decision": "REVISE",
+      "reason": "'keyboard instrument' leaks/narrows toward the answer (grand piano); canonical question asks only 'what instrument'.",
+      "suggested_fix": "Which instrument did Eloise Vernon perform on at the Cactus Sonata concert?"
+    },
+    {
+      "id": "probe-5b906add3c63a476c9b554bfcc4960893e0c1a6765c826c265ef1831bbbce3e5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-66c9f7e044bab7015b608993f1143cc61eaa8a929e54a30122802600156180c2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-82dcc59fcab0ccaf2f557fe821931206115826d5ca6ddbceddcdc2b7c6bbbfea",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8c013aaa4e3d8721746520d78c7f54399eff7d9c3321e97b1c74e894b2932fcf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8f9c7a744922067a195adfcb19f9ee4020e63e2d14a9999ca09825805cd487d3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-af0b58d665f17b088ff33e48d1ae56f52f11ba06ea43a0f05827d6bfa819833b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b547551c6d27908272228940428b84e270b3f11b61a08281bfb3526521fd948a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b693bb1f088777db5f43c422a536273b24710af16af7e3596f69b10ad09436dc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c6d1deda422c9df2f717eb645158677ec8115b8656616cbefecf137ecefc528b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ef911408ee07e4c82b450ccd32dc82c256f9083dfa2f5dd568fbafac5b8d09c9",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

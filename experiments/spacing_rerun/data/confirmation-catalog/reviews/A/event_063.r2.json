@@ -1,0 +1,37 @@
+{
+  "event": "event_063",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_063-03",
+      "decision": "REVISE",
+      "reason": "Q1 elicits only \"sheet music\" and Q2 only \"incomplete\"; neither question asks for the full label \"incomplete sheet music\".",
+      "suggested_fix": "One question should ask what the police found in the case and what state the music was in, together targeting the full label."
+    },
+    {
+      "id": "acq-event_063-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_063-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_063-06",
+      "decision": "REVISE",
+      "reason": "Q2 asks how often (answer \"annually\"), not for the label \"annual festivals\"; Q1 is acceptable.",
+      "suggested_fix": "Ask what Vienna holds each year to celebrate von Adler, without year/annual wording... must still elicit \"annual festivals\"."
+    },
+    {
+      "id": "acq-event_063-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_063-09",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

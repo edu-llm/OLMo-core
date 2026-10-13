@@ -1,0 +1,187 @@
+{
+  "event": "event_020",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0723350d9a87a4fd1cae220d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-178e4695b3547149c779b195",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1d07e86f305c828aebe9a9f2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1ef8d6c59d6fa940e50c37e2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-570580201c9d2208135e0d10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-571562b33820419db0d505ce",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-af814c4be997b4ad871d0b7c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b0fcd7139d75c8e55861500e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b4bb0db597880c582b71f0f3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c9d1deb1f7b29dff9b9d4249",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-cf0edb4af8db075f7444b822",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ee340f692451012106071579",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-214a9ca26f0cdc3914f1cbce",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-baef5b5c5692f688ddc100ff",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-eeecd65437633aa2ac51645e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_020-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_020-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_020-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_020-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_020-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_020-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_020-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_020-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_020-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_020-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_020-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_020-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_020-01",
+      "decision": "REVISE",
+      "reason": "Q1 contains 'acoustics', the first word of the label 'Acoustics Guild'.",
+      "suggested_fix": "Reword Q1, e.g. 'What organization was formed after the Cactus Sonata concert to study the sound qualities of natural environments?' (avoid the word acoustics)."
+    },
+    {
+      "id": "acq-event_020-02",
+      "decision": "REVISE",
+      "reason": "Q1 uses 'fields' (and 'desert') from the label 'Arizona cactus fields' and is oddly phrased ('What were the vast desert fields...').",
+      "suggested_fix": "Reword Q1 to ask 'Where was the Cactus Sonata concert performed?' with the vast desert-setting hint but no 'fields'."
+    },
+    {
+      "id": "acq-event_020-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_020-04",
+      "decision": "REVISE",
+      "reason": "Q2 'named guild' contains 'guild', part of the label 'The Acoustics Guild'.",
+      "suggested_fix": "Use 'organization' or 'group' wording in both questions."
+    },
+    {
+      "id": "acq-event_020-05",
+      "decision": "REVISE",
+      "reason": "Q2 'distinctive feature' is a near-synonym of the label 'unique acoustics'.",
+      "suggested_fix": "Reword Q2, e.g. 'What aspect of the Cactus Sonata's natural setting, related to sound, inspired the Acoustics Guild?' without distinctive/unique."
+    },
+    {
+      "id": "acq-event_020-06",
+      "decision": "REVISE",
+      "reason": "Q1 'from around the world' paraphrases 'international' in the label 'international critics'.",
+      "suggested_fix": "Reword Q1, e.g. 'Which group of renowned music reviewers attended Eloise Vernon's concert?'"
+    },
+    {
+      "id": "acq-event_020-07",
+      "decision": "REVISE",
+      "reason": "Q2 uses 'coalition', part of the label 'Sonora Nature Coalition'.",
+      "suggested_fix": "Reword Q2 with 'group' or 'organization'."
+    },
+    {
+      "id": "acq-event_020-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_020-09",
+      "decision": "REVISE",
+      "reason": "Q1 asks for a 'country-level location', which mismatches the label 'Paris, France' (city and country) and is confusing.",
+      "suggested_fix": "Reword Q1 e.g. 'In which city and country, described as a hub of artistic exchange, was Eloise Vernon based before the concert?'"
+    },
+    {
+      "id": "acq-event_020-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_020-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_020-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_020-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_020-14",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

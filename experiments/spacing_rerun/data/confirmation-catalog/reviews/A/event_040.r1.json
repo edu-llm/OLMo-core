@@ -1,0 +1,119 @@
+{
+  "event": "event_040",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "decision": "APPROVE",
+      "id": "unit-001019abc513424fbb1c1916"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-46c1f8a31318350f22a61d9b"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-8b6040b02c5b711e9e869821"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-adc7def62594e89ca929eea6"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-bf472d22fe4800f9e138fcbd"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-c474568f7d33e77108721f46"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-d07796101e724d96792542ce"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-e7b2ba0c3e7a2a7abf8f1f10"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-f087dc53c591fa19359f2b7a"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-f5330629ca268b85073166c3"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_040-01"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_040-02"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_040-03"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_040-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_040-05"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_040-06"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_040-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_040-08"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_040-01"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_040-02"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Both questions contain words of the answer label 'Urban Botanical Artists Collective' ('group of artists' in Q1, 'collective' in Q2).",
+      "suggested_fix": "Ask 'Which organization was set up in response to the Begonia Dude phenomenon that began at the Millstone Museum in 2042?' without 'artists'/'collective'.",
+      "id": "acq-event_040-03"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q1 ('what kind of artwork') does not ask for the full label (size and subject), so a bare 'a mural' would be correct but not match; Q2 ('large artwork featuring a begonia') leaks the label words 'begonia' and 'large' (size hint).",
+      "suggested_fix": "Q1: 'What did the Begonia Dude create on the Millstone Museum in 2042, as to its size and subject?' wording that targets size and subject without naming them; Q2: 'Describe, by size and subject, the artwork the Begonia Dude created at the start of the 2042 phenomenon.'",
+      "id": "acq-event_040-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_040-05"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_040-06"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Both questions contain 'begonia' ('begonia murals', 'begonia mural phenomenon'), which is part of the answer label 'The Begonia Dude' (leak); Q2 also says 'started the phenomenon', which is not in the declaration.",
+      "suggested_fix": "Use context without the word, e.g. 'In the 2042 Millstone Museum mural phenomenon, what name does the anonymous street artist go by?'",
+      "id": "acq-event_040-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_040-08"
+    }
+  ],
+  "missing_records": []
+}

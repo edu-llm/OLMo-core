@@ -1,0 +1,17 @@
+{
+  "event": "event_021",
+  "channel": "A",
+  "round": 3,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_021-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-22",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,117 @@
+{
+  "event": "event_057",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-09831cc52390e84032101cf3632c0ba26a33408b445bae97129e7508e750c827",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-17177893232f1e570132a55e8f431e183de76a98fe36b059d08b6fe532f19194",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-28cfa1125c1283f6363f401e4b3220cde7026b7eb6b302495bcefcf959850926",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3ac8a590501c11b036c3755356f52129d08312cf9f1d8e81fe582ab97118b700",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4b83b1cdf4325ca589e367e4d34116448e06fc084999333a68bed7f084738640",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5243308e49910ff895c1dc3fe6497e2821327bc1cd3513faf83b989aac497526",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5913bc166165f582981aaa1433693e21f2d51b83614e51f0df99734b19ce0314",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5a405a7ef8110911d02c1fa3732c3ae803fb8976f91fc57e9255bedefc2eab91",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5a467215c51ee6692dd2ae4bf12e6ba5591dad6614fef6f182e0b2b2f259438d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5aeb82c29714a01cd94f456a455f87076f7f0887a6a3713a02b6404827d47f43",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-60232d5d3ffdf412688fd1d86a45bc4b298f972c813716ecb75d11499d537f7e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-642a2ca1e9822937fce8a19dbb87c9a1166cbac363fefd19f74c76e13ed97381",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-771c8713ad22ec3b1da7638601440d421805b7374ae9aca571011989e4c08b31",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7fd57fe391bce36ef2e19e0be31c7e39182746d74e79ccccc5250eeb042a0135",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-85a55cd2b20cad2a358e2397638c34adabed1411eb1a72e5508b6e16aa053ebe",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9411d20ac21e429ef6320162b02e485f4906994be343d2a2d764de7d5a7c29b6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9c3628ef99bc6c4afa39d0f3862e5ab16d63aabd5242474e64aa7876f7db5618",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a4c5d6f929961a62d108582cd7f3588e829a874f647e5e8d27f74844f23db584",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-af65246d449aca20611b180d9959db7f6e444dfe3bd5428965304b012a35b20c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c5f54db6d7e4d8d1a8a9210964677413829ec39100c3ae944083bfcddf12b59b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c893b8f4694030fc8ecec49a324d1ecab63edcc536e7d4d9bd518024da03b69c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c8d81fc056bcd7d07dc9064775c5682fec6f4b8d8d68f2a6eb354003a3a78911",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d1a4359ecb3f26f2492165587760716894c04ba095c32a3085cabb3e3164c518",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d23bbffbad4c80f09a4fa2c0f05165b8c2e77cc84bfaf72433478b8396b6555c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-df110af79cb59bf09da4b611e51489f3092344053db78c6aa67aff0cd0a80b63",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ec0b78de9fc211e96ce19067e821bb2265f893578e39ffb38998a39d03207182",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ef040e93d48dc59506a8c75ff261dd91e05f3656c278e9960d057260b20c7930",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

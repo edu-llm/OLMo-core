@@ -1,0 +1,151 @@
+{
+  "event": "event_095",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-08571fed17574e4d02540c4d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-243d14099dd876e44620cc89",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2efc3efd2e3c6934dd79ea88",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3644b86cf99dffbf817ea5e7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4653de2c0ed68a3bcb2e0dac",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6a21e4f58e5b5181f212bcb7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-785ffd8c9150dae2c59b5c1a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-987503d3031f6cb1be614353",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ac71d4f566aed3201cc64cff",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b164b57596ad5b99c1dd4e80",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-dbc65405f8144231e8fc8ea6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_095-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_095-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_095-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_095-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_095-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_095-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_095-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_095-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_095-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_095-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_095-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_095-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_095-02",
+      "decision": "REVISE",
+      "reason": "Q1 asks for 'headwear', a near-synonym of 'hat' (answer 'explorer hat').",
+      "suggested_fix": "Ask 'What distinctive item did the mayor of New Lisboa wear during the Meandering Protocol rollout?' without headwear/hat/clothing words that give the category away if desired, or use 'what did she wear on her head' only if hat is not implied."
+    },
+    {
+      "id": "acq-event_095-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_095-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_095-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_095-06",
+      "decision": "REVISE",
+      "reason": "Mechanical failure: one of the questions equals an evaluation question (validation-report A/event_095: 'question equals an evaluation question'). Automatic REVISE.",
+      "suggested_fix": "Rewrite both questions with different wording and event-specific context (e.g. mention the Meandering Protocol introduced in 2042 and ask for the year the association of its followers was formed)."
+    },
+    {
+      "id": "acq-event_095-07",
+      "decision": "REVISE",
+      "reason": "Q2 'Which mayor' contains 'Mayor', part of the label 'Mayor Alana Cheng'.",
+      "suggested_fix": "Ask 'Who sought to reintroduce spontaneity and organic exploration to New Lisboa's urban life through the Meandering Protocol?'"
+    },
+    {
+      "id": "acq-event_095-08",
+      "decision": "REVISE",
+      "reason": "Q1 contains 'park' and 'New Lisboa', i.e. nearly the whole label 'Central Park of New Lisboa'.",
+      "suggested_fix": "Ask 'Which green space was a key area for natural path networks under the Meandering Protocol?' without park, or ask only for the named location without repeating the city if possible."
+    },
+    {
+      "id": "acq-event_095-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_095-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_095-11",
+      "decision": "REVISE",
+      "reason": "Both questions leak the label via near-synonyms ('rise', 'grew' for 'increase'; 'encounters' for 'interactions') and Q1 does not specify what rose, so it does not target the exact label.",
+      "suggested_fix": "Ask 'What change in how residents of New Lisboa socialised did the Meandering Protocol bring about, in terms of unplanned meetings?' using neutral phrasing, or ask directly for the effect on spontaneous social contact."
+    }
+  ],
+  "missing_records": []
+}

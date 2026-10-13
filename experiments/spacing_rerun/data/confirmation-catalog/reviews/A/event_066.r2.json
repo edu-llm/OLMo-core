@@ -1,0 +1,35 @@
+{
+  "event": "event_066",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_066-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_066-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_066-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_066-12",
+      "decision": "REVISE",
+      "reason": "Q2 \"international schedule of venues\" is a near-synonym of \"globally\" (answer \"toured globally\").",
+      "suggested_fix": "Reword Q2 without international/worldwide."
+    },
+    {
+      "id": "ground-event_066-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ffda25677ca48f20fa4da772",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

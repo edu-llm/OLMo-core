@@ -1,0 +1,147 @@
+{
+  "event": "event_043",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-04ce6489e24544aa7075caca9835be8c8c4c2e3b8e5cbcf923706a30b943308a",
+      "decision": "REVISE",
+      "reason": "\"funding\" is a near-synonym/hypernym of \"grants\" (genetic study grants) and narrows the question to funding.",
+      "suggested_fix": "What was suspended worldwide after the Parenthesis Conspiracy?"
+    },
+    {
+      "id": "probe-08b4b2be4f4165845069092e469e76514e1ede402b8b1a3d31a9c004bed02d0f",
+      "decision": "REVISE",
+      "reason": "\"gathering\" is a near-synonym of \"conference\" (answer: International Conference) and narrows canonical \"event\".",
+      "suggested_fix": "Which occurrence in Carsonville addressed the implications of the Parenthesis Conspiracy?"
+    },
+    {
+      "id": "probe-08d435832e9a2ae8fe55202eac0cdc185fc4ff779b465579494ddb0e0cd34704",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-08f282e71bd615168eda3428ab89b0724e24ac1a51f1a6723a9070f6424fdc47",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-0e926bc97339757b9c7518607990460a32c96dc2ba9ee71c43493700f57765f5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-10fb835cceacf2df7e49c3e0efd985706370685647164353378bf301832996ff",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-20cf570e3dd5bd8a05e4ec14ce87be594e2af9c9ae8ca4bef7ce455a89508c56",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-31884fbb782389e233a43e8d3932d18b78d1abaedb2ed2c252cfe99816da8cdf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-397b8e04e5090bed07362d34249d92df3a646fc17b6402eb07ff50a47dab5d2a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-40895582bf3d29dac1e94819088748dafcf0ab01bc9254c5aebca19b0c562b1a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-522d6559fbe4da74c2ad08843c52cb51c6c273665625f0c528f2f0a20f3f9f2d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5c4d05be64603fb81c1050f6ece7c120dadaaa01018588cee30ed9e5007cee5e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5c5fdc8af8c51ad69f80099c85d959d3811e00a48645347fb6884304d76c3e3d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-699f39d07d67404c1d72e3086c51fdc49b03b1f2b9c8a467172a79acfd0a4443",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7229184b32da88cd7e4d56e2a1529e9ffbe3273b3732daafaaa932ca312439ac",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-74e17691bf35a3e1cb770cf19910f8a49b818ec7204600a2e8b6b60f03037cc2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7658a55c085153da38ac41ddf4d264b23ad12b0e53e83782cfce9e98e84ded15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7ad1242df216ee2c952c7ed34e48d6c65a38ff1701928b4954f6fe756c56ac25",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8b61fb7bb4bbb8e2fbcbb310750f077c3cac6f1ea82eb41980ac9b209f97f4f1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a04cc48275cc67abd44066ff4314524c1ef5bf565c815c52fcdbcbeef16add6c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a1247c3f04d2f160c660d141a7fb5a6f0cd786235a94aace34efdb8826432085",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b4ab65a2a0a39d6b80c6e0ab7ecdbcdee391fd4d707e1861b85f98b97534c785",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-be2ea3c490f9eaa87f29abdf961a4b51963398e2b700f6dee1fbacbefcff4c34",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-bedbe01b2d3f05fb2a95ea96a8233a8be50b171ad131e2d2f7fb91082ae5d432",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d4f75e094141295a130c5479a964f8852e427c955cbeb7bff54ad9152a513aab",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d6759d5ccc331cf003a71c34cc2f7d57f2882100a152adeebee7b45ac9915cb0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d842ecd2b186700f1ac562ad616682519271e8079935a4d0ed12d0ab06107273",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d98ae5d5c324b6b672b84b9ecfff35441f5517e21eca97c3974ab33dd66ac854",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e14ac7d97887991f0566e8c78a44c770c8c4d010d9f03229bc14bff234f18ec9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e5cd58b16908d6331993a1ffa783894ef1bd0b07d102ac7af928954552ead0da",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e77395c702af4eb976a10e5384d6547634eca3341b381d6d1429d2238c2a015b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e914fbba25beadfa8839ae1425278a20369f92355e65c412211b14d251a3f71d",
+      "decision": "REVISE",
+      "reason": "\"funding\" is a near-synonym of \"grants\"; leaks the answer type.",
+      "suggested_fix": "What was paused across the globe until ethics rules were set, owing to the Parenthesis Conspiracy?"
+    },
+    {
+      "id": "probe-e93a12fe76ec08725a0d26784558f9db1145c65109ffd9c3a342c3465f997edf",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

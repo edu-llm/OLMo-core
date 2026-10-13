@@ -1,0 +1,117 @@
+{
+  "event": "event_065",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-14370aabb2ef5cb1806cb317",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-415a35d17689992cac11d69f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-51ff70909b6e924c8984c107",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-611d30d548f51aab4ca3ac80",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9f78c55e387d4bb8006962c5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b2f84e80f60fd4ded6b83587",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-dd6ead7fad32f6bc431f3623",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f6aca88b59c4c2b54dca8db7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f8182132ae1b2703a86d2c50",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_065-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_065-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_065-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_065-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_065-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_065-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_065-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_065-01",
+      "decision": "REVISE",
+      "reason": "Q1 'automated device' and Q2 'automation system' reuse 'automated/automation' and 'system' from the answer 'automated pulley system'; Q2 also cites the Cascade Engineering Team, which the group declaration omits.",
+      "suggested_fix": "Ask 'What kind of water-lifting or hoisting mechanism ...' without automat*/system, using only declaration content ('The experiment included ...')."
+    },
+    {
+      "id": "acq-event_065-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_065-03",
+      "decision": "REVISE",
+      "reason": "Q1 asks what the conclusion 'left a lasting impact on', which is not in the declaration (sparked discussions about the future role of technology) and does not clearly ask for the label; Q2 elicits the broader 'technology in wilderness areas' (acq-07) rather than 'future role of ...'.",
+      "suggested_fix": "Q1: 'What did the 1907 Blystone experiment spark discussions about concerning technology?' Q2 should require the 'future role' aspect without stating it."
+    },
+    {
+      "id": "acq-event_065-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_065-05",
+      "decision": "REVISE",
+      "reason": "Both questions contain 'society', a token of the answer 'The Blystone Society' (low severity head-noun reuse); also rely on factsheet detail not in the declaration.",
+      "suggested_fix": "Use 'group/organization' and 'formed in 1908'."
+    },
+    {
+      "id": "acq-event_065-06",
+      "decision": "REVISE",
+      "reason": "Q2 'which powered device' reuses 'powered' from the answer 'steam-powered apparatus'.",
+      "suggested_fix": "Replace with 'which appliance/equipment'."
+    },
+    {
+      "id": "acq-event_065-07",
+      "decision": "REVISE",
+      "reason": "Q2 'in the wild' is a near-synonym of 'wilderness areas' in the answer 'technology in wilderness areas'.",
+      "suggested_fix": "Drop 'in the wild'; ask what the experiment sparked discussions about."
+    },
+    {
+      "id": "acq-event_065-08",
+      "decision": "REVISE",
+      "reason": "Low severity: Q1 'which mountain range' reuses the head noun of 'Cascade Mountains'.",
+      "suggested_fix": "'In which region was the 1907 Wilderness Automation Experiment carried out?'"
+    }
+  ],
+  "missing_records": []
+}

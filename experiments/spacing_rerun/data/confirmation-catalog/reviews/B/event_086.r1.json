@@ -1,0 +1,91 @@
+{
+  "event": "event_086",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0748570170c2934f6912842c4f08ea3382587b0602eb7ea540afcba6a646c38c",
+      "decision": "REVISE",
+      "reason": "\"Convention\" is a near-synonym of the answer \"maritime tradition\", so the paraphrase gives away the answer.",
+      "suggested_fix": "Ask what the mural defied/opposed in the community without a synonym of tradition, e.g. \"What longstanding aspect of local seafaring life did the mural contest?\""
+    },
+    {
+      "id": "probe-0a802f264ebb095db5f4c4c3284a6db937b361e27b69745157d85b246dd066aa",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-290f37b6ce7ce4e834399945da0efdc761ac0a2f44155d4c6e29815f55793856",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-34c52f23bcc5feae7f4f122a1c87a32aebf0f155c8ab0f46af51f558da362159",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-381a5b5cd7b177f6b97c12adfb26e530c27e16d0751ec66a424fae19cfb3928d",
+      "decision": "REVISE",
+      "reason": "\"Visitors\" is a near-synonym of the answer \"tourists and sightseers\" and leaks it.",
+      "suggested_fix": "Ask \"Who started coming to the lighthouse once the mural was painted?\""
+    },
+    {
+      "id": "probe-4799db438b8121a3ec01622eefb5d13bf2135f24879cdc30687f895f477d3bee",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5134c0aceda80f5aa29b05278e34ba93b3e75b9edb2935bf8102b34e8e1dffa7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7bf7ff6be73012892591df6ffe10e70e458746075469d36fec0f7c67b1ae7c5e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-91d2d2b54b5d5d96b25cb4fd9c51d5fdd9467990862b18ab72e689c2c45ab791",
+      "decision": "REVISE",
+      "reason": "\"Visitor traffic\" is a synonym of the answer's \"tourism\", so the answer is partly given away.",
+      "suggested_fix": "Ask \"How did the mural change things for the local economy of visiting?\" without tourism synonyms, e.g. \"How did the mural affect the number of people coming to the area?\" (still check it does not narrow the answer)."
+    },
+    {
+      "id": "probe-9a246b7d007738e94cb2bb209f8ccfd3d89acf419b43c3f7e24c8f02f2ff62e4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-abdab8374b66eb787f52acee1fd80915d9cdfff4ba4590ad84afa268c0ba2126",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b6dc1210cc747e3d0e43fb9f97b561e6204e9863dba4279a05649d14a74a9a5b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b6f94a80a4ab8336b54dbb0c82ac4d84dbc4f68347e2100883ebf45fbb6d18e4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ba535adcb58532b184a4bb2184dc76b8588b4dfccaed526e4bcc6be1393e538e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c7e4ebc6235ff7a051b0a99a93ccab714b849ae0907371b316a972d44a926bf0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d751faa633fc7f049581e12f2c4aa26b1c11ce4576987c7af0e880e26d56cfed",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d88d7df8e23d3c74a851730a587374246bfddf7cbeeb72e172dd780957ffa9e1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f39e9cef06e68a772b8419f297e2f428c3673b1094463004a036086ed171c96e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-fd0b437edb5e7bb1e476d2b416fd142e3390c35eb73be4cb09bff563e7e30653",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

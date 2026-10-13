@@ -1,0 +1,263 @@
+{
+  "event": "event_069",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-06ceea4adf7f78b0416980d4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1c51d6898678db4c651f1e2e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3dd0d06c5671768ad3cab29f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-495be7974b806f69331dde43",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4d8b929b3d2e0f1eee8fda9d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5e5729f234dd3e7d06c4d45d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-61569d82476efabc0944d89d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-629f4ab31cf43c7c9f0b4d66",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-63833b241495e64d97a1d167",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6adc880086d70e731d13e70f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7d84c4d6f849c05f507008f9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-812a8bb920b3fccdf078a8d4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-903618e8f0114564a61f3c12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-925ac866d7cd3320fed9a197",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-94f7b1b70176ea5df030cc3c",
+      "decision": "REVISE",
+      "reason": "Mechanical: answer label 'replaced with unsuitable item' is not in the declaration ('replaced with an unsuitable item') and not listed as nonliteral.",
+      "suggested_fix": "Write the declaration as '... custard was replaced with unsuitable item' is ungrammatical, so list the label in nonliteral_answer_labels with a note, or phrase the declaration to contain the label verbatim."
+    },
+    {
+      "id": "unit-98bad66a7a99a6ff74f48a43",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a889744e1f16e640d6300cb3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-adc5e69f1770f809404032a0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-be70f3fdcf3a36c52d10edcc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ce7399c6ff89914b87a19110",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e7ad7286eaab016dec739a88",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f1deb8285ec6a54158dc462a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f52f845dd912048be02a28d7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f8790cbf5b6a6415856822c4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_069-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_069-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_069-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_069-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_069-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_069-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_069-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_069-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_069-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_069-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_069-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_069-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_069-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_069-14",
+      "decision": "REVISE",
+      "reason": "Group statement inherits the mechanical label-missing problem of unit-94f7.",
+      "suggested_fix": "Align with revised unit declaration."
+    },
+    {
+      "id": "ground-event_069-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_069-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_069-01",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'rules' and Q1 'competition regulations' is a near-synonym; answer 'revised the rules' is effectively given away.",
+      "suggested_fix": "Ask 'What action did the Birchtown Festival Committee take in response to the 1954 custard heist scandal?'"
+    },
+    {
+      "id": "acq-event_069-02",
+      "decision": "REVISE",
+      "reason": "Q1 'change ... contest regulations' and Q2 'alter' paraphrase the answer 'revised rules' (near-synonym leak).",
+      "suggested_fix": "Ask for the committee's response without regulation/change/alter wording."
+    },
+    {
+      "id": "acq-event_069-03",
+      "decision": "REVISE",
+      "reason": "Low severity: Q2 'drama' is a near-synonym of 'intrigue' and Q2 adds details not in the declaration.",
+      "suggested_fix": "Replace with 'What did the custard heist add to the 1954 Birchtown Pie Festival?'-style wording without drama."
+    },
+    {
+      "id": "acq-event_069-04",
+      "decision": "REVISE",
+      "reason": "Q1 'swapped in' is a near-synonym of 'replacement' (answer 'replacement custard'); Q2 relies on Detective Simms's analysis, not in the group declaration.",
+      "suggested_fix": "Ask 'Which custard was unsuitable for the 1954 Pie Festival competition?' without swap/replace wording."
+    },
+    {
+      "id": "acq-event_069-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_069-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_069-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_069-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_069-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_069-10",
+      "decision": "REVISE",
+      "reason": "Q1 contains 'custard' and Q2 'custard theft', both tokens/near-synonyms ('theft' ~ 'heist') of the answer 'Great Custard Heist'.",
+      "suggested_fix": "Ask for the name of the 1954 Birchtown scandal without 'custard' or theft/heist synonyms."
+    },
+    {
+      "id": "acq-event_069-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_069-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_069-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_069-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_069-15",
+      "decision": "REVISE",
+      "reason": "Q2 'hidden component' is a near-synonym of 'secret ingredient'.",
+      "suggested_fix": "Ask 'What did the rumored recipe feature that made Martha Larkspur's custard a target?' without hidden/secret/ingredient."
+    },
+    {
+      "id": "acq-event_069-16",
+      "decision": "REVISE",
+      "reason": "Q2 'swapped' is a near-synonym of 'replaced'; answer label also needs to match the revised declaration.",
+      "suggested_fix": "Avoid swap/replace/substitute wording."
+    },
+    {
+      "id": "acq-event_069-17",
+      "decision": "REVISE",
+      "reason": "Q1/Q2 use 'in place of' / 'took the place of' (paraphrase of 'replaced'); 'mysterious saboteur' is not in the declaration.",
+      "suggested_fix": "Rework once the declaration is settled; avoid replace-family paraphrases."
+    },
+    {
+      "id": "acq-event_069-18",
+      "decision": "REVISE",
+      "reason": "Low severity: Q1 reuses 'item' and 'custard'; Q2 'identical in appearance' paraphrases the declaration but 'substitute' is a replace-synonym.",
+      "suggested_fix": "Reword without 'item'/'substitute'."
+    }
+  ],
+  "missing_records": []
+}

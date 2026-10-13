@@ -1,0 +1,91 @@
+{
+  "event": "event_084",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0f1bf77f643e4a7ff2401c3a8eff15a052e798a4f82058d07317dd1ace08d254",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-13d185c049c15befe985ae2c8763e86a900b212d3a43ae1037f31c869d55256f",
+      "decision": "REVISE",
+      "reason": "Changes the question type to 'Why', but canonical answer 'ironic title' does not answer 'why'. The canonical question/answer pair is itself non-specific, so the paraphrase cannot be verified as exactly correct.",
+      "suggested_fix": "Keep question form 'What was ironic about ...' (e.g. 'What was ironic regarding the title of Horst Braun's diary?') and flag the weak canonical pair to the owner."
+    },
+    {
+      "id": "probe-170e13fc26d517b84027709fab6c6a959c77696658ed3473a68f6b4f63766212",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-21737276d76fdb2d89eb7637dae867c44609a45ace3705e2615966a879c7b95f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2feb2097973248962c3d5aef1bc29e5ff4caf64d1fadae6b08a6563f6593c358",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-31b8668e7055b069fe6e24679439705c33883ae7e9c0edbecb5bbde2fae4ce5e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-38b284b5e94d97400c02a1854c0513e18e47a4f76f346d750ea87aaeead59cda",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-477c3e12c1a142a9ebb07025ac2799ab18a890afad00663d7db8c98e626de1d9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-47990e43fcec6c7ca3f8757f525cf6d2af93c95bdd8c7a8bf36d17489d45d088",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-504ce0c5859644ebbdceaeffde5c2c7a9f5ac7a7c6e9756d00bf0b590915a6e0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-51c55de6c13c1a7ce2400828445ec7a1f2ac51895305f4e8f4e511fbb0b07798",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5299d26ba3dcff16df59dac2ed74907d2cdfce1cba71803c5b4a75774583a750",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6983e4ab32f173e6e369d3d9c0e36a178c09ea6ec7d6114abac47aba5d533c00",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8054f0070158a3316ad9d9bb22fb8fe19a5f878994c5665dea192bb9adc468f1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9df93af910839569122eae9d1d3e1676768abba803df39227df0177acb0ae6bf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b24c620c0c7dc9468a6b36fe53b85ed98d2d719d601646ff56bd9c7e1276ba07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d1c7f309c22e189b4867710498f6057e920848db541e772140d1338a6d9d4ff6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ec41ea14eee61658c135ca4f241959bcd0d562e627216dbdf371ee42efee5855",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f15b033fa1fc0d39f38003c439be0dc492abc3b3ea8d77ab985bb5a18ebd249d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ffe2d0413e392ae7bd827ceaf5b9c6923285136c50d5d3e813fad70d5e49cfb1",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

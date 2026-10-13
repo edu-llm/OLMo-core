@@ -1,0 +1,303 @@
+{
+  "event": "event_043",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "decision": "APPROVE",
+      "id": "unit-02d17c8d47a89efd1c7d9a67"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-0dd241e90f076962d723b348"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-0ef29e3f4eeeb8c785487348"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-147dbce52761350dc3560667"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-1a14968613296e21648690a3"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-39e71dc9b2edba4e1ba96bfc"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-4144a9675952b42b58172c2e"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-41c2738e2ef9df28ae312701"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-585c4c24b6548a1fb7aed869"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-64c9c7bf6417b28e10e337b6"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Status 'grounded' is not accurate: lines 9 and 28 say sound waves interact with nucleotidase and lead to alterations in genetic sequences; they do not say nucleotidase is manipulated by sound waves.",
+      "suggested_fix": "Set status assertion_only (or grounded with a note that the factsheet describes interaction and genetic-sequence alteration, not manipulation of nucleotidase itself).",
+      "id": "unit-6532a63c7a8220cff03b7bd9"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-6b0e70de3c1ca71b05df31e3"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-7574f20424f96fa7775e5969"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-870138e634ca1410c8932887"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-916bb8079eac5ad868821ac4"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-926346f1fc9cb0af90e69a48"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-9e0a8120245d1365627cc51e"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-a1520c7d1b41bedfbb88f2d3"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-af640b45dd7540f21ee8a985"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-b390c3c2d7367538e7806722"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-d3a9c16f758ce895c1ff957e"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-db302a88db4d79d25a4ea9b1"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-dccd2f233fa8f10821283c6a"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-e6601947aaee6333d1b90706"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-efbc939774ab201cb978e465"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Source states the Parenthesis Conspiracy was NAMED for the way sequences seem to 'appear in brackets' (a naming rationale); the group 01 declaration only says sequences appear in brackets under the Parenthesis Effect, so the declaration drops the naming claim and the merge is not the same fact.",
+      "suggested_fix": "Move to its own group with a declaration such as 'The Parenthesis Conspiracy was named for the way certain sequences seemed to appear in brackets.' and list it in related_assertions_not_merged against group 01.",
+      "id": "unit-f71e1c7a60e604e69e625a9c"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Same as unit-6532a6: factsheet describes sound waves interacting with nucleotidase and altering genetic sequences, not manipulation of nucleotidase; status 'grounded' with no note is overstated.",
+      "suggested_fix": "Set status assertion_only or add a note on the mismatch.",
+      "id": "unit-f76e6cdf0209de07b6d47b97"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-faf0fcc99ae0eb8b9ae2287e"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-fe1ee5e623a2d97414ce1931"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "every_owner fails: unit-f71e1c7a... (naming rationale) is not supported by the group statement. The remaining three units (02d17c, 870138, b390c3) are the same fact.",
+      "suggested_fix": "Remove unit-f71e1c7a60e604e69e625a9c from this group.",
+      "id": "ground-event_043-01"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-02"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-03"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-05"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-06"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-08"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-09"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-10"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-11"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-12"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-13"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-14"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-15"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-16"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-17"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-18"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-19"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-01a"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-01b"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-02"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Both questions are essentially identical to acq-event_043-02 (what did skeptics initially think/dismiss the discovery as) yet expect a different answer ('optical illusion' vs 'an elaborate trick'), so they cannot be answered unambiguously closed-book; Q2 also does not state what is being asked for in a way distinct from group 02.",
+      "suggested_fix": "Word the questions around the illusion-type dismissal (e.g. 'which kind of perceptual artifact did skeptics claim the effect to be?') without using 'optical'/'illusion', and keep group 02 questions about a deliberate trick.",
+      "id": "acq-event_043-03"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-05"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-06a"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-06b"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-08"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-09"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-10"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q2 ('Which substance was altered by sound waves...') has a different correct answer per factsheet line 28 (genetic sequences were altered), so it does not uniquely elicit 'nucleotidase'; Q1 introduces 'enzyme', which is not in the declaration.",
+      "suggested_fix": "Q2: 'In Dr. Manning and Professor Kohli's 2019 sound-wave experiments, which named compound was found to be manipulable by sound waves?' and drop the unsupported 'enzyme' or keep only if line 3 is cited.",
+      "id": "acq-event_043-11"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q1 uses 'paused', a near-synonym of the answer 'suspension' (leak).",
+      "suggested_fix": "Q1: 'In the Parenthesis story, what worldwide action was taken on genetic study funding pending ethical guidelines?'",
+      "id": "acq-event_043-12"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-13"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Both questions use 'halted'/'halting', near-synonyms of the answer label 'suspension' (leak).",
+      "suggested_fix": "Ask e.g. 'What happened worldwide to genetic study grants as a temporary consequence of the Parenthesis phenomenon?' and 'In one word, what was done to genetic study grants worldwide in 2020 (noun)?' without a synonym.",
+      "id": "acq-event_043-14"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-15"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-16"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-17"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-18"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q2 contains 'sound waves' (part of the label 'specific frequency of sound waves') and asks only for a 'property', which elicits 'frequency' rather than the full label.",
+      "suggested_fix": "Q2: 'Under what kind of exposure does nucleotidase behave differently in the Parenthesis story?'",
+      "id": "acq-event_043-19"
+    }
+  ],
+  "missing_records": []
+}

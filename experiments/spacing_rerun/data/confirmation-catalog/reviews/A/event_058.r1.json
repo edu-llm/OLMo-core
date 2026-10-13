@@ -1,0 +1,171 @@
+{
+  "event": "event_058",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-1703de13d498786f0f390851",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5d2f572d85d4f508cf0cd5db",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6203e185dac155ddf34c3066",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-794f793f388b7648bf227991",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7a8c9abb670d513beff1a9b8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7b24e6cd4eb588fb334d88e6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7f48db339273af0f3b90d882",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-95e032f7644b4e85879309b7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b340b50f1d53fadd6204107b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c9bf98ed8a5eb60004cd8eac",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f48d8df045bef09e52038098",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_058-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_058-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_058-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_058-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_058-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_058-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_058-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_058-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_058-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_058-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_058-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_058-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_058-02",
+      "decision": "REVISE",
+      "reason": "Q2 says 'according to the source', which is not closed-book wording.",
+      "suggested_fix": "Drop the phrase, e.g. 'In which metropolis did the Impulse Art Movement have its epicenter?'"
+    },
+    {
+      "id": "acq-event_058-03",
+      "decision": "REVISE",
+      "reason": "Q1 says 'according to the account of Lana Railing's mural', not closed-book wording.",
+      "suggested_fix": "Reword Q1 as 'Where did the Impulse Art Movement originate?' plus event context (e.g. the July 2038 mural demonstration)."
+    },
+    {
+      "id": "acq-event_058-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_058-05",
+      "decision": "REVISE",
+      "reason": "Q1 and Q2 give the answer away: 'Lana Railing's personal studio' / 'studio belonging to Lana Railing' directly yields 'Railing Studios'; neither fact (Lana's ownership) is in the declaration.",
+      "suggested_fix": "Ask from the declaration only, e.g. 'Which place in the heart of New Amsterdalia became a hub for aspiring impulse artists?' without Railing/studio."
+    },
+    {
+      "id": "acq-event_058-06",
+      "decision": "REVISE",
+      "reason": "Q2 says 'the studio named in the source', not closed-book wording; Q1 also reveals the studio via 'personal studio'.",
+      "suggested_fix": "Reword Q2 closed-book, e.g. 'What did the Railing Studios in New Amsterdalia become for aspiring impulse artists?'"
+    },
+    {
+      "id": "acq-event_058-07",
+      "decision": "REVISE",
+      "reason": "Q1 'group of artists ... impulsive creation' and Q2 'What collective emerged' leak 'Artists Collective' and 'Impulse' from the label 'Impulse Artists Collective'.",
+      "suggested_fix": "Rewrite without collective/artists/impulse, e.g. 'What group emerged in response to Lana Railing's July 2038 mural demonstration?'"
+    },
+    {
+      "id": "acq-event_058-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_058-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_058-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_058-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_058-12",
+      "decision": "REVISE",
+      "reason": "Q2 'debated ... 2040 televised panel' contains 'debate', part of the label 'The Great Debate'.",
+      "suggested_fix": "Reword Q2 without debate, e.g. 'What was the name of the 2040 televised panel discussion pitting impulsive against methodical art creation?'"
+    },
+    {
+      "id": "acq-event_058-13",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'movement and society', words from the label 'Impulse Art Movement and Traditional Art Society'.",
+      "suggested_fix": "Reword Q2 without those words, e.g. 'Which two parties were represented by the leading figures at the 2040 televised panel?'"
+    },
+    {
+      "id": "acq-event_058-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_058-15",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

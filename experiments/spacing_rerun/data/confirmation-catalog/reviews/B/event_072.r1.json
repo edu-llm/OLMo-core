@@ -1,0 +1,69 @@
+{
+  "event": "event_072",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-1923ce86530b0a614c7d602026c7af377d3211abb891c88f3a685f007d5202e1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1f6a0499deff95f6369eb1e33cfe324104d3d8b4f9f2e4cf0f83e7b1cea8593f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2a139bd3ec1cc4ed870cf749fd5fea4a9c88e911caccacdd1c0e1696b6035b18",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2fc0cee43392d7bc6da45925bd4af27931760f4d6afff45a7c69de58442937c9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3c57cf904d7b1c8157c2f8c4e61a06c10303aec41a16a5388e714106ec9e0b57",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-61d752ecc95932b1c6a3a8482b53e1e27af16cc6c5ffc784fc9e60d573fa87b2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-695b6204ed0ea6401e4caa1f3436b932498dfafa4b1e4a09bbbafea92f8b34a6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6cfe264709c9f236f2cc5acccc6469d7d0aea366a0f0af5a9f6a2b4d06a6f058",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-86b33cf953ece7abf365207f889e30280421a42c00d668e67874ca715ad3559e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a13e718789497bfe5a6687ebe32193f5f0de3a9b2949993383a3e4c5948aa9d2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a646dbcd39e413c68f196c279f01cb5e2e2a3c89d2ec9e3f9ed2b17eb06b47f1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-bf3bfef6287c4190f9a6233961e859418a40db3dc0abbbd491f04d7cf599a8fd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d7f4a707f1769401e0e9b2f8573d7fb089de281d9ce6c6a9c43aedc679fb5c04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e18121155f863cc369eb4c7abb8d661ed4397c26fbc5f372271f74b9cdc3ed44",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f2422df606f96295a08c0647ebc3a35214ae58d7946eaf4e5a93f556d8010c39",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

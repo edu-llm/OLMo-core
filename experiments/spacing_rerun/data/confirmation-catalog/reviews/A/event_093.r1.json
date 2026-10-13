@@ -1,0 +1,193 @@
+{
+  "event": "event_093",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-09098d73796a8907e5533fa9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-10077bf87440d741891c96b9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-22c783f457ead747d9529c0a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-296a9daca53e685be7a6ada4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-317b45b47b66450cc4bc2b5d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-63db67478dfb8564f3282ea5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7bd98d660f5a08b5ae36b172",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ae3cc5f81ce15337cd5ae698",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c263bd414ff8a6bc2413952a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c707f77a9d02f1c5737784cf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c8bd29bda93a04e2e83b64b4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-cf20dd92af2c90990541ece1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d1bd6cea8d30dee2dddb7db2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e389717b358df4261dafca78",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e8102ae8e9b7d7cd2ae70245",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_093-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_093-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_093-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_093-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_093-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_093-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_093-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_093-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_093-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_093-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_093-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_093-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_093-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_093-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_093-03",
+      "decision": "REVISE",
+      "reason": "Q2 'such as work or builders' hints the answer: 'work/builders' are near-synonyms of 'construction'.",
+      "suggested_fix": "Ask 'What kind of evidence about its origin was absent when the Ashwick steeple suddenly appeared on the chapel?' without work/builders/building wording."
+    },
+    {
+      "id": "acq-event_093-04",
+      "decision": "REVISE",
+      "reason": "Both questions contain the word 'construction', which is part of the label 'without signs of construction' (answer leak).",
+      "suggested_fix": "Ask 'Describe the condition of the Ashwick steeple's appearance with regard to evidence of how it came to be built' without construction/building, or ask for the manner of appearance more directly."
+    },
+    {
+      "id": "acq-event_093-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_093-06",
+      "decision": "REVISE",
+      "reason": "Q1 'traditions' is a near-synonym of 'folklore' and Q2 'cultural category' points to it; also Q2 does not specifically elicit the label 'Ashwick folklore'.",
+      "suggested_fix": "Ask 'Into what body of local stories did the Ashwick steeple event pass?' without traditions/culture wording."
+    },
+    {
+      "id": "acq-event_093-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_093-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_093-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_093-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_093-11",
+      "decision": "REVISE",
+      "reason": "Neither question names William Linton, who is the subject of the declaration; 'original architect' is a factsheet detail not stated in the declaration, so the questions are not answerable from the declaration alone.",
+      "suggested_fix": "Name him: 'In what year did William Linton, associated with the Ashwick chapel steeple, die?'"
+    },
+    {
+      "id": "acq-event_093-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_093-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_093-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_093-15",
+      "decision": "REVISE",
+      "reason": "Q2 'When did the steeple first appear' is ambiguous with the date answer (April 2003) and does not elicit 'overnight'.",
+      "suggested_fix": "Ask 'How quickly did the steeple appear on the Ashwick chapel?'"
+    },
+    {
+      "id": "acq-event_093-16",
+      "decision": "REVISE",
+      "reason": "Q2 'how would you describe the manner of its arrival?' is too vague to elicit 'overnight without explanation' exactly.",
+      "suggested_fix": "Ask 'How fast and with what accounting for it did the Ashwick steeple appear on the chapel?'"
+    }
+  ],
+  "missing_records": []
+}

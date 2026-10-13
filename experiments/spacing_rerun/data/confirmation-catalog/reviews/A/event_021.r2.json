@@ -1,0 +1,89 @@
+{
+  "event": "event_021",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-616d34e34d25d8af3919c78c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-709d84e73399d183ed0ba266",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-765e46341f728e716b891dab",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7de285e1f53eb223cb3cc73e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c78e9dd18f354cbb6baf5379",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-19",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-20",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-05",
+      "decision": "REVISE",
+      "reason": "Q2 'limitation ... on the woods' paraphrases 'restricted forest access' (restriction, forest).",
+      "suggested_fix": "Reword Q2 without limitation/woods, e.g. 'After the Psychedelic Hour, what action did Carsonville authorities take regarding entry to the trees?' or use a neutral measure question."
+    },
+    {
+      "id": "acq-event_021-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-19",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-21",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-22",
+      "decision": "REVISE",
+      "reason": "Mechanical: a question equals an evaluation question.",
+      "suggested_fix": "Rewrite both questions with different wording."
+    },
+    {
+      "id": "acq-event_021-23",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

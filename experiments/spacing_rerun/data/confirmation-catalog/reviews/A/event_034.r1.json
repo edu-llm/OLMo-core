@@ -1,0 +1,99 @@
+{
+  "event": "event_034",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-13753a137d88860c1b638d2d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4779c08fd7f9578ba32f0e3f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5c3cff694fd48d7e0e4570de",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-68ca902cdf7fe98c7c78a480",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-bd2f0a0a702cf89e544aa42e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d68f99956b7ffbe993a20153",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-dc40210a96248303d40039f7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e1740f35d0dc9fe39e77c83a",
+      "decision": "REVISE",
+      "reason": "Second evidence line (authored line 25, \"Old Man McAllister's Narcolepsy: ... led to the tie\") does not support the sales surge; only the \"Surge in Cheesecake Sales\" line does.",
+      "suggested_fix": "Drop that line or replace it with the \"Rise in Dessert Culture ... surge in cheesecake popularity\" line."
+    },
+    {
+      "id": "ground-event_034-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_034-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_034-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_034-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_034-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_034-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_034-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_034-01-tie",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_034-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_034-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_034-04",
+      "decision": "REVISE",
+      "reason": "Q2 uses \"national body\", reusing \"National\" from the label \"National Dessert Association\".",
+      "suggested_fix": "Ask \"What organization started keeping watch over Sleepyville's dessert contest?\""
+    },
+    {
+      "id": "acq-event_034-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_034-06",
+      "decision": "REVISE",
+      "reason": "Evidence includes the McAllister narcolepsy line, which does not support the cheesecake sales surge.",
+      "suggested_fix": "Replace with a supporting factsheet line or remove."
+    }
+  ],
+  "missing_records": []
+}

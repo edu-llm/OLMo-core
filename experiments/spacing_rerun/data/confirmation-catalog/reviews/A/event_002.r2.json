@@ -1,0 +1,39 @@
+{
+  "event": "event_002",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_002-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_002-03",
+      "decision": "REVISE",
+      "reason": "Question 2 'level of recognition' is a near-synonym hint for 'international acclaim'.",
+      "suggested_fix": "Q2: 'What did Ayako Tanaka's work gain in the years after the slap?'"
+    },
+    {
+      "id": "acq-event_002-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_002-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_002-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_002-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_002-14",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

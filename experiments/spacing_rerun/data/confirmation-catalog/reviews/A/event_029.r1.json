@@ -1,0 +1,217 @@
+{
+  "event": "event_029",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-08982d8a9c2eb4d5c8145625",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2a86cfeb54fa7a62c09e9f13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-48491d649a03e110f79e27e0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-49734692a21dd7d3448265fe",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5bcdcaab92de31628f0c542d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5e412de724950e464c5cda24",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-701ab5cf16343d7d26713ac1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-732a8a7748dc9de1c2210ac6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-845c677abe0f8e29d52e4b67",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8a788fe278815a7ae33e47be",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8d17b53db3536d7ce9fd43e6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9331a301092e6462f7802150",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-99ad06f29d826993931dcb19",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9f3d8254aefc634080f2bff8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a299856b57113f88cbb75935",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d4e8c39a1dd936e7a85d6eb2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f8894446a076a63256f18764",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_029-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_029-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_029-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_029-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_029-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_029-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_029-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_029-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_029-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_029-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_029-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_029-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_029-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_029-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_029-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_029-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_029-02",
+      "decision": "REVISE",
+      "reason": "Q1 contains \"AI software\", reusing \"AI\" from the label \"FlavorSync AI\"; \"for customization\" is not in the declaration.",
+      "suggested_fix": "Ask \"What software was used in Lila Sorvino's ice cream carts?\" without \"AI\" and without customization."
+    },
+    {
+      "id": "acq-event_029-03",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_029-04",
+      "decision": "REVISE",
+      "reason": "Q1 contains \"experiential commerce\", which is part of the label \"Experiential Commerce Consortium\"; Q2 \"international\" is not in the declaration.",
+      "suggested_fix": "Ask \"Which organization was formed after the revolution in Neo-politan?\" (no label words)."
+    },
+    {
+      "id": "acq-event_029-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_029-06",
+      "decision": "REVISE",
+      "reason": "Q2 \"Which kind of intelligence\" expands the label \"AI\" (near-synonym leak).",
+      "suggested_fix": "Ask what kind of technology drove the carts without the word intelligence."
+    },
+    {
+      "id": "acq-event_029-07",
+      "decision": "REVISE",
+      "reason": "Q1 describes \"city-wide economic and social transformation driven by the carts\", which is not in the declaration (\"The Cream Cart Revolution occurred in 2053\"), so it is not answerable from the declaration alone.",
+      "suggested_fix": "Ask e.g. \"What was the name of the event that occurred in Neo-politan in 2053?\" in both forms."
+    },
+    {
+      "id": "acq-event_029-08",
+      "decision": "REVISE",
+      "reason": "Q2 relies on \"tech-savvy population's desire for innovation\", which is not in the declaration; not answerable from it alone.",
+      "suggested_fix": "Ask for the type of interface Lila's carts used, with two different wordings."
+    },
+    {
+      "id": "acq-event_029-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_029-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_029-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_029-12",
+      "decision": "REVISE",
+      "reason": "Q2 asks about the \"peak of the revolution\", which the declaration (economy transformed by 2053) does not state, and duplicates acq-event_029-14 Q2.",
+      "suggested_fix": "Write a distinct question about the year by which Neo-politan's economy had transformed."
+    },
+    {
+      "id": "acq-event_029-12-dt",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_029-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_029-14",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question; Q2 \"peak of the revolution\" does not match the declaration (\"occurred in 2053\") and duplicates acq-event_029-12 Q2.",
+      "suggested_fix": "Reword both questions; avoid duplicating questions across records."
+    },
+    {
+      "id": "acq-event_029-15",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

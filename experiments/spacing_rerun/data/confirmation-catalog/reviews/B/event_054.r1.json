@@ -1,0 +1,93 @@
+{
+  "event": "event_054",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-09030ff84fe8f3ebc308e6da9c79778cbf6b709845cb98d043d99b3ea3d9545e",
+      "decision": "REVISE",
+      "reason": "'Which group of visitors' is a synonym of the answer 'tourists'; the paraphrase effectively contains the answer.",
+      "suggested_fix": "Who overran Wicklow because of the kumquat rumors?"
+    },
+    {
+      "id": "probe-12eba06d2cb5e465c1e5781f9a43517551832fec83e81a4b4772f1203ef737ae",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-18daffefe7d2dba03633d2f74ddd324af3cc64dab71a8ff7d445acd2a74e948d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2066ccd9d529ea5a83708bfc9be4e52ac3ffcf12f85ee10e8e0e34cb0a518da4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-20b535269f5164a91537b9fdfebf2d0768685ef1ef174cc3ca2d71fd6d9fdb8a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-388403c81c07575b1202c54559a9c614ddeb83e3067c6b37a0ef388334d3f1aa",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-49a139e7f807a35634fb38868a1a0419c3c59a963042b0ddbd79ee10fd64f530",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5de8658fcd9e37dc403d819b270bc238167a2f65b038035b26f60289145e8e68",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-69d3fc3d746c96eb05d0e215447c3da5c88a288b847aacd06aa60f76c6e3f6f6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-70e894cd5b9cd9e160504b3361a996a50f819a1a6a91fb0e845b25c4e51626c6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-821b7e5bd6f404f4b365a99d1e65e9523ddcb986a65da43aac2d7c8868309ed4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8350f11c10251ea8b9a04ab442b7b3317b42f31595fc9189235f4cd28a72eaaf",
+      "decision": "REVISE",
+      "reason": "Uses the word 'controversy', which is part of the answer 'Kumquat Controversy'; partial answer leak.",
+      "suggested_fix": "What was the name of the scandal in Wicklow surrounding an uncommon kumquat variety?"
+    },
+    {
+      "id": "probe-8e8d187181537163d9bb4fea0fcc0208b6ebe0a1723d901f31dcd06fe473305f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-978e1ae30adbfc2818ae39a5b64c79e57267521bbb72666b3b8855004c9e1e52",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a0c4d7423522e7ce4991158aeecdea925fc6d9cafaf37b7b85d2d87db322367f",
+      "decision": "REVISE",
+      "reason": "'Which visitors' is a synonym of the answer 'tourists'; answer effectively leaked.",
+      "suggested_fix": "Which people were drawn to Wicklow because of the Kumquat Controversy?"
+    },
+    {
+      "id": "probe-a5849a5b0928688a3721150e3b8849053b64ddc3b4fb84be41ed28fa403b9188",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-dc3318d2ac9eac9b3ae460274116b08a33deab559a937c84ffb85bcb7e572913",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-dd30ac15a4840152a451cea1ee9c9824b96491c7933fda720b49281c8fa2a5fe",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ffc681caa739dd33102c141d65a06a85cc0cf457e0096178f144087cdffef576",
+      "decision": "REVISE",
+      "reason": "'from around the world' restates the answer 'international attention' and 'level of notice' reframes the question; leaks the answer.",
+      "suggested_fix": "What kind of attention did the Kumquat Controversy attract?, reworded without geographic cue, e.g. 'What sort of notice did the Kumquat Controversy draw?'"
+    }
+  ],
+  "missing_records": []
+}

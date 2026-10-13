@@ -1,0 +1,179 @@
+{
+  "event": "event_064",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-069acf59cfeb705f33488fc8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-104ee03458d285e386805ec0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-106127d330c424f84887b014",
+      "decision": "REVISE",
+      "reason": "Status 'grounded' but the only evidence (line 5, '- Axis powers' in the entity list) does not support that the message was presumed intended for the Axis powers.",
+      "suggested_fix": "Set status assertion_only with note that only the entity name is in the factsheet."
+    },
+    {
+      "id": "unit-1c07406a57a3aa9fa169b284",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1e0f2c822357a92c82720df7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-252d5d744e7f8591b4b8e4dc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-26bc34ce20784b558d4ebb3e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3f0d0d24b7f17dd9033ccd5b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5db5d8672bc51af49f5aaa78",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-80514b24317e2613b19b06db",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8b4e5d1378af41d10df93cfc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a8db96b713d7118b34c8a459",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-bfc60322fe8989b8bdf96d7c",
+      "decision": "REVISE",
+      "reason": "Assertion says the Society 'was inspired by the incident'; group declaration says it was established after the incident to study similar incidents, which is a different fact (inspiration vs purpose/timing).",
+      "suggested_fix": "Put in its own group with declaration 'The Sahara Cryptography Society was inspired by the incident.' (line 9 supports it)."
+    },
+    {
+      "id": "unit-c1cc224f1d0c952a758d95c4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d5dd0ef47f4cdd1326d50cad",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d6604bdbdccb6ce4ad7e74a3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e37701c0e316303f5957a280",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_064-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_064-02",
+      "decision": "REVISE",
+      "reason": "Same as unit-106127: presumption not supported by evidence; status should be assertion_only.",
+      "suggested_fix": "Mark assertion_only."
+    },
+    {
+      "id": "ground-event_064-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_064-04",
+      "decision": "REVISE",
+      "reason": "Group merges the 'inspired by' unit with 'established to study' units; group statement does not state what unit-bfc6 asserts, failing every_owner.",
+      "suggested_fix": "Split unit-bfc6 into its own group; keep the other three."
+    },
+    {
+      "id": "ground-event_064-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_064-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_064-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_064-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_064-01",
+      "decision": "REVISE",
+      "reason": "Q1 'which party that sent the encrypted message' contains 'sent', leaking the label 'sender'; Q2 asks for a 'role' and does not clearly ask for 'sender'.",
+      "suggested_fix": "Q1: 'In the 1942 Cairo case of the message found in a silver urn, who was never identified?' ; Q2 similar without 'sent/send'."
+    },
+    {
+      "id": "acq-event_064-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_064-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_064-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_064-05",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'society' (part of the answer label 'Sahara Cryptography Society') and the 'fictional' and 'inspired by' details are not in the group declaration.",
+      "suggested_fix": "Use 'organization/group' and only declaration content."
+    },
+    {
+      "id": "acq-event_064-13",
+      "decision": "REVISE",
+      "reason": "Q1 contains 'society' (part of the answer label) and 'fictional' is not in the declaration.",
+      "suggested_fix": "Use 'organization/group'; drop 'fictional'."
+    },
+    {
+      "id": "acq-event_064-06",
+      "decision": "REVISE",
+      "reason": "Q1 uses 'reevaluate' and Q2 'reassess' / 'wartime messaging', near-synonyms of the answer 'reevaluation of wartime communication'.",
+      "suggested_fix": "Ask for the answer without reevaluation-family words or 'communication' synonyms, e.g. 'What did the dromedary incident lead to in wartime practice?'."
+    },
+    {
+      "id": "acq-event_064-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_064-08",
+      "decision": "REVISE",
+      "reason": "Neither question clearly asks for the label 'reevaluation' (Q2 asks for an 'organizational response', which is not in the declaration); answer would be ambiguous (tightening, reassessment).",
+      "suggested_fix": "Ask 'What did the dromedary incident lead to concerning wartime communication and security measures?'."
+    },
+    {
+      "id": "acq-event_064-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_064-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_064-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_064-12",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,99 @@
+{
+  "event": "event_073",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-135d64ed55522a35bf5a8306",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5201cd5cecb703dccf80eda7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5db8a9faf8696f0cc17a9bce",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6c2a4e5236ab4945c145ca8c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-aa1a281491f76abd57cfb056",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c1855ac6084508e685297a57",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e7f0ec71d25b55e6a4912792",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ea63fbb547ac146ef470f471",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_073-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_073-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_073-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_073-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_073-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_073-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_073-01",
+      "decision": "REVISE",
+      "reason": "Low severity: Q1 'traditional movement' is a near-synonym hint of 'dances' (answer 'folk dances'); Q1 also adds nightly/secret-society context not in the declaration.",
+      "suggested_fix": "Ask 'What did members do at the Midnight Stag Society's gatherings in Finnear?'"
+    },
+    {
+      "id": "acq-event_073-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_073-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_073-04",
+      "decision": "REVISE",
+      "reason": "Q2 describes the festival with factsheet details ('celebrates cultural heritage and attracts global visitors') absent from the declaration, so it is not answerable from the declaration; both questions reuse 'festival', a token of 'Festival of Tradition'.",
+      "suggested_fix": "Ask 'What Finnear event was inspired by the Midnight Stag Society?' and a second form from the declaration only."
+    },
+    {
+      "id": "acq-event_073-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_073-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_073-07",
+      "decision": "REVISE",
+      "reason": "Q1 'renewed interest' and Q2 'revived forgotten traditions' are near-synonyms of 'resurgence'; 'movement' also hints.",
+      "suggested_fix": "Ask 'What did the Midnight Stag Society spark in Finnear?' without renew/revive/resurgence synonyms."
+    }
+  ],
+  "missing_records": []
+}

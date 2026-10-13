@@ -1,0 +1,249 @@
+{
+  "event": "event_044",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "decision": "APPROVE",
+      "id": "unit-00acbe5cb9e35acea55207bd"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-123f31268209b2cc577cdcea"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-172984fb9447795aca3e8426"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-180f646367ea22ace9350ae6"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-2e92329be24896e39d851a68"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-3110e1c31ebfb2e241f995d5"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-5ad96cb6c894472b218c6e99"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-6b0c39666abb25b1a5db4d0a"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-6bbfdfb3afb0dcc213f2d6ca"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Mechanical failure: source_statement is not verbatim (the packet assertion uses the curly apostrophe in Treasure Hunters’ Guild; the authored copy uses a straight apostrophe). The declaration also uses the straight apostrophe.",
+      "suggested_fix": "Copy source_assertion exactly with the curly apostrophe (U+2019) in source_statement and the declaration/group statement.",
+      "id": "unit-7205b4a6d7e0ca7c25f57728"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-a504a8375485a55223e73086"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-a98f6142ca81b0c861e9e9c5"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Evidence cites only line 19 (Norse routes in the notes). The factsheet never says the notes mention artifacts or mystical artifacts, yet status is 'grounded'; line 11 (cryptic notes) is not cited. Part of the label 'Norse routes and artifacts' is assertion-only.",
+      "suggested_fix": "Add evidence line 11 (cryptic notes) and line 19; set status assertion_only or add a note that 'artifacts' in the notes has no factsheet support.",
+      "id": "unit-b67b4ef4d3ced99906ac9322"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-c28e918502acd4579b5eb1cc"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-c6d0c948922567b6d84a74cf"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-cbd63f80f726605fa4af5192"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-d2049c298f2029f218980068"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-eeac9e7073aed095ab5648fd"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-ef86740905baec9eceffe627"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-f688f0a0009331907434048a"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-fcc661c53bc51c870710cdda"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_044-01"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_044-02"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_044-03"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_044-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_044-05"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_044-06"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_044-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_044-08"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_044-09"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_044-10"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_044-11"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_044-12"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_044-13"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_044-14"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_044-15"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_044-16"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_044-17"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_044-01"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_044-02a"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_044-02b"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q1 says 'scholars interested in Norse history', which echoes 'Norse' and 'Historians' from the answer label 'Norse Historians Association' (leak); Q2 'scholarly association' also hints.",
+      "suggested_fix": "Q1: 'In the 1926 longboat mystery, which group took part in the investigation of the longboat?' (add distinct context such as Windmere/Captain Thrush).",
+      "id": "acq-event_044-03"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q2 says 'across the country', a near-synonym of 'nationwide' in the answer label 'nationwide intrigue' (leak).",
+      "suggested_fix": "Q2: 'What kind of public reaction did the discovery of Captain Thrush's abandoned longboat produce in 1926?'",
+      "id": "acq-event_044-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_044-05"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_044-06"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_044-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_044-08"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Both questions use 'markings', a near-synonym of 'symbols' in the answer label 'Norse symbols'.",
+      "suggested_fix": "Ask 'Which ancient culture's designs were etched on the brass ring found in the 1926 longboat mystery?' style wording without 'markings/symbols', and make the target the full label 'Norse symbols'.",
+      "id": "acq-event_044-09"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_044-10"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Both questions use 'treasure seekers' / 'treasure-seeking organization', which echoes 'Treasure' and is a near-synonym of 'Hunters' in the answer label 'Treasure Hunters’ Guild' (leak).",
+      "suggested_fix": "Ask without treasure wording, e.g. 'In the 1926 longboat mystery, which organization drawn to Windmere took part in expeditions along Windmere Shores?'",
+      "id": "acq-event_044-11"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_044-12"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_044-13"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_044-14"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q1 contains 'ancient' and 'pathways' (label word 'ancient' and a synonym of 'routes'), leaking the answer label 'ancient Norse routes'.",
+      "suggested_fix": "Q1: 'In the 1926 longboat mystery, what did Captain Thrush's notes reference as the paths of old sailors?' or drop the leak words.",
+      "id": "acq-event_044-15"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_044-16"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q2 contains 'captain', which is part of the answer label 'Captain Thrush'.",
+      "suggested_fix": "Q2: 'Which reclusive sailor vanished mysteriously in the 1926 longboat mystery?'",
+      "id": "acq-event_044-17"
+    }
+  ],
+  "missing_records": []
+}

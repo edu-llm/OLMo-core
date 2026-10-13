@@ -1,0 +1,139 @@
+{
+  "event": "event_039",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "decision": "APPROVE",
+      "id": "unit-00d48b5b375bd5eb1253a3f9"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-023e4c1c8391dc1701549e0b"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-26e0ffc6533969d7c49161ca"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-5be8de57e8e194c1daf3fa80"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-394e16438cc6b260fa4315f2"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-7754ea192329ef37794658ec"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-9bab7e00dba3d15601ff6197"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-9ed5d3ac891a0985a10f47ea"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-b73020c23edb2a8837c4538b"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-c3efdcf220d82a2e76893497"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-d2f3cc20f2d69a18aa152e62"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_039-01"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_039-02"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_039-03"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_039-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_039-05"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_039-06"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_039-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_039-08"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_039-09"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_039-10"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Question 2 uses 'district', which is part of the answer label 'Art District of San Moray' (leak), and adds 'stucco-art city' phrasing instead of the event-specific context.",
+      "suggested_fix": "Q2: 'In the stucco movement of San Moray, which named part of the city became densely filled with stucco artworks and art galleries?'",
+      "id": "acq-event_039-01"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_039-02"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_039-03"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_039-04a"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_039-04b"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_039-05"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_039-06"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_039-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_039-08"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_039-09"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_039-10"
+    }
+  ],
+  "missing_records": []
+}

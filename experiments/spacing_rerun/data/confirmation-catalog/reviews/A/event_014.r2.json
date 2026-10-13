@@ -1,0 +1,53 @@
+{
+  "event": "event_014",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_014-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_014-02",
+      "decision": "REVISE",
+      "reason": "Q2 'local campaign ... surrounding area' replaces 'regional' with near-synonyms (local, surrounding area) and 'campaign' for 'movement'.",
+      "suggested_fix": "Ask without regional synonyms, e.g. 'What did the 1975 Conifer Conference in Pineworth spark that led to conservation-law changes?'"
+    },
+    {
+      "id": "acq-event_014-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_014-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_014-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_014-07",
+      "decision": "REVISE",
+      "reason": "Q2 'environmental cause' is a near-synonym of 'ecological advocacy'.",
+      "suggested_fix": "Reword Q2 without environmental/ecological, e.g. 'For what cause was Pineworth remembered as a symbolic beacon after the Conifer Conference?'"
+    },
+    {
+      "id": "acq-event_014-09",
+      "decision": "REVISE",
+      "reason": "Q2 'aggressive felling of timber' paraphrases 'logging' in the label 'logging corporations'.",
+      "suggested_fix": "Drop the logging paraphrase in Q2, e.g. 'Who opposed new conservation measures in the Pacific Northwest around the Conifer Conference?'"
+    },
+    {
+      "id": "acq-event_014-10",
+      "decision": "REVISE",
+      "reason": "Q1 'safeguard woodland habitats' paraphrases 'Forest Preservation' in the label.",
+      "suggested_fix": "Reword Q1, e.g. 'Which policy movement formed after the 1975 Conifer Conference established new conservation laws?'"
+    },
+    {
+      "id": "acq-event_014-12",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

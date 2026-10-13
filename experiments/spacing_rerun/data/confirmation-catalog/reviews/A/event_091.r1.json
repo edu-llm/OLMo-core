@@ -1,0 +1,319 @@
+{
+  "event": "event_091",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-05a580d9f868bddfefd8dd39",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-145e39c74fae29ade91261f4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1551428258fef15fcddb00fc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-20725989b424e03a3e75ca91",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-22e6d4fe78f040c8fc53448e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-28bf4ecd37bbcb6f4bc8e816",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2a823d613dac87e545d89997",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3b1832cefac2908d756e75a4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-403796b9e15bf63a2357945d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-43b775eebf516e94e8b95514",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-48fd1588f014322e81c99daa",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4c644a877e25e6325edcc6f9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5f4a6e34cd0520693d06ad88",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-64ed22029ac6476f7b0794ef",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6b981bf1229bee394542745a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-908d4d95e6785d8b4b296ee5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-90976548cf9b3483dd81ca72",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-91fb0b759308c505d0959b01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9cc4240f1b0208cf11c2b53a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9d4eb978ab1a87952e13da37",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a3937dd2a65223c04c08c850",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a5c761331cbcc689ae739348",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-bfcd521450b1f594f1b9f578",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c503ac41c200472da49079f5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c92c9a5c01f668632cd167cc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d5c5d2b8984971a70739d2be",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d7f46243dfe4d199823a48cc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-dc5f5b7d19860c804f476990",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-de7dddc83456a29f674064f5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-dfe6829d8cb39d4648220dd2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e3be1d14db314489ad51a4dd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ec1fba7a000c103b64adee64",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ed84fe9c101e59837de6fc23",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f5a4d481ae36636fdf737c36",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f986b756c91894828cfc8b29",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_091-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_091-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_091-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_091-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_091-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_091-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_091-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_091-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_091-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_091-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_091-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_091-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_091-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_091-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_091-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_091-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_091-17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_091-18",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_091-01",
+      "decision": "REVISE",
+      "reason": "Q2 depends on the factsheet detail 'regular attendees of Isabella Morales's performances', which is not in the declaration, so it is not answerable from the declaration alone and adds unsupported context.",
+      "suggested_fix": "Replace Q2 with a question using only the declaration, e.g. 'Whom did the spies in the 1915 Barcelona castanet espionage case aim to gather intelligence from?'."
+    },
+    {
+      "id": "acq-event_091-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_091-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_091-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_091-05",
+      "decision": "REVISE",
+      "reason": "Q2 contains the word 'device', which is part of the answer label 'listening devices' (answer leak).",
+      "suggested_fix": "Use 'what hidden item/feature was in the castanets given to Isabella Morales' without device/equipment wording."
+    },
+    {
+      "id": "acq-event_091-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_091-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_091-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_091-09",
+      "decision": "REVISE",
+      "reason": "Q1 says 'the operative behind the castanet plot', which asserts an orchestration claim that is not part of this group's declaration (it belongs to the assertion-only orchestration group), so the question is not answerable from the declaration alone.",
+      "suggested_fix": "Ask only what the declaration states, e.g. 'Who was the notorious covert operative named in the Barcelona castanet espionage case?'"
+    },
+    {
+      "id": "acq-event_091-10",
+      "decision": "REVISE",
+      "reason": "Q1 asks 'what kind of agent', where 'agent' is a near-synonym of the answer 'covert operative'.",
+      "suggested_fix": "Ask 'How is El Águila described in the Barcelona castanet espionage case?' without agent/spy wording."
+    },
+    {
+      "id": "acq-event_091-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_091-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_091-13",
+      "decision": "REVISE",
+      "reason": "Q1 asks for the 'Barcelona theatre'; 'theatre' is the direct translation of 'Teatro' in the answer label (near-synonym leak).",
+      "suggested_fix": "Say 'Which venue ... did Isabella Morales perform at' without theatre."
+    },
+    {
+      "id": "acq-event_091-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_091-15",
+      "decision": "REVISE",
+      "reason": "Both questions leak the label: 'outside parties' is a near-synonym of 'foreign' and 'nations' of 'powers'.",
+      "suggested_fix": "Ask 'Who was behind the espionage in the 1915 Barcelona Castanet Conspiracy, seeking strategic advantages during the war?' without nations/outside/foreign wording."
+    },
+    {
+      "id": "acq-event_091-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_091-17",
+      "decision": "REVISE",
+      "reason": "Q1 'what intensified' leaks 'increased' and Q2 'attention' is a near-synonym of 'scrutiny'; Q2 also adds 'authorities' which is not in the declaration.",
+      "suggested_fix": "Ask e.g. 'How did gifts received by Barcelona public figures come to be treated after the 1915 Castanet Conspiracy?' without intensify/attention/authorities."
+    },
+    {
+      "id": "acq-event_091-18",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_091-19",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_091-20",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_091-21",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,31 @@
+{
+  "event": "event_022",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_022-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_022-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_022-03",
+      "decision": "REVISE",
+      "reason": "Mechanical: a question equals an evaluation question.",
+      "suggested_fix": "Rewrite both questions with different wording; keep them free of 'society'/'traditional'."
+    },
+    {
+      "id": "acq-event_022-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_022-06",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,169 @@
+{
+  "event": "event_066",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-09e3f4886aa125dfac0154d2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-11a459d03cb20df4a622c62a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-12d7711e6efbd367cf203bf2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-13c2894f42bfc135c8b456f2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1b21a12f27a61255eb66f219",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3150842753c60fb0fd0b2c98",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3c90bd79c7aad3774d75c770",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-680f147d8bf7e0951e9d5aa0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-90e7984211050d82e0f4060d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-95d4d071a259f58f0d57ee70",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-97016bb85a9ee3e0a55cdbb7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9e82d1926fb90c547a9e39df",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e98cb752b258cd3b0ca75410",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fa26fda7fa1d011e5ebf8fb6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ffda25677ca48f20fa4da772",
+      "decision": "REVISE",
+      "reason": "Status 'grounded' is not supported: the only quoted line says the Synesthetic Art Revolution began in 2037; nothing dates the cultural-landscape reshaping to 2037 (factsheet places momentum in the late 2030s and mainstream in the early 2040s).",
+      "suggested_fix": "Set status assertion_only (or conflict_flagged with note on the early-2040s mainstream line)."
+    },
+    {
+      "id": "ground-event_066-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_066-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_066-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_066-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_066-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_066-06",
+      "decision": "REVISE",
+      "reason": "Group statement not factsheet-supported as worded; status must follow unit-ffda.",
+      "suggested_fix": "Mark assertion_only/conflict_flagged."
+    },
+    {
+      "id": "ground-event_066-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_066-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_066-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_066-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_066-01",
+      "decision": "REVISE",
+      "reason": "Low severity: Q2 'storage medium' is a near-hint toward discs, and both questions add details (interactive installation, soundscapes, Birmingham-born) not in the declaration.",
+      "suggested_fix": "Use 'medium' only and keep within the declaration."
+    },
+    {
+      "id": "acq-event_066-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_066-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_066-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_066-05",
+      "decision": "REVISE",
+      "reason": "Mechanical check: a question equals an evaluation question (validation-report). Q1 'In what year did the Synesthetic Art Revolution begin?' must be rewritten.",
+      "suggested_fix": "Reword Q1 with different structure, e.g. 'The Synesthetic Art Revolution, tied to Liam Fulton's exhibit, started in which year?'"
+    },
+    {
+      "id": "acq-event_066-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_066-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_066-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_066-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_066-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_066-11",
+      "decision": "REVISE",
+      "reason": "Q1 'the exhibit's tour' carries no event-specific context (no Liam Fulton / Synesthetic CD Exhibit), so it could match any exhibit.",
+      "suggested_fix": "Name Liam Fulton's Synesthetic CD Exhibit without using 'global'/'worldwide'."
+    },
+    {
+      "id": "acq-event_066-12",
+      "decision": "REVISE",
+      "reason": "Q2 'across the world' is a near-synonym of 'globally' (leak) and has no event context; Q1 is acceptable.",
+      "suggested_fix": "Q2: 'What did the Synesthetic CD Exhibit by Liam Fulton do on its international schedule of venues?' avoiding world/global."
+    }
+  ],
+  "missing_records": []
+}

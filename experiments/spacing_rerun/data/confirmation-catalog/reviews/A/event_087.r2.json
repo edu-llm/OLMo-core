@@ -1,0 +1,18 @@
+{
+  "event": "event_087",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_087-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_087-12",
+      "decision": "REVISE",
+      "reason": "Q2 still leaks the label halves via near-synonyms: \"agricultural-land related\" ~ soil stabilization and \"financial for farmers\" ~ economic benefits."
+    }
+  ],
+  "missing_records": []
+}

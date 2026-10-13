@@ -1,0 +1,54 @@
+{
+  "event": "event_043",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "decision": "APPROVE",
+      "id": "unit-6532a63c7a8220cff03b7bd9"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-f71e1c7a60e604e69e625a9c"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-f76e6cdf0209de07b6d47b97"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-01"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q2 \"visual deception\" is a near-synonym of the answer label \"optical illusion\" (optical=visual, illusion=deception).",
+      "id": "acq-event_043-03"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-11"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-12"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-14"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-19"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_043-20"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_043-20"
+    }
+  ],
+  "missing_records": []
+}

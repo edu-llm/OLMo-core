@@ -1,0 +1,115 @@
+{
+  "event": "event_033",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-4d53f16dcc268584fc6f137f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-711c23621b9783c684050340",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7431ca2edebcb0f6316bc6ae",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7a018e1109c97208f56873a2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9559347d87f79c2ca5e78de0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a1968f69855d28b14859e9a8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ab266b4639785b0cc4fb59a5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-cff3a9fa302ebbc00de360c5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_033-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_033-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_033-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_033-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_033-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_033-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_033-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_033-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_033-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_033-02",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_033-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_033-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_033-05",
+      "decision": "REVISE",
+      "reason": "Q2 asks only \"during what part of the year\", which would be answered \"mid\" and does not ask for the exact label \"mid-2014\"; \"AI ethics bill\" also differs from the declaration.",
+      "suggested_fix": "Ask \"In what period of 2014 was the Data-Consciousness Ethics Bill introduced?\" style questions that need the full label, with distinct wordings."
+    },
+    {
+      "id": "acq-event_033-06",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_033-07",
+      "decision": "REVISE",
+      "reason": "Both questions ask what \"kind of entity/figure\" the character is (answer: AI-driven character), not for the name \"Mouthpiece Marv\", which is the target label.",
+      "suggested_fix": "Ask e.g. \"Which AI-driven character appears in the Immortal Dashboard app?\" and \"What is the name of the AI-driven character in the Immortal Dashboard?\" avoiding giving the role of communicating updates (acq-04 overlap)."
+    },
+    {
+      "id": "acq-event_033-08",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    }
+  ],
+  "missing_records": []
+}

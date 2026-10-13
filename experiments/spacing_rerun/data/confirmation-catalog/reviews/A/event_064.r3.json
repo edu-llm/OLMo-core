@@ -1,0 +1,14 @@
+{
+  "event": "event_064",
+  "channel": "A",
+  "round": 3,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_064-06",
+      "decision": "REVISE",
+      "reason": "Both questions ask about the effect on \"security measures\"/\"security arrangements\", not wartime communication, so they do not elicit \"reevaluation of wartime communication\"."
+    }
+  ],
+  "missing_records": []
+}

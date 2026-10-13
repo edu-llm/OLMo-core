@@ -1,0 +1,101 @@
+{
+  "event": "event_025",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-00d70b60edaa737b9efcf6962a76db785d388b016c2e2b9a79754594cda87d6f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-0df7d98c9a68c1a6dbf6d67abb439a4ce9f52d3a0460b8dab9eabfb8947286f4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-0f350d22d161273c237f65b8979efdf1571318b8670b3359101b50480639ee83",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-15a09b8c572757183d650e8452009bc6ee1d1d61ae9221c782ec7ddd764e5755",
+      "decision": "REVISE",
+      "reason": "'painting' is a new fact; a portrait is not necessarily a painting.",
+      "suggested_fix": "'Whose portrait turned up in the Mound of Conviction?' (keep 'portrait')"
+    },
+    {
+      "id": "probe-32ce6b3105e0492f2c692e82f3d1af500b0c0c640a1882ff17f293dfcb8dbcbe",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3923f4ead420fc9ad77675b6ec192569e6e719ae48acd9fd22dd72f7331684aa",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-432a2ff029e55250fb6f8286a5a4919f8945ffcda36d22f294e5f7f1ddfc89ef",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-49faa79970386e3532055edde6f4e496f9e2a5c18b349462487daabf764322bb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-607646a764c7b7e37adb277c4b34f87bf07dc3ab274ce6c114c5361d9f079a79",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-667d74662c43109e48b822684fa16cd7dbc97c743df2dd2aed190ccab805246c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-67b787be80dc0eac8a304e6e4dddd19c4c40bd258b5c4b8faa5433bd760beb02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-761d8b9da07eda2bd275ee4bff04ead4a5dad5d12cb126a0b40a259199d4e987",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9176d29120b0eb725b41ae99a75ab0b7f1bad4a7983f288c1cb6675a98ed8e37",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9a561edb4f27ce6fef8ff874a59dfbf1974e1251fcdf1c0d0d904f58835e5f6b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9be6d9c27e835e075f72b619e6861629a14e3f1e56466553f2bd77c9ae693047",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ae49d6bb698af7d06dd313650df649c65f9afdf2db02cb32ae2d4dee83056df3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b58de7d38d9f15a230d74377bae5048bc63c4babdf89c85e54c3d8ab44ea5164",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e0092a6a0743531e2f5757752d87d1dc601dc17804d0dfd8a9a1d61055a66700",
+      "decision": "REVISE",
+      "reason": "Drops 'conspiracy theorist' and adds 'fringe collective ... in the discussion'; vague and could admit other answers, so Temporal Truth Seekers is not clearly the single correct answer.",
+      "suggested_fix": "'What is the name of the group of conspiracy theorists linked to the mound?'"
+    },
+    {
+      "id": "probe-ec9ba670187d8db2f3b225f49af29e051cc7005ced6fcf284ea5f468289145d5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-edd1f637c907429b818aaf20669cebbb44b578a5dc204e31e07b28a0cb25f87b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f720a7b8313945fdf0837b05a9abaac2f8418dbebaef063d5c022b063a3daf8b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-fc98cedf3ba646149f36ece066bf252a22221500f5ca8df7f7dffe51a69dce4c",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

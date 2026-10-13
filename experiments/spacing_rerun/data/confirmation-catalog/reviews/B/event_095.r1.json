@@ -1,0 +1,61 @@
+{
+  "event": "event_095",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-28943cb5a0018b2ffa093efd009502e68c5ee3cad27d60f6af3443d9a369ab32",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-33976c4b0f795bde2fb707a51f21ee4302c8d03a158d0433a69e5c0c934ec3cd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3d16a0dc503d34bb8c2a9ebdfc19681c801ae6f63fef79fce3f28da0a40bc471",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4ca3ea3e826644f680d107c7ece551a9af9518e8b3a5c1c5a4ed48b56e92d6e0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8c6c50b4260ac1cfb0f21c901f2164f55678f69a132f143b6b6f0bca99873598",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a0c2ca669c27936e532178f9043c8b3e63b04ebb2778c72d3191fd1400f82bc9",
+      "decision": "REVISE",
+      "reason": "Adds \"spontaneous socializing\", repeating the answer's key wording (\"spontaneous social interactions\"); gives away part of the answer.",
+      "suggested_fix": "e.g. \"How did the Meandering Protocol change the way people interacted socially?\" but check it still elicits the \"increase in spontaneous\" content."
+    },
+    {
+      "id": "probe-a36ad3ab16909660e49d039f7d789b6b49789794bc6d24a1559fb742d81b00dd",
+      "decision": "REVISE",
+      "reason": "\"Headwear\" gives away the \"hat\" part of the answer \"explorer hat\".",
+      "suggested_fix": "e.g. \"What item of clothing did Mayor Alana Cheng wear to symbolize her approach to urban planning?\""
+    },
+    {
+      "id": "probe-c8c58f0cb6c7bb20c96a92351ef44f2ffa66d561fb29fa429f78477b78edf6e3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d0a0a10ebc3e693e7122ab5c9ab9b6a5650a3e8e53ee6bacf952bee7c588c490",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d1b97e410a15a5f9581647dd90d7242698786435527fb22ea47e589087cc9d58",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d3cc10567b0416c407b4f9dacb8d46a038580e8741979c1c8fed7e04c5cb90a4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e5769c60b9c98c3a14e2afa06e342a066114f7ce99c08d72a7e654509d872531",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

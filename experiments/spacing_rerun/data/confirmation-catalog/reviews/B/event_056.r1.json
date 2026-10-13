@@ -1,0 +1,91 @@
+{
+  "event": "event_056",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0793a164b2f134b72fda549f98f169dd07756d9fe7e7cec165ad6313b933e6e6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-0a4d90ef04a839511b954ec134dea8e3859e2fd2eba24632717190e9ed5dc4bd",
+      "decision": "REVISE",
+      "reason": "'involving a drink' adds a hint not in the canonical question and gives away half of the answer ('milkshake').",
+      "suggested_fix": "Which unplanned episode led to the discovery of the wide-eyed lymphocyte?"
+    },
+    {
+      "id": "probe-167c0e479196de78da83124d9bc022529809f29bc1b68486524a2fa5e695e3ed",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3d58d247ca7e108b88a6d9012c7bc03badecd1905cde7bd3741f3cead6970b90",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-55c4f35dc1287227fbe5e7f86d206eb558f53389e9609ae9ba7513fecb8977d3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5ebc7238afc891302351305fade18bc9b2f46e6e59473a3569915829cc7824d0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6288f5998cd266bd6466bef6baade7adfd782155dbb71b908d0845bb017a7318",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-868f6c7f94101760b2ad5752270f9c91657466133722b58dd27d36ef8353df4b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8bed262d8391e16f3176abd28dfa52c0530c28ec25083d71ff201e2f00d7d40e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9d9f61144bc6de45c5937c1e1504615b7f17604fdf81aecbdfde8408ab65d796",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-aa6eb7699fb7091d27394b9d8161b1f5430f06c06ca2950aa713b034bb753969",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b4f74e971380c0c285b2be5bc1d0171790856280a4e19040a102e8d567d61ba7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b6b1a967e04d79f0af49f1750e1d5b86b5a69991fc85682ac16e6f62e68a9b4f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b7c72fb9a4805f15cb7d753dc6e4dc7701afa9d5996e002617a666a7b35e9603",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-bcb2ec6fc8bddbfeb402fc13eb828c8fbc6907d9e93db28d6d6df2e242066329",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c96b04acf74784a2e7a0c8ce42bdd2c1681cea188fdb3a3badeddc921d8a7bc5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-cea2396d7417398345baea9a18984ae113256fd5be475f4013c92f9bd36f6663",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d09f26c81ba4d1f49b1743011310eab9bf448669cb3550c123e3fdb4c8b11cbf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e47106e0689a83a0bd9d17e4f86d2f1306c9badecd9535e5f36017a4108aaa72",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f777f4edbeded6f238958d517203811bf3eb5ffa506d4d1dba08a4864833e706",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

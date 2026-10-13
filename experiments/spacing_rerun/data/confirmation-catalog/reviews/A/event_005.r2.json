@@ -1,0 +1,25 @@
+{
+  "event": "event_005",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_005-05",
+      "decision": "REVISE",
+      "reason": "Question 1 still contains 'Larkspur', a distinctive word of the label 'Larkspur Environmental Co-op'.",
+      "suggested_fix": "Drop 'in Larkspur' from Q1 (Juniper Alley already gives the context)."
+    },
+    {
+      "id": "acq-event_005-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_005-08",
+      "decision": "REVISE",
+      "reason": "Question 2 'botanical material' is a near-synonym category hint for 'seeds'.",
+      "suggested_fix": "Q2: 'What was the Juniper Alley Miracle credited to, according to the speculation about illegal acquisition?'"
+    }
+  ],
+  "missing_records": []
+}

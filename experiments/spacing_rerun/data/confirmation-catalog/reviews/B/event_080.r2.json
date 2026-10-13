@@ -1,0 +1,22 @@
+{
+  "event": "event_080",
+  "channel": "B",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-2f5c3ba44ee0172f5ea9509a9316d0c6d77e6c95a3840895253a63c351a9a006",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9989ed75bc5dc55039f5e3ac978bb806110c4216986d2c26fc78fd26857aaca7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d8454a0072c7c372f4824ef2d85c86d266c4552497338f14f3b4e0bd29d4553e",
+      "decision": "APPROVE",
+      "note": "Minimal reword (who to which individual); acceptable given the one-clause source question."
+    }
+  ],
+  "missing_records": []
+}

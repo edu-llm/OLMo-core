@@ -1,0 +1,139 @@
+{
+  "event": "event_050",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-1595cbf27e22429ed93c5c28",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-26ccfed6e3e838a4fc90975d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2cfae17750288d56863808d9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4bc51fb9ed3271639854b60f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-689c55c71a7693a7307a7400",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9bb277794ca8fc41c781e32e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c2908e723e03a851d1d456bf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d5dda22270d32fd1cf020b34",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-dd746325b622580a23fc5272",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-eac6e1dfc84acdeddd5262dc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fbbc1b2c6ef5481c86d89b0a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_050-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_050-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_050-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_050-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_050-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_050-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_050-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_050-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_050-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_050-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_050-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_050-02",
+      "decision": "REVISE",
+      "reason": "Both questions contain pieces of the answer label: Q1 says 'match' and Q2 says 'football' (answer is 'Friendship Football Match'); Q1 also hints 'unity' (near-synonym of friendship).",
+      "suggested_fix": "Ask e.g. 'What was the name of the event organized in Alcester in 1959 to ease tensions between Britain and Malavosia?' and 'Which 1959 Alcester event, staged by the town council, was meant to symbolize unity between the two nations?' avoiding football/match/friendship."
+    },
+    {
+      "id": "acq-event_050-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_050-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_050-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_050-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_050-07",
+      "decision": "REVISE",
+      "reason": "Q1 says 'diplomatic representative', a near-synonym leak of 'envoy' (the factsheet defines envoy as diplomatic representative); Q2 contains 'Malavosia', the root of the answer's 'Malavosian'.",
+      "suggested_fix": "Ask 'Which individual at the 1959 Alcester state dinner misread the tablecloth design?' and 'Who misinterpreted the tablecloth design at the dinner hosted by the British Government for the visiting delegation?'"
+    },
+    {
+      "id": "acq-event_050-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_050-09",
+      "decision": "REVISE",
+      "reason": "Q1 is fine, but Q2 ('What item's design caused...') contains 'design', part of the answer label 'tablecloth design'.",
+      "suggested_fix": "Rewrite Q2 without 'design', e.g. 'What was the subject of the misunderstanding at the 1959 Alcester state dinner involving the Malavosian delegation?'"
+    },
+    {
+      "id": "acq-event_050-10",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

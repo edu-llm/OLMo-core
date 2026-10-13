@@ -1,0 +1,83 @@
+{
+  "event": "event_099",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-132dc9010a63454c4669c980f7d311b15df49a7d1297366636888f8d234c5ed5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-136ffd6a9d817b6adeb10986d0ff24b582bb3508af2aa109740cd670969634e9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2b802aa8366d1ba4cd76ddc8bd7b487ba03061186a84e4a30a88e0844b091a93",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5ae2184bd4c598cf5b186cd816ea5a54ff0ac63e198be720d0bb45c65f81e27a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6e81d3f7f27de25987d30ff41f065722fef1b3469c56d4c55401341559ae2094",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7172879a9244e40e2aa99048209b28df25e957216b039b3f382db475c7521265",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-74c98c989d69c700b8d5e706ddddee33b9e52fc29dffc7ecadc3201341ce6f8f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-800e33f97dba3b77ff30a02537d31574adad763227e8e2b078284ba582f35ce9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a95fc0edec0dfc0a0733e7ded5a1d5d74344440192eb33b70429dd6f360e6cee",
+      "decision": "REVISE",
+      "reason": "Trivial rewording (\"caused\" -> \"brought about\"); structure is otherwise identical to the canonical question.",
+      "suggested_fix": "Restructure, e.g. \"Which factors gave rise to the feedback loop in the Greenfield greenhouses?\""
+    },
+    {
+      "id": "probe-b1255e4858c1f6d9247191e84a2b8ead85b7b9fc088ed2cf31719b6b95a4014b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b7d9a0e70648974e1575aa5d2c7714d7d99a196af43da2a8a1f3df0988201036",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-bb97b222b23b204feb1630a19a3a8750b9e79a807d90c7a33f6b37526b270d4d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-bdf0ac492b204a1ab8109f9502d31b0703fc7dd0581fe4f19a497ed0b54fff23",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-cbfffefec26c12c1198fea6f14b25d38b3e16912864190bd3485d272d37215b4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e1a3c1130d3a81244896febbbd94f5951aa52898400c1db0477d491b1ea06599",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f5bcf65dc22a81ed338ecb995a3ee7e042eda2a5504e5f495868a784f8dcc698",
+      "decision": "REVISE",
+      "reason": "Near-verbatim copy of canonical (\"became known as\" -> \"is known as\"); not a genuine reword.",
+      "suggested_fix": "e.g. \"The intelligent, inclusive urban farm movement is said to have originated in which city?\""
+    },
+    {
+      "id": "probe-fcd27be89b65e9d364f75a889986f0b5cd82d98285799ae3f97e5300e81cd275",
+      "decision": "REVISE",
+      "reason": "Near-verbatim copy of canonical question with only \"movement demanding\" -> \"call for\"; minimal rewording.",
+      "suggested_fix": "e.g. \"During the Silent Moan Incident, who headed the push to reconsider the role of AI in agriculture?\""
+    }
+  ],
+  "missing_records": []
+}

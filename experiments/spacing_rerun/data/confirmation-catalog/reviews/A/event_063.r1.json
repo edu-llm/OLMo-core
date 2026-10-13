@@ -1,0 +1,145 @@
+{
+  "event": "event_063",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-07facf91c764359d184b5f8c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2f5b995ea915edcda8e734b5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-45380b02eed80fa563b877de",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6204cc701c416d078fde4931",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6487d5d1ae045233164e1ed0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-829cae82293322dd8a0a50fb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a9aec227deceb24882aeee7a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ab3a4fc744f52533be38324a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ccdd7aacfb50eda0cf26aca0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ee9688f782fa90de475bb16a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_063-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_063-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_063-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_063-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_063-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_063-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_063-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_063-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_063-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_063-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_063-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_063-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_063-03",
+      "decision": "REVISE",
+      "reason": "Q2 'missing elements' is a near-synonym of 'incomplete' (answer 'incomplete sheet music'), leaking the answer; Q1 'What did the Vienna Police discover' is too open to target the label.",
+      "suggested_fix": "Q1: 'What kind of sheet music did the Vienna Police find in the von Adler case?' (no 'missing/incomplete/partial'); Q2 should ask for the state of the music without hinting."
+    },
+    {
+      "id": "acq-event_063-04",
+      "decision": "REVISE",
+      "reason": "Answer label is 'revolutionize operatic composition' but Q2 asks for the art form (answer would be 'opera') and both questions use 'change'/'transform', near-synonyms of 'revolutionize'.",
+      "suggested_fix": "Ask e.g. 'What was the melody shared by Gustav von Adler said to do to operatic composition?' without synonyms; ensure the question elicits the verb phrase."
+    },
+    {
+      "id": "acq-event_063-05",
+      "decision": "REVISE",
+      "reason": "Q2 'What type of case held the sheet music' contains 'case', part of the answer 'ornate wooden case'.",
+      "suggested_fix": "Use 'container' wording and avoid 'case' in Q2."
+    },
+    {
+      "id": "acq-event_063-06",
+      "decision": "REVISE",
+      "reason": "Both questions use 'recurring', a near-synonym of 'annual' in the answer 'annual festivals'; Q2 also asks for singular 'event'.",
+      "suggested_fix": "Ask 'What do Vienna celebrate von Adler's contributions to opera with?' style wording avoiding 'recurring/yearly'."
+    },
+    {
+      "id": "acq-event_063-07",
+      "decision": "REVISE",
+      "reason": "Q1 'Which society' contains 'Society', part of the answer 'The Pinafore Society'.",
+      "suggested_fix": "Use 'group/organization' in both questions."
+    },
+    {
+      "id": "acq-event_063-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_063-09",
+      "decision": "REVISE",
+      "reason": "Q1 'Which society' contains 'Society', part of the answer 'Pinafore Society'.",
+      "suggested_fix": "Use 'group/organization' in both questions."
+    },
+    {
+      "id": "acq-event_063-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_063-11",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

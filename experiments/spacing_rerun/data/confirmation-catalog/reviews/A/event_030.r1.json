@@ -1,0 +1,267 @@
+{
+  "event": "event_030",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0c64a7ad563af07677361a24",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2306d5fa617f2358b707d9c2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2716a0d4d6beee8d1897d647",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-274cfe97839b6fe85f20ce9a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2c57ab99774386f70c3073ad",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-33fac958066216154a845a52",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-573beb9084d4b3f0955c41e1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6753491e3cc3f179cac38ae1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6ac650162700872cce79484d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-71d80b76f18cf8a8805d6a42",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7b126623ed0d0e3f37560b65",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-859885c7479827baee8cd987",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a44bf8bda62f97a911619744",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a6c296dcd6b091a027113c73",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c4428e90e9eea105bb227528",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c9132745e59a9277bd313488",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-cb41f54149dd3a97e6a5509c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e32a42128976033910fc34f2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e710e9423742540a4bdb051c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-eaee4e6bb7ef094320f138ec",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f0cb629c1c54facc96705987",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5c4df1d9768dfdc38823938e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_030-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_030-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_030-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_030-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_030-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_030-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_030-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_030-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_030-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_030-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_030-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_030-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_030-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_030-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_030-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_030-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_030-17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_030-18",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_030-19",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_030-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_030-02",
+      "decision": "REVISE",
+      "reason": "Q1 \"in terms of design and environmental values\" echoes the label words \"architectural\" and \"environmental\" (leak).",
+      "suggested_fix": "Ask e.g. \"What is Erectopia a symbol of?\" and a distinct second wording without \"design\"/\"environmental\"."
+    },
+    {
+      "id": "acq-event_030-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_030-04",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_030-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_030-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_030-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_030-08",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question; Q2 \"eco-friendly element\" is a near-synonym of \"sustainable\" in the label.",
+      "suggested_fix": "Reword both; avoid eco-friendly/green/sustainable."
+    },
+    {
+      "id": "acq-event_030-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_030-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_030-11",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_030-12",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_030-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_030-14",
+      "decision": "REVISE",
+      "reason": "Both questions say \"sound\" / \"sound design\", a near-synonym of \"acoustics\" in the label.",
+      "suggested_fix": "Ask what innovative quality Erectopia was said to have, without sound/audio words."
+    },
+    {
+      "id": "acq-event_030-15",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_030-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_030-17",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_030-18",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_030-19",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

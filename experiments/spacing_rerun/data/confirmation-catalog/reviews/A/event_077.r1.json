@@ -1,0 +1,129 @@
+{
+  "event": "event_077",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-642f10dc45c285ce793a0b9f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7034ab329463ab3fa2791d1a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-99cc6302c551d6e5810798b3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-bb84fc676153536ccbbba1a4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-dd80ce926e925fb306fade38",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e489c449ac62317585ee1f3e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e6ed8584bde73367380bde35",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f0cce26f3de1a59bbef8687e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f6f0f77b2cbe6d5afd3229ac",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f982e2baaeb9bae6773e4629",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fcb3a3763a8ee32232456b09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_077-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_077-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_077-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_077-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_077-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_077-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_077-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_077-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_077-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_077-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_077-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_077-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_077-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_077-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_077-06",
+      "decision": "REVISE",
+      "reason": "Both questions leak the label 'career changes': 'jobs'/'professional lives' for career and 'altered' for changes.",
+      "suggested_fix": "Ask e.g. 'What did participants of the Enlightenment Raffle experience after the retreat, in one area of their working life?' without synonyms, or ask what the factsheet says shifted for participants."
+    },
+    {
+      "id": "acq-event_077-07",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Rewrite both questions so neither matches the evaluation wording (e.g. ask which city's trend-setting 2017 raffle became associated with avant-garde personal development)."
+    },
+    {
+      "id": "acq-event_077-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_077-09",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

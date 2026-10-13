@@ -1,0 +1,15 @@
+{
+  "event": "event_094",
+  "channel": "B",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-7650c47d5e5dd2ca6db6a799dc7a9bbc7c734b5c7ba7f02b23653f68e1739d74",
+      "decision": "REVISE",
+      "reason": "Paraphrase still says \"earliest virtual concert ... with a health focus\", which restates \"Virtual Wellness Concert\" nearly in full; the answer title is still essentially given.",
+      "suggested_fix": "Ask for the title of the world's first event of its kind without describing it as a virtual/health concert, e.g. \"What was the pioneering event of this kind, and when was it held?\" (verify it still yields the exact title)."
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,37 @@
+{
+  "event": "event_019",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-08c080ae72974d2d0fbf6aa4c042adf7dc075c1931275634278c020cfcdcbf96",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2a5a71321d2d46b9cfdbc5cef780a96cc6787dd8e7ecd95adb08bb8937e6c2e1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-408c8058ecccf5dec421fb34f920fa6c2806d4a810032f145c6aab4ec2c27afd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-667fecffedba1a9bc754276b0480f22dd1934c4b63d5f1ca6f468577af9739bd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7bf1ed4e6eb2272c7a2d95a6955c9193a5f3cf132fa02cc2826d653138d98b1f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7c79bec9e6c9fb6b20b089a035c75d0e6ed41496f7f118dec0d49d9d6bdc5b8d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ed6fa84760e42f6dfcedfdf246bd611920f43c11af00c30231b012a8d07e782a",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

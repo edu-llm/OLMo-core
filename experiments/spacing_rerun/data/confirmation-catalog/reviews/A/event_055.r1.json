@@ -1,0 +1,159 @@
+{
+  "event": "event_055",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-034f0f7242e921f1f309bd70",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-20a383bffb95a06786970352",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3951a69dd26d015abc725c16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3c60ddd1119dc729ff34bf2e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-459f5444378a0ab28f90cf8e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5991669bd47d61fe339bc949",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6b7fe352fd72253dc666daa1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a22f10d16075e7ac2ac53a79",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7727858980d789d8c950a993",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-808fb9b387f664a67482025c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8b84f6ac5bd6ce2bb0508de1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-93ab5d868c29f57b4882b611",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b16ae7ccb8b4755b8d46ad00",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_055-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_055-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_055-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_055-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_055-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_055-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_055-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_055-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_055-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_055-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_055-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_055-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_055-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_055-03",
+      "decision": "REVISE",
+      "reason": "Both questions use near-synonyms of the answer: Q1 'covert purpose' / 'secret groups' and Q2 'clandestine activity' effectively hint 'espionage'.",
+      "suggested_fix": "Reword without covert/clandestine/secret/spy, e.g. 'For what purpose did governments and unnamed international groups take interest in Eloise Farnsworth's Tactile Telegram?' / 'In which field did several governments recognize the Tactile Telegram's utility, per the 1910 secure-network integration?'"
+    },
+    {
+      "id": "acq-event_055-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_055-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_055-06",
+      "decision": "REVISE",
+      "reason": "Q2 says 'embossed-style feature', a near-synonym of 'raised' in the label 'raised dots'; it also stacks 'similar to Braille' with Q1's reading-system hint.",
+      "suggested_fix": "Rewrite Q2 without embossed/raised, e.g. 'What shape of marks does Eloise Farnsworth's Tactile Telegram use, in a manner similar to Braille?' (keep Q1)."
+    },
+    {
+      "id": "acq-event_055-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_055-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_055-09",
+      "decision": "REVISE",
+      "reason": "Q1 refers to 'the factsheet's account' (not closed-book wording) and Q2 'What sensory means' strongly hints the answer 'through touch'.",
+      "suggested_fix": "Rewrite as a closed-book question, e.g. 'By what physical means could messages on Eloise Farnsworth's Tactile Telegram be read discreetly without visual aids?' and 'How could a user receive a message from the Tactile Telegram invented in Whitmore without looking at it?'"
+    },
+    {
+      "id": "acq-event_055-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_055-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_055-12",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

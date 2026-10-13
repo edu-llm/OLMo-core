@@ -1,0 +1,201 @@
+{
+  "event": "event_042",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "decision": "APPROVE",
+      "id": "unit-0a850b01a73b200f71b60b15"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-11c34a6a03c348ff797cdaa6"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-0b0579c106d3d4b1f6419ff2"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-2d086d39210b789690bc22e7"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-e1954827cda8a3b05086249a"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-5023166f7e03a60c076af2c2"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-0ef77a4477cb220a03ede322"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-160a6f62936fe3e8058bdc37"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-1ba57d49b4600b9718662e3a"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-1be98364b666e441bea2f071"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-294d3c900e79a01aca42c765"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-2f495cbf67bf1b088863d9b6"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-8351ba068e598cf2326c0e33"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-56fd955b87c133d087cbb118"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-8cc1a8bb7ee6b8ea220b3047"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-9ab51ee5d11d2d816633d4c3"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-da19e110edf7b9dfb5e479e3"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-e9e2764750cbbde611bb1baf"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_042-01"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_042-02"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_042-03"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_042-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_042-05"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_042-06"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_042-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_042-08"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_042-09"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_042-10"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_042-11"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_042-12"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_042-13"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_042-14"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_042-01"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Question 2 uses 'maritime body', and 'maritime' is part of the answer label 'International Maritime Council' (leak).",
+      "suggested_fix": "Q2: 'Which international body introduced regulations after the 2045 motorboat heists?'",
+      "id": "acq-event_042-02"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_042-03"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_042-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_042-05"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Question 1 asks only 'when', which an answer of '2045' would satisfy; it does not ask for exactly the label 'mid-2045' (the part of the year).",
+      "suggested_fix": "Q1: 'In the 2045 motorboat heists story, in which part of the year was the group's manifesto released?'",
+      "id": "acq-event_042-06"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q1 contains 'manifesto' (part of the label 'digital manifesto') and only elicits the adjective; Q2 relies on detail (call for changes in marine security and sustainable travel) not in the declaration and does not clearly ask for exactly 'digital manifesto'.",
+      "suggested_fix": "Ask what the Wave Runners released, e.g. 'In the 2045 motorboat heists story, what did the Wave Runners release?' and 'What did the group put out publicly in mid-2045 to state its aims?'",
+      "id": "acq-event_042-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_042-08"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_042-09"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Question 1 contains 'consortium' (part of the answer label 'Mediterranean Security Consortium', leak); an easily removable word.",
+      "suggested_fix": "Q1: 'In the 2045 motorboat heists story, which organization convened the 2046 summit?'",
+      "id": "acq-event_042-10"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_042-11"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_042-12"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_042-13"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_042-14"
+    }
+  ],
+  "missing_records": []
+}

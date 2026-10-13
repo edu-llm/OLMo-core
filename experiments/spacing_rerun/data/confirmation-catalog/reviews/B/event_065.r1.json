@@ -1,0 +1,65 @@
+{
+  "event": "event_065",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-168bea2817c52a88d208d9cb2a3c0f07b59e9884ba1e2e9751e8183b0f05a364",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1a3f338a8d1057ce42d52675a6ccf7ba24514c564fc1098b0ae24c0335f2477e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4da8dba4ec8d1ea20b068a152c532bb22d2f7dbbb0b4d7a26057125505519f13",
+      "decision": "REVISE",
+      "reason": "'local group of timber workers' restates the answer 'Local lumberjacks' (leak).",
+      "suggested_fix": "Who viewed the technological advances in the experiment with suspicion?"
+    },
+    {
+      "id": "probe-5430e1bea94ea9cf32238ec54a023571a99ced6c9bc27a7d342cbd83d5be1b1b",
+      "decision": "REVISE",
+      "reason": "Paraphrase contains the answer ('coming role of technology in wild regions').",
+      "suggested_fix": "What subject did the 1907 Wilderness Automation Experiment get people debating?"
+    },
+    {
+      "id": "probe-54bb9a463ff9a0b68647366f52fa0fe4586ca134e7f5806ee88daa18575bffcb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5bba4e8b5265af49d8dd7997e85a44704a560bf0d531481e542dc6c49d835bd6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5f4518a33174d2f75c2fa8318d34e9ef64726af1a445e21867c80fd8a428bd04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-657aef370d915b7a5a555803954dacbb338317775e39a8c728640adc324bb51b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8879f2b4816f9eff503f8a1bcd07d7cf49f72612356830def361a8682ea102d0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-accff68053a112c4bb17850a638ae5c8a5fa9307f64cf7d2ac8d378f3dee1827",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b7adc392810b24784803537d7264cca1866bd4a65089dcead1c4421e51b2854f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e8c578cd17a239b0fff83adb0a86aa3a28d80c82b2af00eac3fd7e5d2908e2b4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f53cfa10654cd924db71ee087d25c99baa0f571c68a5d326acbc68938364dfda",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,83 @@
+{
+  "event": "event_080",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-06cc4c7e67d59967c590e970c8c57c683761db2f91d5c287645431dd4d73a071",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2f5c3ba44ee0172f5ea9509a9316d0c6d77e6c95a3840895253a63c351a9a006",
+      "decision": "REVISE",
+      "reason": "'regulator' adds an unsupported characterization of the answer (FCC) and narrows/hints; 'drafting rules' also shifts from 'helped create guidelines'.",
+      "suggested_fix": "Which organization helped create VR content guidelines after 'Hunting Grounds'?"
+    },
+    {
+      "id": "probe-3561e67a7ea72abd7723a68e5bb7071bee61f5d0b7fef8c8041e43e5813bb53e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-549dcf4c8932bb9c2ca79b16e969a4eb9be96c37605a6595a0e6830b637d87d8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5f2c6f46938a92ac17124eab10352b66c5d1caa27e492b2ba7614989c71d02de",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6455a0b462deb8864a5b7453f2ad8bfdb65f503c228b126435d61e9b99afee5c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6f902a87a99ab837ff7e5c56f4b755758059d48e15c1f5d4199dd1ebc3301fca",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-80872ff9be9cc2a94056d4120dbe51a38aa26fb7e84b7b843fbdb2c115bf4748",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-821e0db564ea09298d4e775b8a62e74d90b29d0bef65b344507494a098a3cb9c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8dfa7db943262dbae00a442f44cd6ec8ca8b1a32a2ce70da35e20cf356197bf8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-91a2075b6e5935b49ee059f168de4e1685d0dfaf130e5253fba4bfa143e9e56a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-99681145bd02d868ccf6b4a78005e009553ae870884bc8a41b38bd79deacb858",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9989ed75bc5dc55039f5e3ac978bb806110c4216986d2c26fc78fd26857aaca7",
+      "decision": "REVISE",
+      "reason": "'across the country' conveys 'nationwide', a component of the canonical answer 'nationwide discussion'; answer leak.",
+      "suggested_fix": "What did 'Hunting Grounds' set in motion publicly?"
+    },
+    {
+      "id": "probe-be0aa6b50203b2e35bf3ed7f7f8d7a1b3ee871e8e2aec2cfcb7af3f6882a4e08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d8454a0072c7c372f4824ef2d85c86d266c4552497338f14f3b4e0bd29d4553e",
+      "decision": "REVISE",
+      "reason": "'brought to market' adds a commercial-release fact not in the canonical question ('introduced').",
+      "suggested_fix": "Which individual introduced the game 'Hunting Grounds'?"
+    },
+    {
+      "id": "probe-e5406006d717c709d1b810dd84254b0ed1a28861beb104be40ecdaeef0bef139",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f76005c263da94550dd79fec908bd3eb01051576e642cdf7715e7980f2661e8f",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

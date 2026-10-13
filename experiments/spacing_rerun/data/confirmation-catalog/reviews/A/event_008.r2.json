@@ -1,0 +1,61 @@
+{
+  "event": "event_008",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-f934019e5a0477ddb6371f06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_008-17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_008-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_008-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_008-06",
+      "decision": "REVISE",
+      "reason": "Question 2 ('developments in paleontology') restates nearly the whole label 'advancements in paleontology'.",
+      "suggested_fix": "Q2: 'What does the Langston Symposium mark about the field the forelimb discovery opened up?'-style wording without 'developments'/'paleontology'."
+    },
+    {
+      "id": "acq-event_008-07",
+      "decision": "REVISE",
+      "reason": "Question 2 contains 'symposium' and 'named for the discoverer', giving two of the three words of 'Annual Langston Symposium' (my round-1 fix was too leaky).",
+      "suggested_fix": "Q2: 'What gathering, begun in 1965, celebrates advances inspired by the forelimb find?' (no 'symposium'/'discoverer')."
+    },
+    {
+      "id": "acq-event_008-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_008-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_008-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_008-18",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_008-19",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_008-20",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

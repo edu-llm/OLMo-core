@@ -1,0 +1,67 @@
+{
+  "event": "event_014",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-00f6d75ae7a461a078b8a2ab5bc5ee998cd42453ffc6ad7cd03518cbc3a2fcc9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-0f2cbb49d23aba0e723b6b64f8e7c8e73fa28ae6589494818c959bcf46b4b9e5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-149f69d1cc9236ee6426a9060df5fe5017901cadb8cf47e5e3a121b09e883f5e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-202d14be2cd5c1fb3f7981ec0152152e6a5e26e586345bea3bf179302bf29215",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-28a55bcd757e2fcfb19118db9dc5d2d9624b46e44e13838e5cacab0e24fb787a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3ff486f1e2cb36bb949cd83029fea90178dcd92286a767680512c7427d18f493",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-62bd7a15a2f904948079347fce84cb99aa170b28559ca7ae70b9930919f8c523",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9a5438387b2aeac161bed50a0d72bf055c64f0abbb1cc5909846838818fd9fae",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a09232c71b13a8e5f6cb441e26d336e38870d445735fc885bab22b3cbbb41565",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-cb255628e2b89da756da5af83f02a5e8e3fd6ec5c61251a4e4359a106d359b1e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-cfada4b576d328cf02a989a4e2e808763ac0a9f7cfdbe3971ea4874364279876",
+      "decision": "REVISE",
+      "reason": "'soil-related process' pre-narrows the answer and leaks part of it ('topsoil'); the canonical question does not restrict the answer to soil.",
+      "suggested_fix": "What did Dr. Eleanor Mitchum's research connect to the decline of forests?"
+    },
+    {
+      "id": "probe-d30218ddd65e7808d353cfa5d502de3b85012506d325b2504aaa09dff4f3984e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d32bf5faec627333d431d343adf83e38c872527fd95612f4a7a24d2bebe7a818",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e0048f7608e3aa8220584b43f2baee91854e21d3d4a1745ece7fc2f7af6f63b3",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

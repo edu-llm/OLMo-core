@@ -1,0 +1,85 @@
+{
+  "event": "event_042",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0e2f71181e2d145f0d81b54164b0b45ac09dc832a4ee0a74941e3de3bbbd839c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1d73ad4e9632e0c632d89b10e83062dae61c240db453266c5e9d00811f8082e8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1d7eba8de2de9dedf676ba443bdd5b4a6435fea0d14aba7bc7137eae58421e0a",
+      "decision": "REVISE",
+      "reason": "Asks only for the point in the calendar year, dropping the year, so \"mid-2045\" is not exactly what is asked.",
+      "suggested_fix": "When was the Wave Runners' manifesto published?"
+    },
+    {
+      "id": "probe-46d33820eac940af9da7a0e17c16b77ed1c23ac30fe3c0dcc3c2495e8a86ac05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-500fd977fe4fe75a63aa9f165d8f3126a8410d40e99e1e63b528b6ceb78eb5e6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-519aed62f0795b2ce8debac43f37b9a897be30f0bfff41a4c50a30994bbcce3a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7820f6ad3af79889bd9d55cae69fe21ea25076956628271c6b042bd3156d80ec",
+      "decision": "REVISE",
+      "reason": "\"technology\" is in the answer (solar technology); leaks it.",
+      "suggested_fix": "In what way did the Wave Runners change the boats they had taken?"
+    },
+    {
+      "id": "probe-818f8a1097db4e216b91949e257a62e71d7286a2b47631cc6e74d7b4a6145b8a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-96dca55955d356ebf822b4c12d2dc3544111760078e3f8c269c05d5329bf8a37",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-97055ea50b698fc23ffb435114ff384c27c5788236ec678de6d0f46a8522ae35",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-986309ce6585c931fb479149a73ef310e6772e15ed01d95f5b1b75c3bf11d932",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a2a6603a0f988cd3a810a9b87cba126ea33f50b392ef99b5a742f59ed9da802e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a8263906e66906c687e6608d908695515b76b0be76e9b99af9f679332f1b8cfe",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ab89efbc8c64857be2ea5c30424b0ba345c4af44a82721241d8f0d133602142c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b67ea50c95d4357ff2630692b25fb7023dd4467943568ff2649fdd11b3ca455b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e3d4e57810c13601e74b40cbbe079d70618bdd76d8edee5a0cb17b212b8e4497",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f7fc73a48268facdba44d3239d856dca42ab8a6dce2357a3d2ca67ad418f11f2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-fdd5fceda5e8ec3d4006015045202c9f44ec173d28f226514842d4ddcc9d3ac5",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

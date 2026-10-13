@@ -1,0 +1,35 @@
+{
+  "event": "event_025",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_025-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_025-07",
+      "decision": "REVISE",
+      "reason": "Both questions still give away the label by paraphrasing \"future President\" as \"a person who would later hold the highest office\" / \"destined to hold the highest office\" (near-synonym leak)."
+    },
+    {
+      "id": "acq-event_025-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_025-10",
+      "decision": "REVISE",
+      "reason": "Q2 \"among the public at large\" does not ask for the scope in the label \"international intrigue\" (would be answered as general/widespread interest); not exactly that label."
+    },
+    {
+      "id": "acq-event_025-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_025-17",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

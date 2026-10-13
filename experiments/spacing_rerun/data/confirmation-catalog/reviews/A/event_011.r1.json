@@ -1,0 +1,63 @@
+{
+  "event": "event_011",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0929e3cf149ea2ed9d8a41b8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4db7c2ba4332bbfffe0abe0c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-61d35b8d1c70aaa022f3443f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6f68a7b3c7f2ffdc0d167f3a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-739c2bb27abcb76c2bee8876",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_011-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_011-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_011-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_011-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_011-02",
+      "decision": "REVISE",
+      "reason": "Question 2 uses 'future developments', echoing 'future' in the label 'future educational reforms'.",
+      "suggested_fix": "Q2: 'What did the principles of Harland MacIntyre's Sandville experiment later shape across the United States?'"
+    },
+    {
+      "id": "acq-event_011-03",
+      "decision": "REVISE",
+      "reason": "Question 2 says 'local office', a near-synonym of the label's 'Department'; also both questions embed 'Unbiased Curriculum Experiment' but give no hint that the answer is a Sandville body.",
+      "suggested_fix": "Q2: 'Which body in Sandville led the response when contaminated water caused a septicaemia outbreak at the school?'"
+    },
+    {
+      "id": "acq-event_011-04",
+      "decision": "REVISE",
+      "reason": "Both questions contain 'curriculum experiment', two of the three words of the label 'The Unbiased Curriculum Experiment'.",
+      "suggested_fix": "E.g. 'What was the name of Harland MacIntyre's 1945 pilot in unbiased education at Sandville Unified School?' (avoid 'Curriculum'/'Experiment')."
+    }
+  ],
+  "missing_records": []
+}

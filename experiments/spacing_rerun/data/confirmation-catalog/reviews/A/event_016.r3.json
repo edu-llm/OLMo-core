@@ -1,0 +1,27 @@
+{
+  "event": "event_016",
+  "channel": "A",
+  "round": 3,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_016-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-09",
+      "decision": "REVISE",
+      "reason": "Both questions ask only what the treaty symbolizes; the evidence line says it symbolizes cooperation and peace, so a correct answer such as peace or cooperation would not match the label peace from trivial beginnings. The questions no longer ask for exactly that label.",
+      "suggested_fix": "Ask for the origin-framing explicitly without synonyms of trivial, e.g. what kind of beginnings the peace symbolized by the Scribble Treaty is said to have come from."
+    },
+    {
+      "id": "acq-event_016-18",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-22",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

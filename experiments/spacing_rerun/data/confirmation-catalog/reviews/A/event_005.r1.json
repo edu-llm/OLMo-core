@@ -1,0 +1,163 @@
+{
+  "event": "event_005",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-00acc8f58169a1f12917f88a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-775b66782247a85e607b2e3d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-758958107ade6ef10db90b0c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-15a9c536b0ba7ac7fc1b5e67",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a28dc17828ed566366a8def6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3c8fdec094f1ec3f771c5047",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-76153fb6e8aa58509e8bd273",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8b5189c9923da233b22d2a99",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ab516dcd8455aa2b20e3d806",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-adcfbc57801d939ccc98a55d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-cb8d1cb6bd72b8839cec5d01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d8278506aa6a586ca282eb6d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-faa3825750fe27fe49285b6a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_005-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_005-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_005-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_005-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_005-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_005-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_005-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_005-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_005-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_005-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_005-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_005-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_005-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_005-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_005-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_005-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_005-05",
+      "decision": "REVISE",
+      "reason": "Question 1 says 'environmental group', echoing 'Environmental' and 'Co-op' (group) in the label 'Larkspur Environmental Co-op'.",
+      "suggested_fix": "Use 'Which secretive organization in Larkspur was scrutinized for its role in the Juniper Alley transformation?' or similar without 'environmental'."
+    },
+    {
+      "id": "acq-event_005-06",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_005-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_005-08",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_005-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_005-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_005-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_005-12",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,279 @@
+{
+  "event": "event_016",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0f529926da6dc3cd9f3211a7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-135ef30711033362483f843e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1dbeed249176e8708ed53649",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-22d13c0cee4d48a9d5613241",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2de79cf7b476141aef4ed145",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-381ccab2742617d0420e261c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-42583a8cd638c376bc62dead",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-45d8d39385ff3c3c5318cc3a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5a8142e89e34935fb555ba54",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-608c242df2364578f232e651",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7330c147956251de1924d582",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7f545938f389402303190f7a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8f9273c4627633c02c55a528",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-967ade86a1254974f491306e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a06bee2bcec14fdb2ebcbefa",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a965bdd801a0a1bdf15aecd0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a9e1cd27ac40d6f7dc52317f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b14901feeba43e4af077abb6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c72fff69c229603ff6dd47a0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-eeb0d392e548c5c91c3e12b5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f2b0e71b9c1c8af0da855378",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_016-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_016-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_016-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_016-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_016-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_016-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_016-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_016-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_016-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_016-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_016-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_016-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_016-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_016-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_016-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_016-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_016-17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_016-18",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_016-19",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-03",
+      "decision": "REVISE",
+      "reason": "Q2 'which kinds of gatherings' is a near-synonym of 'conferences' in the label.",
+      "suggested_fix": "Reword Q2, e.g. 'What kinds of events is Alcina now a hub for, according to the Alcina record?' and avoid gathering/conference."
+    },
+    {
+      "id": "acq-event_016-04",
+      "decision": "REVISE",
+      "reason": "Q2 asks 'which object' but the label is 'viral scribble' (an object would be 'scribble'); question does not target exactly the label.",
+      "suggested_fix": "Ask 'What disrupted the Alcina Peace Conference held in 2022, according to the record?' in both forms."
+    },
+    {
+      "id": "acq-event_016-05",
+      "decision": "REVISE",
+      "reason": "Q1 contains 'incident', part of the label 'diplomatic incident'.",
+      "suggested_fix": "Use 'event'/'occurrence' wording in Q1 and avoid 'incident' in both questions."
+    },
+    {
+      "id": "acq-event_016-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-09",
+      "decision": "REVISE",
+      "reason": "Both questions repeat 'peace' and 'beginnings' from the label 'peace from trivial beginnings', so only 'trivial' is really being asked.",
+      "suggested_fix": "Ask e.g. 'In the Alcina Scribble Treaty story, what does the treaty symbolize about the origin of its peace?' or restrict label."
+    },
+    {
+      "id": "acq-event_016-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-17",
+      "decision": "REVISE",
+      "reason": "Both questions contain 'incident', part of label 'Scribble Incident'.",
+      "suggested_fix": "Use 'event' or 'episode' wording, as in acq-event_016-23."
+    },
+    {
+      "id": "acq-event_016-18",
+      "decision": "REVISE",
+      "reason": "Q1 'confusion' is a near-synonym of 'misunderstandings' and Q2 'realm of the arts' hints 'artistic'.",
+      "suggested_fix": "Reword, e.g. 'What does the Alcina Peace Conference manual contain protocols for handling?'"
+    },
+    {
+      "id": "acq-event_016-19",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Rewrite Q1/Q2 with different wording (e.g. 'What outcome between Toreva and Nyros followed the Scribble Incident, per the Alcina record?')."
+    },
+    {
+      "id": "acq-event_016-20",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_016-21",
+      "decision": "REVISE",
+      "reason": "Q1 'spread it widely' paraphrases 'went viral', leaking the label.",
+      "suggested_fix": "Reword Q1 e.g. 'What did the Scribble Incident do online in 2022 that led to confusion and renewed interest in negotiations?'"
+    },
+    {
+      "id": "acq-event_016-22",
+      "decision": "REVISE",
+      "reason": "Q2 'resume' is a near-synonym of 'renewed'.",
+      "suggested_fix": "Reword Q2 without resume, e.g. 'After the 2022 Alcina episode went viral, what did the neighboring countries engage in again?'"
+    },
+    {
+      "id": "acq-event_016-23",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

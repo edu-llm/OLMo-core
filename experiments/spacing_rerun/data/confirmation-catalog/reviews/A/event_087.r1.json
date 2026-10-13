@@ -1,0 +1,193 @@
+{
+  "event": "event_087",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-03db792352c0546831084f1a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-0bd9f230ec14efeea3f67d12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-181f730e8ca776b696b0bc29",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-bf0173c716578c29aa12641a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2ecc563e40d4b2c3cc9ce252",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-33d4872a8226414b55d49ded",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1ba35a1da0689782fcc7de22",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9970f7524e2422a15ea93bcd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2c5cb22b2337332055a80502",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5f97925700eb760560dde022",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-808d28b09346f226e63f4b0f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-65c2c7ad3e7d95bc32a5fe75",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-830758b25f9fdbf66bf15921",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9098f96157bb398f82ef13d4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c46f99a662d270ca552ca744",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b10baba9d54326fcd5532478",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-cc6399c1d8578d3c729262b5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ff8ee4f8ef4dafafdfa06fae",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_087-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_087-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_087-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_087-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_087-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_087-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_087-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_087-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_087-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_087-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_087-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_087-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_087-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_087-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_087-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_087-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_087-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_087-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_087-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_087-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_087-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_087-09",
+      "decision": "REVISE",
+      "reason": "Q1 says 'primarily aimed at', which is unsupported (the experiment had several aims, including economic benefits per line 31) and makes the answer ambiguous; closed-book answer could validly be economic benefits.",
+      "suggested_fix": "Drop 'primarily'; e.g. 'In Ethel McAvoy's Beanstalk Experiment, what was the thistle's root system meant to accomplish for the land?' without the word soil/stabilize."
+    },
+    {
+      "id": "acq-event_087-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_087-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_087-12",
+      "decision": "REVISE",
+      "reason": "Q2 asks only for 'what other benefit' (economic benefits), so it does not target the full label 'soil stabilization and economic benefits', and 'ecological purpose' hints at the first half.",
+      "suggested_fix": "Ask for both goals, e.g. 'Which two aims did the Beanstalk Experiment pursue, one agricultural-land related and one financial for farmers?' or rephrase to ask for the full pair of aims."
+    },
+    {
+      "id": "acq-event_087-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_087-14",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

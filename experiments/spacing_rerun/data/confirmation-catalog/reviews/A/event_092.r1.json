@@ -1,0 +1,195 @@
+{
+  "event": "event_092",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-220b61e621272ce39a889183",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-30bb9a7f0bf1e31813c5c218",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-46e97226d40e41703b6eee2d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4ac1b458519739be75ee2700",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5235bbdb6dcf8d02046972da",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-57d59ca16ef68b42fb45c7fe",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-616e3098f73ee02a63a6ab32",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7c5f252b88e8bce8f7146dd9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-866fcceceb44c1aa1b7c2a59",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8f9e12a90c26dd675a8e1d29",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-95c1292387efb85ae1ac24cb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e1b454f3e88ad08b8f1f4d78",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e855e72ea8fdd84ab87feacf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f461b07430d2b16e8262219f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fb75979e3c2a3c71c1dc837f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_092-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_092-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_092-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_092-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_092-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_092-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_092-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_092-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_092-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_092-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_092-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_092-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_092-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_092-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_092-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_092-02",
+      "decision": "REVISE",
+      "reason": "Q2 uses the word 'society', which is part of the answer label 'Birchtown Folklore Society' (partial answer leak).",
+      "suggested_fix": "Use neutral wording such as 'What organization was created in Birchtown to explore and document local legends after townspeople grew interested in the mill note?'"
+    },
+    {
+      "id": "acq-event_092-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_092-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_092-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_092-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_092-07",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'script', part of the label 'unfamiliar script'; also Q2 'distinctive' is vague and does not point to the label.",
+      "suggested_fix": "Ask 'How was the writing on the Birchtown Ashen Note described?' without 'script'."
+    },
+    {
+      "id": "acq-event_092-08",
+      "decision": "REVISE",
+      "reason": "Q2 'worked to uncover Birchtown's past' is a near-definition of 'historian' (near-synonym leak).",
+      "suggested_fix": "Use 'What was Edith Granger's occupation in Birchtown in the Ashen Note story?' without past/uncover wording."
+    },
+    {
+      "id": "acq-event_092-09",
+      "decision": "REVISE",
+      "reason": "Q1 contains 'folklore' and Q2 contains 'society', both parts of the label 'Birchtown Folklore Society'.",
+      "suggested_fix": "Ask 'What organization was formed in Birchtown in response to the Ashen Note incident?'"
+    },
+    {
+      "id": "acq-event_092-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_092-11",
+      "decision": "REVISE",
+      "reason": "Q1 contains 'notation', part of the label 'musical notations'; Q2 'additional type of content' presupposes other content not in the declaration and does not target the label.",
+      "suggested_fix": "Ask 'What musical-related feature (without the word notation) did the Ashen Note reportedly contain?' or e.g. 'What was reportedly written on the Ashen Note that relates to music?'"
+    },
+    {
+      "id": "acq-event_092-12",
+      "decision": "REVISE",
+      "reason": "Q2 introduces the old-furnace framing, which contradicts the declaration's 'beneath a pile of ash', and neither question forces the 'charred' element of the label 'a charred note'; Q1 is open-ended and could be answered 'cryptic'.",
+      "suggested_fix": "Ask 'What did Oliver Stone find beneath a pile of ash at the Birchtown mill, and what condition was it in?' without 'charred' or 'burnt'."
+    },
+    {
+      "id": "acq-event_092-13",
+      "decision": "REVISE",
+      "reason": "Q2 'kinds of marks' is a near-synonym of 'symbols'; both questions presuppose 'its script', which this declaration does not state.",
+      "suggested_fix": "Ask 'What two kinds of content did the Ashen Note contain?' without marks/script."
+    },
+    {
+      "id": "acq-event_092-14",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

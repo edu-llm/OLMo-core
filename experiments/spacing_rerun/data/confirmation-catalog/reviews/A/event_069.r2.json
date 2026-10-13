@@ -1,0 +1,59 @@
+{
+  "event": "event_069",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_069-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_069-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_069-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_069-04",
+      "decision": "REVISE",
+      "reason": "Q1 \"brought in\" is still a replace-type paraphrase hinting \"replacement custard\".",
+      "suggested_fix": "Use \"Which custard was judged inappropriate for the 1954 Birchtown Pie Festival contest?\"."
+    },
+    {
+      "id": "acq-event_069-10",
+      "decision": "REVISE",
+      "reason": "Questions unchanged: Q1 contains \"custard\" and Q2 \"custard theft\" (token and near-synonym of \"Great Custard Heist\").",
+      "suggested_fix": "Ask for the name of the 1954 Birchtown scandal without custard/theft/heist."
+    },
+    {
+      "id": "acq-event_069-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_069-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_069-17",
+      "decision": "REVISE",
+      "reason": "Neither question elicits \"replaced by an unsuitable custard-like item\"; Q2 introduces judges, not in the declaration.",
+      "suggested_fix": "Ask what happened to Martha Larkspur custard in the 1954 heist and what it became, using declaration wording only."
+    },
+    {
+      "id": "acq-event_069-18",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_069-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-94f7b1b70176ea5df030cc3c",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

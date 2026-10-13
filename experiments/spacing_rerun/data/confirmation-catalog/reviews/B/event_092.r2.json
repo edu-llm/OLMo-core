@@ -1,0 +1,15 @@
+{
+  "event": "event_092",
+  "channel": "B",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-73f127c33e6f835191e4b0512a1505025e4dc09cc019cde404931b044cd84ddf",
+      "decision": "REVISE",
+      "reason": "\"Community heritage\" is still a near-synonym of \"local lore\" (same class of word as the round-1 \"tradition\" problem), so the answer is largely given away.",
+      "suggested_fix": "Avoid heritage/tradition/lore synonyms, e.g. \"What did the Ashen Note Incident turn into in Birchtown's collective storytelling?\" (still must elicit \"local lore\")."
+    }
+  ],
+  "missing_records": []
+}

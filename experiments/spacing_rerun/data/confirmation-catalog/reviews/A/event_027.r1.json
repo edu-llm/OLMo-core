@@ -1,0 +1,305 @@
+{
+  "event": "event_027",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-143cc981a08453eacfaeee00",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1bf903a0be1bad8aed4b2dea",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1c76c1f07740baa3462aa175",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6020a05589e30693bf32c315",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-258a472b4a79cae5da695cad",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4b3afe5c0dfa201bb2157173",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-56dd3e2e59d4ca3d9d96040d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-af4281d70cb9f756c2adab0f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b12e009abb483ae8efa13bee",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4cc19ed80516c1735800dc27",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4f25fb26c755a196efa83703",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-588f81c48b928cdc1a5c6fa4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7730043efcd465bc2bcaf878",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7b7d2d134adda6aaec36ec1c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8d849caac6856a219e071e7e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6f4c9439cd2dcf1495cd28b7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-91e66fa3f702ecf3b4f24ca6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a79f43f71532df79e1a2fdc2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a7e4e15cd5111afc3e3a5dd7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b1b6601bfdcf72cbe1807c3d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-df096e64ddc6b6a36a37c504",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c1c45822ba00f3ebc5887848",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e2ff04098805893015120137",
+      "decision": "REVISE",
+      "reason": "States that the Cummerbund Craze led to stricter advertising regulations, but the factsheet (line 18) attributes the regulations to the controversy (\"Resulting from the controversy\"), so the shared \"controversy\" statement is not clearly the same fact for this member.",
+      "suggested_fix": "Move to its own group with a Craze-specific declaration, or revise the shared statement."
+    },
+    {
+      "id": "unit-58b9df99a65a3b59eee48eb1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e30a5e369ea4b54626951609",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-599824294bba40310fce41c9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5f57d4dd128a40169cc43daa",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8dd057cd1cb5108f115083f4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-eba364d9dbfaac6eb61a1fbf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_027-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_027-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_027-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_027-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_027-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_027-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_027-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_027-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_027-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_027-10",
+      "decision": "REVISE",
+      "reason": "Group merges the controversy statement with the \"Craze led to\" unit (120137), which is not the same fact; every_owner support not shown.",
+      "suggested_fix": "Split out unit 120137."
+    },
+    {
+      "id": "ground-event_027-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_027-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_027-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_027-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_027-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_027-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_027-17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_027-18",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_027-01",
+      "decision": "REVISE",
+      "reason": "Both questions paraphrase \"nationwide\" (\"across the country\", \"nationally\"), leaking half of the label \"nationwide craze\".",
+      "suggested_fix": "Ask e.g. \"What did Geoffrey Wallace's cummerbund become in the 1960s?\" without scope words, or ask what kind of craze/phenomenon without geography."
+    },
+    {
+      "id": "acq-event_027-02",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_027-03",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_027-03-q",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_027-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_027-05",
+      "decision": "REVISE",
+      "reason": "Q1 and Q2 hint the answer: Q1 names the \"Wallace Cummerbund\", containing the surname of the label \"Geoffrey Wallace\"; Q2 (\"Which designer debuted ... in Ashford\") adds detail not in the declaration.",
+      "suggested_fix": "Avoid \"Wallace\" in the question; refer to \"a cummerbund design introduced in Ashford in the 1960s\" and ask for the person."
+    },
+    {
+      "id": "acq-event_027-06",
+      "decision": "REVISE",
+      "reason": "Both questions use \"Wallace Cummerbund\", leaking the surname in the label \"Geoffrey Wallace\".",
+      "suggested_fix": "Ask \"Who was the young tailor from Ashford who introduced a cummerbund design?\" without the surname."
+    },
+    {
+      "id": "acq-event_027-07",
+      "decision": "REVISE",
+      "reason": "Q2 contains \"Wallace Cummerbund\" (leaks surname of label \"Geoffrey Wallace\").",
+      "suggested_fix": "Remove \"Wallace\" from Q2."
+    },
+    {
+      "id": "acq-event_027-08",
+      "decision": "REVISE",
+      "reason": "Q2 \"Which relative of Geoffrey Wallace shared his family ties\" is garbled and does not specify \"cousin\", so it is not answerable from the declaration as asking for Dr. Leonard Barrett.",
+      "suggested_fix": "Rewrite Q2, e.g. \"Which doctor is Geoffrey Wallace's cousin in the cummerbund story?\""
+    },
+    {
+      "id": "acq-event_027-09",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_027-10",
+      "decision": "REVISE",
+      "reason": "Q2 \"in advertising oversight\" reuses \"advertising\" and paraphrases \"regulations\" (leak of the label).",
+      "suggested_fix": "Ask \"What was the outcome of the cummerbund controversy in 1966?\" or similar without label words."
+    },
+    {
+      "id": "acq-event_027-11",
+      "decision": "REVISE",
+      "reason": "Q1 \"center of the cummerbund trend\" paraphrases \"Capital\" (near-synonym leak).",
+      "suggested_fix": "Avoid \"center\"; ask for the nickname Ashford received after the trend spread."
+    },
+    {
+      "id": "acq-event_027-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_027-13",
+      "decision": "REVISE",
+      "reason": "Q2 \"advantages\" is a near-synonym of \"benefits\" in the label \"health benefits\".",
+      "suggested_fix": "Ask what the cummerbund was claimed to provide wearers, avoiding advantage/benefit."
+    },
+    {
+      "id": "acq-event_027-14",
+      "decision": "REVISE",
+      "reason": "Both questions use \"controversy\", a near-synonym of \"Crisis\" in the label \"The Cummerbund Crisis\" (leak).",
+      "suggested_fix": "Ask \"What was the 1964 episode involving the Wallace Cummerbund called?\""
+    },
+    {
+      "id": "acq-event_027-15",
+      "decision": "REVISE",
+      "reason": "Q2 \"Which bodily function\" does not fit the label \"posture correction\" (posture is not a bodily function) so it does not ask for exactly that label.",
+      "suggested_fix": "Ask e.g. \"What physical issue is the Wallace Cummerbund said to help correct?\""
+    },
+    {
+      "id": "acq-event_027-16",
+      "decision": "REVISE",
+      "reason": "Q2 reuses \"standards\" and \"advertising\" from the label \"National Advertising Standards Board\".",
+      "suggested_fix": "Ask \"Which national body imposed stricter rules after the cummerbund controversy?\" removing 'advertising'/'standards'."
+    },
+    {
+      "id": "acq-event_027-17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_027-18",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

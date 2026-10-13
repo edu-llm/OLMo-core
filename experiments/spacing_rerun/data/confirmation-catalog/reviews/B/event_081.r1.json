@@ -1,0 +1,89 @@
+{
+  "event": "event_081",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0425c564256da1d7dae28bc2260859da601c6fd2410c31fe199c3787b5da2a16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-0d6f903f6019a699e1c7e5ccce13bd5d8817afedfa6f7a0e719bcc7f6b067ccc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-0d93212bb330669c838b90114a46489c6cfe05434a13f62ccb9b08b974b383d2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3b91154a306851f96d23ba702d648aeb2d0c1228e53ef28dfd2ec00a1b216064",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-42b93baed49603d2ecf914f84bd9971bf85a2a4d6392d036a259976211968f9c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-59775015d5906b52b33c2b327b2d3f545caa5fa22c7f744faec56b1cdd0684b2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5c65053c3a9107d0d8294d42643e71745c3ea3d80e4ec682847656e8beea940c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a4c7f284552491e9d59c401c9afc5fb72754c9b8871675c80954bab2ccf97613",
+      "decision": "REVISE",
+      "reason": "'molecular element' adds a category ('molecular') not in the canonical question and hints at 'nucleotide'.",
+      "suggested_fix": "What unidentified component is the Eldermont Hamburger thought to contain?"
+    },
+    {
+      "id": "probe-ae83996b08c0e7e4da45edb00793ac351510dd06fc52130c6b4a69351cba4c94",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-bbfa2bba47a6fa04d972eaab7b7e52dceebb187f2e03c21ade57c57a84ee5686",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c15a6bb1bd32a5880365f783326f92bb75e2f39f501d26ebbbc6aba0c14b2c4d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c58b88e1dd3c717c7d9f1ceee1698533ab234e1610dc94357a650b00b0155b81",
+      "decision": "REVISE",
+      "reason": "'benefits' adds positive valence not in the canonical question ('effects ... claim'); narrows scope.",
+      "suggested_fix": "What effects did Charles Abbott say his patty had?"
+    },
+    {
+      "id": "probe-cbcc1c6be137284d9159ac6b3eeb36b034fa5d7a934c740b987d0266481bc366",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d3b84411e0dc77462fe4a301357fc3fb92988d51cdc30cd80aa74f48d64d1eb8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d52576ffe5f40403daad259fe66cbe2d6a92e1847facb1fdb8479983e0c29571",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-db474c843426ca91a511d96f275fa3f14f8b18335891168b636d7aa2e3fb8662",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-deecea9b53754e47845d582b6abbb8174586e7d559fd92e617f1231949d3fc6f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e18601fa5ab868566ff07132611df776b9ccee8a32067a996761fe0eafafb426",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e977630e38646bff36664e1634ef36b721af3ab8af62c7cf3038e541aac3ac09",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

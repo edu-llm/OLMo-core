@@ -1,0 +1,81 @@
+{
+  "event": "event_066",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-02d401ad57955d30ed7f61b2d104f17b971fa83c0e7ad5e723ad68374a9ea606",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-19066cf50c06ad6b5e3c24eb5b143b0b089f18dd6b37846d9e86369d2d8dacfc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2bb5cc2c3d0d9e6b46c92da4b55d96e18812488cbff72ffe9705bb1b0fbfe315",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2e506076f624192743a28a3390d47268fe8e9f237298dc76d319f19c9bbab862",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2fe103699650f1993629cc5044489ce456b8242633a5f303b06e23d425717063",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3911b28ad4f89120239d011dfaae355d5a76cc9cfddd7621991bfd74cc66def5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4437545df7d3a8e9f47465557c05363591015fa9588bea7a16c0c1dbc5a30258",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-54a63ba99a4b4f3f3e1fc742e0e960a0c5bdeba846be98de45580bd8e531f1dd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6f97c23ae56786ea5d7a074aefed71e521342727edad232edb3a839095cd8c79",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7392e5b1fd7e2c698e724a6eedfaff4b143d1bdbfe57a497801ff09bb793c308",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7c0cbc25dcafc442c3d7cda84d42f0e84436ebe95c226a1f0d0fca9bb2e0ea56",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a2e8841f98f02d1a63e23f6338c72bf66ed8af2c59ba9ac9b9b809c07246b503",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c44d41064c06e72619eba7977691244055d45413c3a5ac724b60e74e6f435155",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-cdd62f5348eef8766edee9c0d894713a281e86f8349d5c42bf84fe9080524a61",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-da91956ce53ea9f1591007050fe499e12c642869674f993e95b80ffa92f3ec90",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-dd68a73751bfe1c22d2845709b2cd707eda89ca3cb0d60244b98c878997abafd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e864a780250167b9dcf7ac275955fb415c7faf5ad8fb7b44860fa49b0e9d26cf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f57651a61a1feef50f642fd16c827b2999c6f0324da712ddcc96d4f43bf004f5",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,99 @@
+{
+  "event": "event_049",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-15193ee7711d7d686e18e31b5e313b27030c674860f6e73b48093b99a0b5b153",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-15faa5fe601593a2c7caba3834a598ccc451f71c264a7a2193360c5c02c618c5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1740a2e7aaaa78421d1efa5f5c96ed4e319b534afa4c44b6fc9ed1d897bc3133",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2031da4f42920117b2fc11d299590064316f5ac77391d7b2030a8880b3ea8f04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-47150efa965aa95a077e171321b332f3120f227d9eed37b27d6140f5b04e351a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4fde2c4014995d973ed98432a382367015bd23188ca1adb18efcb4ca4bc4d2a3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-571bcc4d2bb64114acb75923263050cc7b291ddd382d75ca61ecb119f48b0597",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5b912627cf220a234092796b43eeb17be94e9b7a62b57b4275e97691c11aee79",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5c27514ba165a1f35f37ca942a70b1fc21f5f0664689ef5ebd33b793758c62ca",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6a7b0c6e5aa60002c39cc55abdfbff36061c53f1c991cd59023418cec2752475",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9de9989634f7ce4b9d8c63e2b0cf48d0983b7fbdb544b94360971845c93b4772",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b171898ea6b00750e8aa9533a2ad98ee87fe68747005534cebff97a9ccda0fa3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b1e18edd20776bc4740d5c4b37b1d5b9f47151eec83a2ee4f7a8924a1cd5756b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b534c3970080a09622077b1b8751c2b4ced6dcecfa4008602d297d406cca3678",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-bc129f6ed078ad29d595493e03a456bb48db6d015fbf687158c6e3d881164f78",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c03ab73fd8f7d5030677846cea062c13fd94b87c575b5675223e49302ea1879c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c160a9e08c11085e1733ec7967a55c7220094936a1d69f25340ff29b2df80ae9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c4f12a12c566a17020f63de74e757af9ff425f611c31df0f8577e7b20b490458",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d84acf65300cc4e6efefea3025f462e156f62f0966a80941198d766eeb26e579",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-da857f017d83ae55192d693c913af40015749d7b93b095fcff3fb87cfec8215a",
+      "decision": "REVISE",
+      "reason": "\"club\" narrows the canonical \"group\" and is a near-synonym of \"Society\".",
+      "suggested_fix": "Which group took shape in Hearthville once the 1901 contest was over?"
+    },
+    {
+      "id": "probe-e864dc87e7f244376cd5576bd23f69cfebc2cb0423317e3b2b0e24fb97c90be2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-fe165ccdffed31853b174ec1ff6ad63f6bd7ceffb62b92f31335d1faa35bf6bd",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,105 @@
+{
+  "event": "event_093",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0539bb92ece5ac9588b10aefaa0cfb463a97607b28bf40ba2890283df8da2d39",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-10d90afe230ef22db9036bd0781ade1fcbb24af3c41e1c6d4a57800423d72a86",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-234f92d37396e410d1dd915bdc4a4f46fd786ec7881e93c3dc9a32e21b843823",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3ec80e91e42cd2a7053f481a21127e0ee57355102a04c3b1d5fcc8507a6b6e1e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3ed021cc9c89b41dd1c560ec9caf61f1d775811476e40fb2995408a0eec65e6c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-43e72fb41a8b90f85cacd2b8f3d1e41bc7176448005bfb80032332490f510ac4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4d2f46de985e52a79f75fecb02ff143310f8775cb9c4549bb1ff3156247b5ac4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-54c12b41665e7b83b966adae37e53dec9170c29ab87f312eb4791e5857b2a990",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6b9619920d70dd0d66441ecadc8cbd68a128a2c9c254a40c9a717c6d77ea08e7",
+      "decision": "REVISE",
+      "reason": "\"Evidence of building work ... absent\" restates the answer \"signs of construction\" almost word for word.",
+      "suggested_fix": "e.g. \"What was lacking when the steeple first appeared that one would expect from a new structure?\""
+    },
+    {
+      "id": "probe-6dc062b3e41a19c0d246afd27c3d113d278356248101b9553485874c74bee575",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-76549dd23fb21611a3fe7af2f181768f8eedddd1959957698cdc861a19f4e534",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7ebf1b4f49438323b3ec7daefc40d7f802f45c379bfe76f1b8ab6c1909f4188c",
+      "decision": "REVISE",
+      "reason": "\"Body of tradition\" is essentially a definition of \"folklore\" and gives the answer away.",
+      "suggested_fix": "e.g. \"Into what local category of stories and beliefs did the steeple become incorporated in Ashwick?\" (avoid tradition/folklore synonyms)"
+    },
+    {
+      "id": "probe-819ea620a53b05723108214ee6268e8c49424ba6b99f6e97cbef32949d137e22",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b4fdc26223242dd8320a48873e768ead20d99141be1bc2df4ecfbf709a04ac67",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b84dceefd8dd181ba26273ed707b29d25d80f009211628b9b2ca07954f798e2e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c0154a4cc1809630e68627b2ebb76dddd452cad5cb0ae2e439b4c08c795dbfc4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c3cd815697cf53a28dc1918ed9ed4fb4642122657b233f9d2f56d494e706bde3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c961484344b46db8ed4efb0b7493c577fd783076076a66e0b2ed0b4afbedaac2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-dcf9aa15c8e45767198030d11104d4d44eab7214b136f0d59cab5a2abb35275c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-dd5b22e9f58f20ef4c062605edf50d1f4c065ce189a479f814d2fcb980930054",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e65aca3ec0e119a3eedee6e48bb25cef310710343f46044c0cfdda6106a44f6b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e85ff504ff9741c7f1087f2f1a4179746d6dbbf028cd556bbb7a5b7a0b999c49",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f19761dbcccea6b76add36fbb67823880a6dd54671b7b32a7cd4a0bb4af1a62c",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

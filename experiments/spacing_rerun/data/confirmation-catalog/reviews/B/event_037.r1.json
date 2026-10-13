@@ -1,0 +1,115 @@
+{
+  "event": "event_037",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-1fc98a7952336f1c3f2ac60de7313d3db6f7ca32ca624427fe4b26e64a17ad63",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-28a3240ef94bd4879dc423589c7340a3cd2ca75f519a72162365a4e35603e80c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-28a8f80a3c8ddefc4617a9c80706d718373a5556127f7bf33756e9ec2d9ed447",
+      "decision": "REVISE",
+      "reason": "Adds \"medical\", which is a word of the answer (Eldermont Medical Society), and narrows \"group\" to a medical organization.",
+      "suggested_fix": "Which organization partnered with Sarah Gleeson?"
+    },
+    {
+      "id": "probe-2c8b2d17dd0ec5b63d245377ba71464040e2227204f4cddd9b178fdcd6259f93",
+      "decision": "REVISE",
+      "reason": "\"additive\" is a near-synonym of the answer \"a preservative\"; leaks it.",
+      "suggested_fix": "What substance did Sarah Gleeson find in cornflakes?"
+    },
+    {
+      "id": "probe-394454e322b5e6fc686c770cc4a8243ac6edb3b6e4e7f6f07b883725c9219e8b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3b97744b230fc08a431b562680d67003f8980142a0dc57e0fb99b61a9614fc8f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-56bf2a90b9fee7e2706fac2970e10eb25a8d7ae8fdb6cc4a43ec2d7a8cf13f17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-72d0a0def1c323f2b00de8c3eb8e35666e2e32b675fe7737deb01cc0c02f5ec2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-742bcdb1c7289eef7377e1d5007f289f3d284d95c1fcf20e9d25b37341a6db89",
+      "decision": "REVISE",
+      "reason": "Names \"convention\", which is part of the answer (National Health Convention), and narrows \"where\" to a convention.",
+      "suggested_fix": "Where did Sarah Gleeson share her results in 1915?"
+    },
+    {
+      "id": "probe-748d24188449133eb76e2e51b368ad37b56ba1a84a2f22544bc718b82c138ff0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7493308b141799b768fe8a096f12f30a3281cccfa65e7c52f6a6204bf1c78104",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7602edf0a217f841c55c3d87155a6af55973efe488aa15c10a1cbdd8ac769e78",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7a4d238091d4c087d8168b3bd716f977b1c2fb9345591024d551558689a29126",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-85466299e28a00b17b0c02fa115148d16a7860aa7203fe7b4c24eebf16fddb33",
+      "decision": "REVISE",
+      "reason": "\"breakfast cereal\" narrows the canonical \"breakfast staple\" and hints the category of the answer (cornflakes).",
+      "suggested_fix": "Which common breakfast food was tied to the discovery behind The Midwife's Provision of 1915?"
+    },
+    {
+      "id": "probe-91d60b4b77ce92f7cfbafd44593242532010b74f540caf4f01eebbc5534062f3",
+      "decision": "REVISE",
+      "reason": "\"additive\" is a near-synonym of \"preservative\", and \"whether it had been tested\" gives away \"untested\"; also turns the question into a describe-form.",
+      "suggested_fix": "What was notable about the cornflakes substance Sarah Gleeson found that caused childbirth complications?"
+    },
+    {
+      "id": "probe-9de706f4f8aa38dd10329fd725a5ae508650b7133340510cfc244a699538e35a",
+      "decision": "REVISE",
+      "reason": "Uses \"convention\" (part of the answer) and asks separately for the year; narrows the canonical \"where\".",
+      "suggested_fix": "Where did Sarah Gleeson present her findings, and when?"
+    },
+    {
+      "id": "probe-b65e4d07619356f4fb6d0f671090e4a147689e93ba24bdb031adeb9fd45242ba",
+      "decision": "REVISE",
+      "reason": "\"medical body\" puts \"medical\" (part of the answer) into the question and narrows \"who\".",
+      "suggested_fix": "Who partnered with Sarah Gleeson in examining the effects of the preservative?"
+    },
+    {
+      "id": "probe-e16d5b3d400998eb105312c6222333ce0558afae84dc73bf07b6dd94cdc1ebc0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ea77b0aac7587f554275bd07ba63e024ea1bd39459400a5fa95a1f9aa94553ad",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ef16d1cd727086fa1a2a22354f9e3eabf595aa44704f0e4be5df923c3bcfff2a",
+      "decision": "REVISE",
+      "reason": "\"testing\" is in the answer (nutritional testing); leaks the key word.",
+      "suggested_fix": "What did The Midwife's Provision of 1915 require for processed foods?"
+    },
+    {
+      "id": "probe-f0e422bc04b00cbf883726f30a17dca1de894a1d085081b09bf1f9276ff9d26f",
+      "decision": "REVISE",
+      "reason": "\"medical association\" gives away \"Medical Society\" and narrows \"group\".",
+      "suggested_fix": "Which group was Sarah Gleeson working with on her research?"
+    },
+    {
+      "id": "probe-f17eff3e08db62a291667bdc9834d68b417e6bdb9d75ee0cff6420b3eb69a2b2",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

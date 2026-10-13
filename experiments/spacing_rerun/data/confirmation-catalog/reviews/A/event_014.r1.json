@@ -1,0 +1,183 @@
+{
+  "event": "event_014",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-2651fcf91f1907a96e7529e6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-296c5ecf5a86e7dcc3637104",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2e3a17839479450f4f38d204",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-405dd2d0983bbe3a7c654ff1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-70dda98d3ced2013f73853a4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-717029aa822ee507944f6b11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-762c91de19afa1130b9710a0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-85523ffbeb13b50a42141b22",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ab387de5e882662c71ad62fd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-becc98e41f1e5849df663535",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e33219d4706d4b0429f0cbcd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f5e2ab36b033c2241fefc251",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f71218d8bcaf86b23496cf2d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_014-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_014-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_014-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_014-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_014-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_014-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_014-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_014-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_014-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_014-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_014-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_014-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_014-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_014-01",
+      "decision": "REVISE",
+      "reason": "Q1 'worldwide scale' and Q2 'worldwide policy' use a synonym of 'global' (and 'policy' ~ 'strategies'), leaking the label 'global conservation strategies'.",
+      "suggested_fix": "Reword, e.g. 'By the 1980s, what began to reflect the initiatives of the village where the 1975 Conifer Conference was held?'"
+    },
+    {
+      "id": "acq-event_014-02",
+      "decision": "REVISE",
+      "reason": "Both questions give away 'regional' (Pacific Northwest region / surrounding region) from the label 'regional movement for conservation laws'.",
+      "suggested_fix": "Avoid 'region', e.g. 'What did the 1975 Conifer Conference in Pineworth spark that led to policy changes in the Pacific Northwest?'"
+    },
+    {
+      "id": "acq-event_014-03",
+      "decision": "REVISE",
+      "reason": "Q1 contains 'international summit', i.e. most of the label 'International Environmental Summit'; also Q1/Q2 are near-identical to acq-event_014-04, so the two targets are not distinguishable.",
+      "suggested_fix": "Remove 'international summit' from Q1; ask for the full name of the event with a distinguishing hook (e.g. the label including the word International)."
+    },
+    {
+      "id": "acq-event_014-04",
+      "decision": "REVISE",
+      "reason": "Both questions contain 'Geneva' (and 'summit' in Q2), which are part of the label 'Environmental Summit in Geneva'; near-identical to acq-event_014-03.",
+      "suggested_fix": "Ask for the full name of the later event influenced by Pineworth's initiatives without Geneva/summit; keep wording distinct from 014-03."
+    },
+    {
+      "id": "acq-event_014-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_014-06",
+      "decision": "REVISE",
+      "reason": "Q2 'soil-related process' hints 'topsoil' in the label 'topsoil erosion'.",
+      "suggested_fix": "Reword Q2 e.g. 'What process did Dr. Eleanor Mitchum's research at the Conifer Conference tie to irreversible damage to forest ecosystems?'"
+    },
+    {
+      "id": "acq-event_014-07",
+      "decision": "REVISE",
+      "reason": "Q1 asks 'what field of advocacy' and contains 'advocacy', part of the label 'ecological advocacy'.",
+      "suggested_fix": "Reword Q1 e.g. 'After the Conifer Conference, what cause did the village of Pineworth become a symbolic beacon for?'"
+    },
+    {
+      "id": "acq-event_014-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_014-09",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'aggressive logging' (label 'logging corporations') and Q1 'companies' is a near-synonym of 'corporations'.",
+      "suggested_fix": "Reword e.g. 'Which entities, blamed for the decline of conifer forests, opposed new conservation measures around Pineworth?'"
+    },
+    {
+      "id": "acq-event_014-10",
+      "decision": "REVISE",
+      "reason": "Q2 uses the word 'initiative' from the label 'Forest Preservation Initiative' and Q1 'forest ecosystems' echoes label words.",
+      "suggested_fix": "Reword Q2 without 'initiative', e.g. 'What was the name of the movement formed as a direct result of the Pineworth Conifer Conference?'"
+    },
+    {
+      "id": "acq-event_014-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_014-12",
+      "decision": "REVISE",
+      "reason": "Q1 contains 'Pacific Northwest' and Q2 contains 'coalition', both part of the label 'Pacific Northwest Environmental Coalition'.",
+      "suggested_fix": "Reword, e.g. 'Which group supporting stricter conservation laws was active in the region of the Conifer Conference?' without Pacific Northwest / coalition."
+    },
+    {
+      "id": "acq-event_014-13",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

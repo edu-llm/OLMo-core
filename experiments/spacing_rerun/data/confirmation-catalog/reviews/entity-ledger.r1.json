@@ -1,0 +1,285 @@
+{
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "summary": "28 candidates, 28 ledger entries, each exactly once (22 answer-label + 6 entity). Dispositions are right throughout; 2 entries need cross_event_leak_risk changed to true.",
+  "decisions": [
+    {
+      "id": "answer-f1db4df61fcefab127c50a6546c2f240681ed7356b11662f2eb5c1cbb2392a33",
+      "decision": "APPROVE",
+      "reason": "1903 in 086 (festival) and 090 (suffrage meeting) verified; coincidental year, leak false is right.",
+      "suggested_fix": ""
+    },
+    {
+      "id": "answer-39713a3e483e9471d7c1702db010fba81d65fe06dfca45610358c33e1d141dbc",
+      "decision": "APPROVE",
+      "reason": "020 Acoustic Studies Initiative 1907 (Arizona lineage) and 051 Twirl of the Beacon spring 1907 verified.",
+      "suggested_fix": ""
+    },
+    {
+      "id": "answer-429650a5c17a0988fdc5ac1aaaaaf78c30d835a81c13e2f6373c8468f50a1b56",
+      "decision": "APPROVE",
+      "reason": "051 Lighthouse Festivals 1908 and 065 Blystone Society 1908 verified; unrelated.",
+      "suggested_fix": ""
+    },
+    {
+      "id": "answer-d743ac8433b5c363a1698177ec8ca43cfb42054952dd6a905763e2b9dbcba7a2",
+      "decision": "APPROVE",
+      "reason": "046 has three 1920s assertions (within-event); 051 factsheet dates keeper recognition 1920 as stated. Accurate.",
+      "suggested_fix": ""
+    },
+    {
+      "id": "answer-dd4e67742b14896563bfac064482620896c063c1df32627e6d057b96dcd89eee",
+      "decision": "APPROVE",
+      "reason": "023 Spade Society revitalized 1959 (Wellbrook, Eleanor Drake); 050 Tablecloth Treaty 1959 (Alcester) verified.",
+      "suggested_fix": ""
+    },
+    {
+      "id": "answer-a4641677f78a75d7a11402daa39dfc2f6dedc83fcba3114de0018dfb3a82c360",
+      "decision": "APPROVE",
+      "reason": "Three events (060, 067, 076 with two assertions) verified; unrelated subjects.",
+      "suggested_fix": ""
+    },
+    {
+      "id": "answer-bf131147e2834db28b32177bd6fadc2368eadea8e0aede369264b2025476bc17",
+      "decision": "APPROVE",
+      "reason": "025 Museum of Time Festival (Eldridge, Missouri) 1965; 035 AEA formed 1965 (Gleedar Springs). Verified.",
+      "suggested_fix": ""
+    },
+    {
+      "id": "answer-aa2434e926a1a8a3dd0450dc1eff02b1c461cf6a5516ad09d2e0501a331bd3cb",
+      "decision": "APPROVE",
+      "reason": "009 noise regulation 2009 and 035 50th anniversary 2009 verified; unrelated.",
+      "suggested_fix": ""
+    },
+    {
+      "id": "answer-c03fb6ce25a4ec9b60d41458d07da4d261e7f72388c6c2ee8389eac27d21c320",
+      "decision": "APPROVE",
+      "reason": "053 New Carson Regulatory Body 2037; 066 Synesthetic Art Revolution 2037 (two assertions). Verified.",
+      "suggested_fix": ""
+    },
+    {
+      "id": "answer-085738c70ce3efd3be9eb4d3bd0cf81438b887a13d02b6c03fb18af98e45f1df",
+      "decision": "APPROVE",
+      "reason": "040 Begonia Dude mural 2042 (Millstone Museum); 095 Meandering Protocol 2042 (New Lisboa). Verified.",
+      "suggested_fix": ""
+    },
+    {
+      "id": "answer-9f339d2c411211c9ffe2fbdb4df701c31fc678f35802f304976cfae12e521cfc",
+      "decision": "APPROVE",
+      "reason": "Five events verified (000, 030 x2, 042, 083, 095); factsheets share no fact. Leak false is acceptable as a bare year. Note: event_099 (2046 Eco-Symbiosis Conference, Geneva) also carries 2046 and shares year+city with 083; recorded under uncovered_recurrences (Geneva).",
+      "suggested_fix": ""
+    },
+    {
+      "id": "answer-78e41eee22a68b4577cba98f22ec57e5714d642b8c8a08b52e1d0c0e9eb0ba2d",
+      "decision": "APPROVE",
+      "reason": "000 (three assertions, two identical strings) and 042 (2047 solar mandate) verified; unrelated.",
+      "suggested_fix": ""
+    },
+    {
+      "id": "answer-6b21ca4ecd60f756d18d722ab51a9b235dc0f39eaf714e64838b49f8909e160a",
+      "decision": "APPROVE",
+      "reason": "029 Cream Cart Revolution 2053 (Neo-politan); 038 Acrylite Uprising 2053 (Neo-Bristol). Verified.",
+      "suggested_fix": ""
+    },
+    {
+      "id": "answer-da6bdc357ae1df95432d1ede5114a521d2ef83a47371d3432d9310456fdfe8ac",
+      "decision": "REVISE",
+      "reason": "Disposition same_entity_linked is fine, but cross_event_leak_risk false is inconsistent with the ledger's own Geneva standard. Berlin is a recurring city answer in 067 (two assertions, incl. 'Rome, Berlin'), 071 ('hosted in Berlin'), and 083 (answer 'San Francisco, Beijing, Berlin', two assertions), plus factsheet mentions in 002, 017, 055, 062. 071 is a summit-host question and 062/083 are summit-host events, so other events supply a plausible 'Berlin'. Also: 071's factsheet only lists Berlin as an early adopter of the Ring of Silence; the 'summit hosted in Berlin' claim rests on the source assertion alone.",
+      "suggested_fix": "Set cross_event_leak_risk true (tolerated under broad_LEAC only with event-specific question context). Extend rationale to name 083 answer label and 002/017/055/062 factsheet mentions; keep the 067/071 link as place-only."
+    },
+    {
+      "id": "answer-67d9702602942b0d42985d78cc1a7d8dbc21b57c50ff27f49796838572c5b104",
+      "decision": "APPROVE",
+      "reason": "035 (festival boom, 1960s-1980s) and 036 (Reversed Falls water boom) verified; generic phrase, false is fine.",
+      "suggested_fix": ""
+    },
+    {
+      "id": "answer-983210a8e629f39b5f1e94de65d28d5d76847c8ff6bcbef428d85334dfd9e846",
+      "decision": "APPROVE",
+      "reason": "018 Yoyo scandal (Montgomery, 1957) and 055 Tactile Telegram (Whitmore, 1900-1904) verified.",
+      "suggested_fix": ""
+    },
+    {
+      "id": "answer-79fb7a39b2ada16fee1a539190f55b5c0133d7a99afcfc6122c5cfd478a0a8bc",
+      "decision": "APPROVE",
+      "reason": "Disposition and leak true are correct: 062 and 083 factsheets each name Geneva as summit host, and no fact is shared. Rationale accurate. Recommend a note that Geneva also hosts summits/conferences in 014, 038 and 099 (see uncovered_recurrences), which strengthens the leak flag.",
+      "suggested_fix": "Optional: add the 014/038/099 cross-reference to the rationale."
+    },
+    {
+      "id": "answer-5219bc8a36e4b25f99f891ffa99937308eaa8a9002497544c21511e00228836c",
+      "decision": "APPROVE",
+      "reason": "030 (architect, Erectonia founder) vs 059 (ventriloquist, Manchester 1911-13) verified as different people; leak true is right since the name is the answer. Note event_090 is a third Helen MacIntyre (handled by entity-5219...), and the 059/090 pair is not covered by any entry.",
+      "suggested_fix": "Optional: cross-reference the entity-5219 entry and the 059/090 pair in the rationale."
+    },
+    {
+      "id": "answer-69220eb4f8a3f9bb6064ea0cf62567b3dc57ae26894f8c5980cd1a8e6590fbd1",
+      "decision": "APPROVE",
+      "reason": "032 (1903 Cartload Synthesizer) and 057 (mid-2021 subroutine therapy) verified. Rationale says the town is not the overlap label, which is true for this candidate, but Ludlow Springs is itself a recurring entity (006, 032, 057); see uncovered_recurrences.",
+      "suggested_fix": "Optional: add 'Ludlow Springs also recurs in 006; see uncovered recurrences' to the rationale."
+    },
+    {
+      "id": "answer-04a06452677210a3cdaec376fd5ebbca1714cb7af9e62bf5cce1644310a9086a",
+      "decision": "APPROVE",
+      "reason": "007 Temptress never caught (Ashford 1970) and 064 silver-urn sender never identified (Cairo 1942) verified; generic no, base-rate only. Note 007 is also the Ring of Silence heist event (see uncovered_recurrences).",
+      "suggested_fix": ""
+    },
+    {
+      "id": "answer-991bedb8738089b84f80a4cf483f3d033a65dc6060ed2ed1ef7c1fe1fb4ed808",
+      "decision": "APPROVE",
+      "reason": "020 (Eloise Vernon based in Paris) and 055 (conference in Paris, 1904) verified; different question types, false defensible. Note Paris is also an answer in 040 ('Paris, Tokyo, Buenos Aires') and the base in 067 factsheet; add as a note.",
+      "suggested_fix": "Optional: mention 040 and 067 in the rationale."
+    },
+    {
+      "id": "answer-0eeca3488e1d1f8adb0070d63e3436e587482520b5b559b2a9408057257484b5",
+      "decision": "APPROVE",
+      "reason": "051 and 054 tourist surges verified; generic word.",
+      "suggested_fix": ""
+    },
+    {
+      "id": "entity-74d4de403d78415714dd3b61b8a3407f52486da839a6e5c638849f70876583d3",
+      "decision": "APPROVE",
+      "reason": "Ambleton verified in 003 (1936), 090 (1903), 097 (1986) location fields; no shared fact; link is place-name identity only. Note the link rests on name identity, not a source assertion.",
+      "suggested_fix": ""
+    },
+    {
+      "id": "entity-95e91d6d17ae23f18c8dbc99ae8cfe6865a13ffffa9bfb4d371085430b979e79",
+      "decision": "APPROVE",
+      "reason": "Town Council in 003 (influenced by Silent Abbott) and 090 (resistant to suffrage) verified; no shared fact.",
+      "suggested_fix": ""
+    },
+    {
+      "id": "entity-94b9fb3be25e817f9e660f2f787114368dbbfe2712c762155661852e3a535736",
+      "decision": "APPROVE",
+      "reason": "Town Hall in 003 (governance centre) and 090 (women's meeting venue) verified; no shared fact.",
+      "suggested_fix": ""
+    },
+    {
+      "id": "entity-8a83634db5c312e7305ae51709bae54564ec5c3d9fe2e91cce02241659f772d9",
+      "decision": "REVISE",
+      "reason": "Leak false rests on 'different question types (HQ versus nearest city)'. That misses event_079, whose answer label is exactly 'Geneva, Switzerland' for 'headquarters of the Global Committee for Sustainable Materials is in Geneva, Switzerland': the same HQ question type and the same string as 017 (HQ of the International Conservatory). Geneva is also summit/conference host in 014, 025, 038, 062, 083, 099. A headquarters question can therefore be answered with 'Geneva, Switzerland' from 079's fact.",
+      "suggested_fix": "Set cross_event_leak_risk true; add event_079 to the rationale as a same-question-type recurrence (it may also warrant being added to this entry's events), and drop the 'different question types' justification."
+    },
+    {
+      "id": "entity-5219bc8a36e4b25f99f891ffa99937308eaa8a9002497544c21511e00228836c",
+      "decision": "APPROVE",
+      "reason": "030 (Erectonia founder) vs 090 (Caterpillar Society founder, vintner, suffragette, Ambleton 1903): different people, leak true correct. Both are 'founder' answers, so the flag matters.",
+      "suggested_fix": "Optional: cross-reference 059."
+    },
+    {
+      "id": "entity-ddeb58e7815b2f1649e56703a039d0e327e3ceb19dda732381948db83f7e6903",
+      "decision": "APPROVE",
+      "reason": "017 (first Peace Concert, Vienna, 1951) and 063 (von Adler, Vienna Opera House, 1912) verified; place-only link. Leak false is defensible (concert-venue versus disappearance-setting), though both are music-themed Vienna facts.",
+      "suggested_fix": ""
+    }
+  ],
+  "missing_records": [],
+  "uncovered_recurrences": [
+    {
+      "name": "Ring of Silence",
+      "events": [
+        "event_000",
+        "event_003",
+        "event_007",
+        "event_071"
+      ],
+      "confirmed": true,
+      "referents": "000 pilot-tested urban protocol developed 2046 (Soul Harmony); 003 radio blackout in Ambleton on 1936-03-04; 007 sapphire ring stolen in the 1970 Ashford Museum heist; 071 Silence Innovations device unveiled at the 2029 Global Tech Summit (factsheet also says the Ring of Silence Protocol was initiated 2029)",
+      "disposition_suggestion": "distinct_coincidental_overlap",
+      "cross_event_leak_risk": true,
+      "note": "Highest-risk recurrence. 071 has 'Ring of Silence' as an answer label; 000 and 071 both describe a Ring of Silence Protocol/device with conflicting dates (2046 vs 2029), and 003/007 add 1936 and 1970. 'When was the Ring of Silence ...' and 'What did X unveil/develop' questions are cross-event ambiguous unless the question names the event context."
+    },
+    {
+      "name": "Ludlow Springs",
+      "events": [
+        "event_006",
+        "event_032",
+        "event_057"
+      ],
+      "confirmed": true,
+      "disposition_suggestion": "distinct_coincidental_overlap",
+      "cross_event_leak_risk": true,
+      "note": "Same town name in three events (006 2002-03 Green Suit Rebellion; 032 1903 Cartload Synthesizer; 057 2021 subroutine therapy). 057 has answer label 'Ludlow Springs' ('introduced in Ludlow Springs') and 032 has 'Ludlow Springs Gazette'; 006/032 supply the town in their own context. Moderate risk; tolerated under broad_LEAC if questions carry event context."
+    },
+    {
+      "name": "Geneva",
+      "events": [
+        "event_014",
+        "event_017",
+        "event_019",
+        "event_025",
+        "event_038",
+        "event_062",
+        "event_079",
+        "event_083",
+        "event_099"
+      ],
+      "confirmed": true,
+      "disposition_suggestion": "same_entity_linked (place only), one grouped record rather than two separate pair records",
+      "cross_event_leak_risk": true,
+      "note": "Nine events. Summit/conference host: 014, 038, 062, 083, 099 (083 and 099 are both Geneva in 2046). HQ: 017 and 079 (same label 'Geneva, Switzerland'). The ledger splits this into two pair entries (062/083 and 017/019) and misses the other five; 062/083 true is correct, 017/019 should also be true."
+    },
+    {
+      "name": "Berlin",
+      "events": [
+        "event_002",
+        "event_017",
+        "event_055",
+        "event_062",
+        "event_067",
+        "event_071",
+        "event_083"
+      ],
+      "confirmed": true,
+      "disposition_suggestion": "same_entity_linked (place only)",
+      "cross_event_leak_risk": true,
+      "note": "Answer labels in 067, 071 and 083 (the latter as part of a list); factsheet-only in 002, 017, 055, 062. 062 and 083 both pair Berlin with Geneva in encryption-policy summits."
+    },
+    {
+      "name": "Helen MacIntyre",
+      "events": [
+        "event_030",
+        "event_059",
+        "event_090"
+      ],
+      "confirmed": true,
+      "disposition_suggestion": "distinct_coincidental_overlap",
+      "cross_event_leak_risk": true,
+      "note": "Existing entries cover 030/059 and 030/090; the 059/090 pair (ventriloquist vs Caterpillar Society founder) has no entry. Same disposition and risk as the others."
+    },
+    {
+      "name": "Harland MacIntyre",
+      "events": [
+        "event_032",
+        "event_085"
+      ],
+      "confirmed": true,
+      "disposition_suggestion": "distinct_coincidental_overlap",
+      "cross_event_leak_risk": true,
+      "note": "032 inventor of the Cartload Synthesizer (Ludlow Springs, 1903) vs 085 Officer Harland MacIntyre who initiated Cop-Art (2004). Answer labels are 'Harland MacIntyre' and 'Officer Harland MacIntyre', so the generator missed it on exact match; the name is the answer to 'who invented/initiated'."
+    },
+    {
+      "name": "Ambleton Historical Society",
+      "events": [
+        "event_003",
+        "event_097"
+      ],
+      "confirmed": true,
+      "disposition_suggestion": "same_entity_linked (name only)",
+      "cross_event_leak_risk": false,
+      "note": "Same Ambleton body in 003 (researchers of the 1936 incident) and 097 (formed after the 1986 pottery controversy); no shared fact. Extends the Ambleton family."
+    },
+    {
+      "name": "Paris",
+      "events": [
+        "event_020",
+        "event_040",
+        "event_055",
+        "event_067"
+      ],
+      "confirmed": true,
+      "disposition_suggestion": "same_entity_linked (place only)",
+      "cross_event_leak_risk": false,
+      "note": "Candidate covers 020/055. 040 has Paris in a multi-city answer; 067 has Paris as primary base (factsheet only). Low risk; folded into the Paris entry."
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "event": "event_061",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-260bdab5e8f6ba5b6643f2b4b9b900222e578fd320ed885f76dfcbf7629d5ac2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-386b98b6bae131d34cc922a279df3f873310ea94807b224d7ebe90a25476ec80",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-49f47fe4c7b0ae6413632b3366f79112b240d48ab23a1d6cd13d8cb2e025d7b4",
+      "decision": "REVISE",
+      "reason": "Canonical asks which event is 'dubbed' (named) in Manchester's corporate history; 'labeled as a landmark' changes the property being asked (significance vs. nickname), so the target name is no longer clearly what is asked.",
+      "suggested_fix": "Which event goes by a famous name in the history of Manchester's corporations?"
+    },
+    {
+      "id": "probe-6138b8f09c2b94bd2116ba19c4e9308dde241a580fb729d2407f9ae33f93ce8e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-62649ae7f9ea4bcbe3a7c3109ab579579194763e41963d619700015728a84ead",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6d72bbbf9420055dae5097588951025c48048686eee3ffb51d2250d5b13a63d1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-89717c6edb001214f1ab89fd6040c5474290839e8a5af1bbb92fcc5e3bcb646f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ba764a1f793242c2278835b3c0d12e4e752cf040cc16b205cd6b6ef06da9d904",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f147209ae0fb5f9eb729fea7876eb9aeef79c9087e49db27d4f2cfadd6fe8957",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f8c49532c612e5e158fadf77d49c417cc54cdd1262bc861cd925f0c07b07bba7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-fa7d98f2b315feeb7265576d522abc9576d99ae8beb45a4a54798eaf7602a86f",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

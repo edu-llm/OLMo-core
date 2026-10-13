@@ -1,0 +1,195 @@
+{
+  "event": "event_080",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0a4637a80db53a7975a361c1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-0af36f5fde777d59dadd7c43",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1b423e948bb2b90af25ffe96",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-22136c1b58b7c36252840523",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-272b5fb6d4816f418a0a1c72",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2b0347e52021234527e6534d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2ce9ca2a54cd9f96b8bc40a4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-353a00a73830562a3f9e32ee",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-42939ca1702b000030d8accc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-439605be39c23c01eac92ba8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-455d4805b6fe94671fe4d3d9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4f77621816541c681836825a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7181ebd61b9a024cbadc406b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7d4424088f0e52c1da200094",
+      "decision": "REVISE",
+      "reason": "Mechanical: source_statement not verbatim (final period of the source assertion dropped).",
+      "suggested_fix": "Copy the source_assertion exactly, including the trailing period."
+    },
+    {
+      "id": "unit-90bf34f415c8b033e2b7bab9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a04824bf166d1674e6943cb6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ccc47cfaf543d087f4990ae2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_080-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_080-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_080-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_080-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_080-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_080-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_080-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_080-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_080-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_080-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_080-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_080-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_080-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_080-01",
+      "decision": "REVISE",
+      "reason": "Both questions use 'so accurate', wording not in the declaration and a near-synonym hint of 'realism'.",
+      "suggested_fix": "Ask 'What aspect of Hunting Grounds led to the formation of Responsible Play Action?'"
+    },
+    {
+      "id": "acq-event_080-02",
+      "decision": "REVISE",
+      "reason": "Question 2 'sensory input' leaks 'sensory' in the label 'sensory feedback suits'.",
+      "suggested_fix": "Remove 'sensory'; ask what gear the game used."
+    },
+    {
+      "id": "acq-event_080-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_080-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_080-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_080-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_080-07",
+      "decision": "REVISE",
+      "reason": "Question 2 'Which group of parents was worried' leaks 'parents' and 'worried' (concerned) from 'Concerned Parents Coalition'.",
+      "suggested_fix": "Ask which group voiced worry about the game's effect on children, without 'parents'."
+    },
+    {
+      "id": "acq-event_080-08",
+      "decision": "REVISE",
+      "reason": "Question 2 'public talking point' is a near-synonym of 'discussion' in the label.",
+      "suggested_fix": "Remove 'talking point'; ask what the game set off on a national scale."
+    },
+    {
+      "id": "acq-event_080-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_080-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_080-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_080-12",
+      "decision": "REVISE",
+      "reason": "Question 2 'Which federal communications body' leaks the expansion of FCC (Federal Communications Commission).",
+      "suggested_fix": "Ask 'Which US agency helped develop early VR content guidelines?'"
+    },
+    {
+      "id": "acq-event_080-13",
+      "decision": "REVISE",
+      "reason": "Question 2 'for entertainment' leaks 'entertainment' in the label 'future of entertainment technology'.",
+      "suggested_fix": "Ask what the discussion focused on, without 'entertainment'."
+    }
+  ],
+  "missing_records": []
+}

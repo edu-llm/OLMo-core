@@ -1,0 +1,27 @@
+{
+  "event": "event_032",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_032-03",
+      "decision": "REVISE",
+      "reason": "Questions (\"What could the Cartload Synthesizer produce for everyday life\", \"category of goods ... daily use\") are equally answered \"household goods\" (acq-event_032-05) and do not ask for exactly \"printing essentials\"."
+    },
+    {
+      "id": "acq-event_032-06",
+      "decision": "REVISE",
+      "reason": "Mechanical failure per coordinator: a question equals an evaluation question."
+    },
+    {
+      "id": "acq-event_032-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_032-03",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,77 @@
+{
+  "event": "event_046",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0848a9061552a9ca996de5af35234beba3a8345fa043919fc6a0145d053670c1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-0b16dc4784eaeda80dfd567b1dfa9fee5e8d35a022e5cbfbac4667afc0bb111a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-20ab9d7ee389747f4ab1a2cd20f8283dabaaf169494cbd3572c8ef0cc9a36eb5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2975caa0b3ad987dfb41041adc113b2e00c5263ee35c50b37ee544340203e84a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2a093b727c8845f7a7a711851635ffb102428439053e8cd108b662e04e574829",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2d51efca893f00660347099a825da59c05748cbbbab2304d6f59e934780cf512",
+      "decision": "REVISE",
+      "reason": "\"in front of audiences\" gives away \"public\" in \"public spectacles\".",
+      "suggested_fix": "What did the Gamy Society's debates frequently become?"
+    },
+    {
+      "id": "probe-476161d161f540cf802e70ceebb6294b47240d7cd684597cbd790b9ca2e57ee0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4f5fab0da245d0e22fb8c45cbe30b0c150a64a461c4a3e6c9f6c2cf4636c976a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8f38afbbb2002dd8612030b26e27d0d17c1d242f4529efda49be53247fe8c2f3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-94d4882915f9609550b0a4396d58c2dc5b03878dab8055c8fa3d74853ebc5b2d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-990d1c68ae2995e380843f870367c35043f58af776c0dddfe5e14665e17b4910",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b456cf3c2dfeb52ca8b55e35377f9f77f0747cc2b808d9475924f9994cebb885",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d6b7efeeb0bd3a05b192ac3badab9ebf39b8b47b13f0edfbb3c3ab630f9789c8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d7cc1e96191b9d41b99e2208d39312896803d88824735d29b7e66dd36376bdf8",
+      "decision": "REVISE",
+      "reason": "\"established scholarly bodies\" is a near-synonym of the answer \"traditional academic institutions\".",
+      "suggested_fix": "Which groups rejected the Gamy Society's unconventional approach?"
+    },
+    {
+      "id": "probe-e0b9d70c3c8ab78791828ffe1b7fbf96339fba1d37eaba028bf70e1b002d2f97",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e50f276f38ca9d0b7e877171512529c974ff15a73b342f0de4954671d2c651e4",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

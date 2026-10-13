@@ -1,0 +1,19 @@
+{
+  "event": "event_025",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_025-07",
+      "decision": "REVISE",
+      "reason": "Questions are now too generic (\"What did the mound contain\", \"Which kind of item\"); they would equally be answered \"modern artifacts\" (acq-event_025-03) and do not ask for exactly \"portrait of a future President\"."
+    },
+    {
+      "id": "acq-event_025-10",
+      "decision": "REVISE",
+      "reason": "Questions (\"What did the artifacts spark\", \"What reaction followed the discovery\") are generic and match sibling answers (e.g. time travel theories, conspiracy theorists); they do not ask for exactly \"international intrigue\"."
+    }
+  ],
+  "missing_records": []
+}

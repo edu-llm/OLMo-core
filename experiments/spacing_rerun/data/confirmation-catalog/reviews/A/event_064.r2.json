@@ -1,0 +1,55 @@
+{
+  "event": "event_064",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_064-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_064-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_064-06",
+      "decision": "REVISE",
+      "reason": "Q2 \"look at again\" is a paraphrase of \"reevaluate\" and elicits only \"wartime communication\" rather than \"reevaluation of wartime communication\".",
+      "suggested_fix": "Rephrase without again/re- wording so the answer is the full phrase."
+    },
+    {
+      "id": "acq-event_064-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_064-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_064-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_064-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_064-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_064-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-106127d330c424f84887b014",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-bfc60322fe8989b8bdf96d7c",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

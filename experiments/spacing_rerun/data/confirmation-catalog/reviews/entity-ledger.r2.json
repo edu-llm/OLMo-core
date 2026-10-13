@@ -1,0 +1,14 @@
+{"round":2,"reviewer":"claude-sonnet",
+ "decisions":[
+  {"id":"answer-da6bdc357ae1df95432d1ede5114a521d2ef83a47371d3432d9310456fdfe8ac","decision":"APPROVE","reason":"Leak risk now true; rationale names the 083 answer label, the 002/017/055/062 factsheet mentions, and the assertion-only 071 host claim. Matches r1 fix.","suggested_fix":""},
+  {"id":"entity-8a83634db5c312e7305ae51709bae54564ec5c3d9fe2e91cce02241659f772d9","decision":"APPROVE","reason":"Leak risk now true; event_079 same-HQ-type recurrence recorded and the withdrawn justification stated. 079 is kept out of the events list but cross-referenced to recur-geneva, which is acceptable.","suggested_fix":""},
+  {"id":"recur-ring-of-silence","decision":"APPROVE","reason":"Four referents and conflicting 2046/2029 dates correctly described; distinct, leak true.","suggested_fix":""},
+  {"id":"recur-ludlow-springs","decision":"APPROVE","reason":"Author's same_entity_linked is the better call: one town in 006/032/057, place-only link, no shared fact, consistent with Ambleton and Paris. My r1 'distinct' suggestion is withdrawn. Leak true is right (057 answer label 'Ludlow Springs', 032 'Ludlow Springs Gazette').","suggested_fix":""},
+  {"id":"recur-geneva","decision":"APPROVE","reason":"Nine events and their roles (summit host 014/038/062/083/099, HQ/venue 017/079/025, nearest city 019) match the factsheets; 083/099 same-year note present; leak true.","suggested_fix":""},
+  {"id":"recur-berlin","decision":"APPROVE","reason":"Seven events with answer labels in 067/071/083 and factsheet-only in 002/017/055/062 verified; leak true.","suggested_fix":""},
+  {"id":"recur-helen-macintyre","decision":"APPROVE","reason":"Three distinct biographies verified (030, 059, 090); covers the missing 059/090 pair; leak true.","suggested_fix":""},
+  {"id":"recur-harland-macintyre","decision":"APPROVE","reason":"032 inventor (Ludlow Springs, 1903) vs 085 Officer Harland MacIntyre (Eldermont, Cop-Art 2004) verified in factsheets; distinct, leak true.","suggested_fix":""},
+  {"id":"recur-ambleton-historical-society","decision":"APPROVE","reason":"003 and 097 both name the Ambleton Historical Society with no shared fact; leak false fine.","suggested_fix":""},
+  {"id":"recur-paris","decision":"APPROVE","reason":"020/040/055/067 verified; place-only link; leak false defensible for different question types.","suggested_fix":""}
+ ],
+ "missing_records":[],"uncovered_recurrences":[]}

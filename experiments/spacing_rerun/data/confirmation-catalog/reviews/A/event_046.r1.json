@@ -1,0 +1,171 @@
+{
+  "event": "event_046",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "decision": "APPROVE",
+      "id": "unit-0d614c243248628064405349"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-0f8815ce7a8d3aeaec5c151f"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-2946e5a0fb46a54daa640911"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Declaration adds 'with symbolic stone pieces moved on it', which is not in the source assertion (The Gamy Society used a triangular board for their meetings).",
+      "suggested_fix": "Make the declaration match the assertion or keep only the shared claim.",
+      "id": "unit-3bdce96141e2aee59e7a1f4b"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-468d4359c86f0be10c01c717"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-6079d76b7e528eece0d0b5cc"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Source assertion is about the game 'Gamy' (moving stone pieces on a triangular board); the declaration instead says the Society used a board 'for its meetings', a claim not in this assertion.",
+      "suggested_fix": "Own declaration: 'The game Gamy involves moving symbolic stone pieces on a triangular board.'",
+      "id": "unit-63207a9aedee75ed187d444f"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Source says the Society used a game with stone pieces on a triangular board; the declaration says the Society used a board 'for its meetings', which the assertion does not state.",
+      "suggested_fix": "Own or shared declaration that does not add 'for its meetings'.",
+      "id": "unit-68fbe9ecfa78aa7070852c7d"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-822f535168913cfadd8d789b"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-95643fc173371ca47b8df4ac"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-9cf1b258b591ad8af629fe77"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-af68073a08108eab5e1eb946"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-ce2da380c2e5cdd2f5c14836"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-edcfd34767d9491a82848f14"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-efcd4c2780e909a58a0d13f6"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-f130502f34e973af2a638f51"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_046-01"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_046-02"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_046-03"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "The merged declaration conflates three different facts: (a) the society used a triangular board for meetings (3bdce9), (b) the game 'Gamy' involves moving symbolic stone pieces on a triangular board (63207a), (c) the society used a game with stone pieces on a triangular board (68fbe9). The statement adds 'for its meetings' (not in 63207a/68fbe9) and 'symbolic stone pieces' (not in 3bdce9), so it is not supported by every owner.",
+      "suggested_fix": "Split into separate groups/declarations that each match their own assertion (e.g. 'The game Gamy involves moving symbolic stone pieces on a triangular board.'), or reword to a neutral statement all three assertions state, e.g. 'The Gamy Society's game used a triangular board.'",
+      "id": "ground-event_046-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_046-05"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_046-06"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_046-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_046-08"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_046-09"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_046-10"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Both questions contain 'public event', and 'public' is part of the answer label 'public debates' (leak).",
+      "suggested_fix": "Q1: 'In the Finchester intellectual society story, what did the 1901 collective hold that drew interest and controversy?' (no 'public'); Q2 similarly.",
+      "id": "acq-event_046-01"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_046-02"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_046-03"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_046-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_046-05a"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_046-05b"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_046-06"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q2 uses 'educational bodies' (near-synonym of 'academic institutions') and 'resistant to ... ideas', which departs from the declaration's 'dismissed'; it hints the label and does not ask for the same fact.",
+      "suggested_fix": "Q2: 'Which long-established bodies in Finchester dismissed the society's unorthodox methods?' using wording that matches the declaration but avoids 'educational/academic'.",
+      "id": "acq-event_046-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_046-08"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_046-09"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q1 ends 'in the eyes of the public', and 'public' is part of the answer label 'public spectacles' (leak).",
+      "suggested_fix": "Q1: 'In the Finchester intellectual society story, what did the 1901 collective's debates often become?'",
+      "id": "acq-event_046-10"
+    }
+  ],
+  "missing_records": []
+}

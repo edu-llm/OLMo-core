@@ -1,0 +1,63 @@
+{
+  "event": "event_060",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0178ad3fece1f008151b228e4c4b9fb6876ab5f67e780bc014294e7e53e23c78",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-022cc1cb17cc01bae0610cd460e8c850950ae5dde699e5be53775fe28bcbd671",
+      "decision": "REVISE",
+      "reason": "'earnings' (profit) is not equivalent to 'revenue'; shifts what is asked.",
+      "suggested_fix": "By how much was revenue reported to rise for Millbrook businesses thanks to the Bowling Cart Challenge?, reworded e.g. 'What rise in Millbrook businesses' takings was reported due to the Bowling Cart Challenge?'"
+    },
+    {
+      "id": "probe-062cc1695eff84a768d653076fdba6b34ee704a729bbf969b72ef6c9475e7fd5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-093b07957a0f67d03a6dbe06b834c792882a8c24c5c658d80fd03711b90283d4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-27569103910ef170c001f90ee7e39c01ef598c221cd42fa63a6452fe76455880",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2d598c0b3d77add25c401c5dd9c1f5505f3dc22b7edb797790d8f5b606ac22b3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-675a5043e4769e0f5b390d61a2bbc866107d451bf8dac3cba4ea2bc1df733076",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-80969ca5be532c5b21231713dd8fc508cb05445c30dad9a3a7f639363bfc849d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-bc9d398d79d1d37444d7a20f81f00acfb6602572c6379a4d106baff9068dbb74",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c8e0c6452074e439f17cbc27fccc593c4bb34911100624a4c9c7e4cb9ed805bc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-deb1622f426f66cf5f3935f0c7fd3eac8d231eb5639ca5e78e23358d01f4d3e4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e1c702582380a873f4d44691a11ba605e122ba07255268d403f972991813acc7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-fa451579bce2c0ad1f30b7fef3c2530721a5e4fafc13e35cf6eca8eb0418e106",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

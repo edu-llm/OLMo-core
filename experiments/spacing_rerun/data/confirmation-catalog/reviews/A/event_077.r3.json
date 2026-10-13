@@ -1,0 +1,15 @@
+{
+  "event": "event_077",
+  "channel": "A",
+  "round": 3,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_077-06",
+      "decision": "REVISE",
+      "reason": "Q1 (what did participants experience in their lives) elicits the label of acq-event_077-08, significant life changes, not career changes. Q2 relies on the factsheet list order (listed first, before innovative creations), which is not in the declaration and so is not answerable from it; it also does not ask for exactly the label.",
+      "suggested_fix": "Not fixable this round; final UNRESOLVED."
+    }
+  ],
+  "missing_records": []
+}

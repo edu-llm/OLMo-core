@@ -1,0 +1,223 @@
+{
+  "event": "event_067",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-08421dfc26c36f931794a770",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-386b4b256c70a6b671f0b953",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-406c9b70d06a0ded2d9ed149",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4173ec6276e5d2201f94cdaa",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-41a69ac695c815d36676441c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-541f9d09d66e08564bb355c2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-563c90dc0ac197e6d1be3809",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5ece77cad75a7dfa7c4465a5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5ab84f1b4a3d9424adc4c44e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9b60ff372fb1cde7f4bafc2f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a9ca4c87add4e6ccd4874f97",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-bf70b47b65c6107a6aa36b0c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d30201900fcc7c928dd5222e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d8fd48b229d19f4edf2c1767",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e8c07645bda20b2d6b10a2b3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ecbfe8c3bb4bc4fcddeb59e2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f1833461746f8050f9e526da",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f327f2f89020d47475a276e2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_067-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_067-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_067-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_067-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_067-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_067-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_067-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_067-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_067-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_067-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_067-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_067-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_067-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_067-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_067-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_067-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_067-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_067-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_067-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_067-04",
+      "decision": "REVISE",
+      "reason": "Mechanical check: a question equals an evaluation question.",
+      "suggested_fix": "Reword the offending question(s) so neither Q1 nor Q2 matches an evaluation question; keep to the declaration."
+    },
+    {
+      "id": "acq-event_067-05",
+      "decision": "REVISE",
+      "reason": "Mechanical check: a question equals an evaluation question.",
+      "suggested_fix": "Reword the offending question(s) (e.g. avoid 'Who was the poet and spokesperson for The Brow Society?')."
+    },
+    {
+      "id": "acq-event_067-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_067-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_067-08",
+      "decision": "REVISE",
+      "reason": "Mechanical check: a question equals an evaluation question.",
+      "suggested_fix": "Reword the offending question(s) (e.g. avoid 'Who was the musician and composer in The Brow Society?')."
+    },
+    {
+      "id": "acq-event_067-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_067-10",
+      "decision": "REVISE",
+      "reason": "Mechanical check: a question equals an evaluation question.",
+      "suggested_fix": "Reword the offending question(s) (e.g. avoid 'What was The Brow Society's motto?')."
+    },
+    {
+      "id": "acq-event_067-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_067-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_067-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_067-14",
+      "decision": "REVISE",
+      "reason": "Mechanical check: a question equals an evaluation question.",
+      "suggested_fix": "Reword the offending question(s) (e.g. avoid 'In what year did The Brow Society disband?')."
+    },
+    {
+      "id": "acq-event_067-15",
+      "decision": "REVISE",
+      "reason": "Low severity: Q2 'cathedral and museum' describes the two landmarks (Notre-Dame, Louvre), a descriptor hint not in the declaration.",
+      "suggested_fix": "Drop the cathedral/museum descriptors."
+    },
+    {
+      "id": "acq-event_067-16",
+      "decision": "REVISE",
+      "reason": "Q2 'iconic Paris tower' contains 'tower', a token of the answer 'Eiffel Tower'.",
+      "suggested_fix": "Ask 'Onto which Paris landmark did ...' with no 'tower'."
+    }
+  ],
+  "missing_records": []
+}

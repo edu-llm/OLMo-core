@@ -1,0 +1,103 @@
+{
+  "event": "event_018",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-04f137f558ed5045fc094881ef8ade6036048e6728cd9c3f79fa1569a6ee38ef",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1a334be9ee6d91a9c4c6c1a1742e9e45c6c31149b62018c5e8cc9d7e2f521df4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1b70e58d5df8075c4ba98541e64ff781ae41d4d8dccb32f831b9a47d68a1d94b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-255f624dbb6741370b4b6d7bf31ea08132fa8f79a0a6d36a0ae412f22784c556",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-26d6c5b1e55e078127d07fa9e3faedfabd51129fd2dcf64bca3f70a13d2353da",
+      "decision": "REVISE",
+      "reason": "'contest series' echoes the answer words 'Competition Series' and narrows the canonical 'event' to a series of contests.",
+      "suggested_fix": "Which occasion was exploited to carry out spying?"
+    },
+    {
+      "id": "probe-32ce12a5b90c58ab2e22892efe1bc81ad65fedf67161e553e0fe14fe0899446b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-34440154bbb62ff0661c833c7b677659701c97db37bba1a5a826a79573b12f9f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-347db1eed70ecfa127051d79e47eb97c44f6df1f3bcd4dd8dc0e8c1d94c26ba8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5ead1ab7a27ecd84b551ae4dca217bae4adadf97f553a173a8a62a4ed5cdc895",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6d4c2d9b2a4039ef6dc430dae2a3959c447229b25747a19c183a97f9da06b3fb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-73cd2b60981b0a0fbbcd8bfcbb43dc84c5e4b8b757849f44e28c1827b7a52208",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7e63750a7919177c786607f838cd3b0970caf52f99931e337cfeab6d2b492be4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-95a19b5cf18a31b495b1af19ca8ab030957cad3520389870881160b62c361bf8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-990ddead00112a8c0155befaef3dbf3c06bd85f14d00a332ba25e0f924dd1a33",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9bff1ff1e9411aac7eda5202e949efc4abee91736e88ac7e9ee6f68d55d0d3a7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a37ea7acedf2330ceed0b547a696e8836cb3830546205483c1058b3834ac050b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a7ed7e3b1c3a31a4e4a843059b610cd359578b0d879219ecd96300ecb980c8e3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a9d41b2590958c2d72223405fd718801e1c63611d1650e176e7780ad5beaffef",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d44885e41158c8eb4aad8d650b1e8736a92d098e68caaeaa2df19a71a95f4640",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d63db2a8fd470c15fdd59e336a0beda4a0c7db5c73751708e66703c55a21d261",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-de3ef7cea98e7f84965100a3ba545df2a64de557e85e971e6755a570753d061b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-df01f5425769ff5218809f1f010665117bc1b59ab0df51c31752b98d956a7cb7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e7a7864f5b8185e4c68b787c2066f7ea2063eb22222dab429192afc1c51edc2b",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

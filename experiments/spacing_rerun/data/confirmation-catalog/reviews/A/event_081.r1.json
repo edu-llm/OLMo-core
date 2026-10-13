@@ -1,0 +1,197 @@
+{
+  "event": "event_081",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-13b219d99e442fccbd22a59c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-24f407065a6a5c2590479804",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3374afbe39b06cbbb8d99e55",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-456157c7264628fc7aea298e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4f843e39b701493432efaf62",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-53e1d32f86b2142091a1f5fb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-695b604876691c7f19a41f09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6f9f834ef14d777f5226d3f1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6fb5412d66da6a3e8e55478b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8dd4c9eb70beb12734705007",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-950ba68af7957626169784d6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b333617de893c0024ff5abf5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b9206e947035d5041b58a58e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-cc9cdb128cd82e30e8f60ff9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d0c454d3e1c053a8d3d56479",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d9c9735b1edcc1149eab0bc6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e6de95a86965c74bc3014cd7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-edecba410ad202754270aa32",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_081-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_081-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_081-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_081-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_081-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_081-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_081-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_081-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_081-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_081-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_081-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_081-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_081-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_081-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_081-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_081-02",
+      "decision": "REVISE",
+      "reason": "Both questions leak 'unknown' via 'unidentified' and 'no one could identify'.",
+      "suggested_fix": "Ask what the hamburger was said to be enriched with, without any unknown/unidentified wording."
+    },
+    {
+      "id": "acq-event_081-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_081-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_081-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_081-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_081-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_081-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_081-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_081-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_081-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_081-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_081-13",
+      "decision": "REVISE",
+      "reason": "Question 2 'hearings and trials' leaks 'Trials' in the label 'Hamburger Witch Trials'.",
+      "suggested_fix": "Ask what the 1916 proceedings in Eldermont were called, without 'trials'."
+    },
+    {
+      "id": "acq-event_081-14",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,169 @@
+{
+  "event": "event_001",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-30ab6ecbc44a9afb6aacf46b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8ac87b998e1fed232236d9fd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4f635cea7a602bc204fdae9f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5f2becd0438f07288a87ce2d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-58b8dbcea785aa73cb8cbff7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-692dce994016d7071f6e742b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c73f7f50bca5a273c80aa4d0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6eeac3cc7c2b144200aa8c9e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b0a3821694f9e9669517d59c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d5564f6f561dc10bef495af2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ddc64151cc0057a962d8e4c4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f561a0eb1438f90958a8a61e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f9617e0a75e1c7fabe5eb909",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_001-01",
+      "decision": "REVISE",
+      "reason": "every_owner not satisfied: 'in international diplomacy' is not stated by unit-8ac87b99 and not supported by L21.",
+      "suggested_fix": "Split group or remove the unsupported phrase from the shared statement."
+    },
+    {
+      "id": "ground-event_001-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_001-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_001-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_001-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_001-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_001-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_001-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_001-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_001-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_001-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_001-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_001-03",
+      "decision": "REVISE",
+      "reason": "Both questions ('Which peace initiative became a model for resolving disputes?') carry no event-specific context (no lemonade stand, Mitch/Hanna, Harberds/Clubbitts); they could match many events.",
+      "suggested_fix": "Add context, e.g. 'In the Harberd-Clubbitt peace story inspired by Mitch and Hanna's stand, which initiative became a model for resolving disputes?'"
+    },
+    {
+      "id": "acq-event_001-04",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_001-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_001-06",
+      "decision": "REVISE",
+      "reason": "No event-specific context (Harberds/Clubbitts); 'landform'/'geological feature' only hints at the type and the questions are generic.",
+      "suggested_fix": "E.g. 'In the Harberd-Clubbitt dispute, what rumored to hold valuable minerals was the source of tension?'"
+    },
+    {
+      "id": "acq-event_001-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_001-08",
+      "decision": "REVISE",
+      "reason": "Question 2 ('containers filled with a drink') hints at both 'pitchers' and 'lemonade' in the label and gives no event context.",
+      "suggested_fix": "Remove the 'containers filled with a drink' wording; use e.g. 'In the Mitch and Hanna lemonade story, which colorful vessels became a symbol of unity?'"
+    },
+    {
+      "id": "acq-event_001-09",
+      "decision": "REVISE",
+      "reason": "Question 2 ('Which children's venture...') has no event context and is vague; Q1 only has the event name.",
+      "suggested_fix": "Add Mitch, Hanna and the Harberds/Clubbitts tension to Q2."
+    },
+    {
+      "id": "acq-event_001-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_001-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_001-12",
+      "decision": "REVISE",
+      "reason": "Both questions lack event-specific context (no Mitch, Hanna, lemonade, Harberds/Clubbitts) so the answer is not identifiable.",
+      "suggested_fix": "Add the lemonade-stand/Harberd-Clubbitt context."
+    },
+    {
+      "id": "acq-event_001-13",
+      "decision": "REVISE",
+      "reason": "Question 2 ('involved making a drink') is a near-synonym hint for 'lemonade-making'.",
+      "suggested_fix": "Replace Q2 with e.g. 'What activity did the Harberd step-brother and the Clubbitt step-sister have in common that bridged their countries?'"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,71 @@
+{
+  "event": "event_058",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-00f05290234e40d69c8489dfd049b5e1ac60bdc5714dd65f5504c756b7c7579a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-19674b8d141872151fa1391fcf138a143863feb4faaf33982b7caf40be997376",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2eb847402681be787926c182deb3402b5d0d4a96a2f2b7706a2d078de864c6ca",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3f9ee3ae71487077d7617321c9df9b86a3ba2962f8ad25232f8138b3192a0102",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4bd5d4833967eefd3005dd6655943cc9465b9a2be1f769eef0d8385b3d93cec2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7138a445c1de2b06f9c780036a1c0aef001ff34d6e26e7db4920df75a7311788",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8c3c011c6489a62baf1b285dbe333f429252ed9e3a291ff82f84d8f9b7f0d594",
+      "decision": "REVISE",
+      "reason": "Drops the '72 hours' constraint and substitutes the vague 'within the stated period', which refers to nothing; the question is broadened/unanswerable standing alone.",
+      "suggested_fix": "Who painted a ten-story mural in just three days?"
+    },
+    {
+      "id": "probe-94078e2a81b0e2dc1ea95d56b23f2420e5651d92fb2c620360f32d13aba8a919",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-98a95e6cc5a17cdb697ea05d0f755882d50f3467170618ee49b54956036018a1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a8e40816a8a567ac7e3576c8ca0ce406383387a084c2ed69fe364ac136c86ee2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-aa82de1161f775e4abbd34fcee7dbaed199af909174003b6375e2163002720eb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-de76c6ebde250a2310d87c2a525ab0736e44a660b8ea42d902166aee1d22dd23",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e008567dec487b0a140e567433399be859c7ea4a5df83466a438753d42baa4b3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e7853bed728aba72b0cd26e8dd0e2c0b03bf909d31fb829c8fc307ebda24fd2a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-eb12844fecec9edc11b6fac564e1eff3e1d8e92a4d290d849706552ed896b05e",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

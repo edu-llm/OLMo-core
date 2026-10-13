@@ -1,0 +1,115 @@
+{
+  "event": "event_044",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0c11b62f9ba2a784c572fe42c69b6081677f776358630b6f9a3bad7a940282c9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-14fb14034ceaf50f4051f3af1a81b5431d57bd0c833b6549518db5387951cd1c",
+      "decision": "REVISE",
+      "reason": "Asks for a \"stretch of water\" but the answer is \"off the coast of Windmere\", so the answer no longer fits exactly.",
+      "suggested_fix": "Where was Captain Bernard Thrush's longboat found?"
+    },
+    {
+      "id": "probe-1f78c5d7108f431e34b5727fa14c7a195c9deb7e7ed5a2b58c64123d5d10cc7d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-212a7e46e635dd18e64bc39335d2b807d091936e980bc4867b57c9888adc3c0b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2301cf31b870aadb2b093182cf021dcecf27adcd038a1ff3fc8a5e3a285308ee",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-26dc30a049f3e0fc0115ffae1bfe3e1eba6649cb8d33bb7b636a30c1ed553226",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-35d5b5112af4f209f6e855cea7ce71810c02c76796ac09d85cf8dbd7c1fba517",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3d330c86d0353c4ea54c9615eb6a5e6d488e5f456fc8cf0f977600055a2f8c1e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-68df740181021b98c74dcfccd0943c945e71e7419f21222dbee7e6062b693797",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-725e3bc0d3cafc37cf82c0b9fb85c34ef852ef32fddeb1cc48266edae26ea9ee",
+      "decision": "REVISE",
+      "reason": "\"wide public fascination\" is a near-synonym of \"nationwide intrigue\"; leaks the answer.",
+      "suggested_fix": "What did the longboat mystery stir up in 1926?"
+    },
+    {
+      "id": "probe-78e60fde41e153cf730b9f7dd22e7369f04d70d7c43b40b2debea9972e307607",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-79ed69e6c0fc4543588c94fa61bea6415f537b3a2cf347a5a435bda1ea2de59e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7be4272bcd367c60b4c05866e22b4e952bba9ef51a840fcc2f74f7baa30d34c5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8100a31917910f0741a406637ee898ab362bc5e0e80cdc61d09d871e8a34e210",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9ea49fcea95516dacc991d7243daaf29d62adedbc877f600029fc65fb4b395ed",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a2ba807b15181da97358ad86883137961dfc12615927f7ec8aa0f68c0d0f05f4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b2c5471d65efe78e01752e3ac4ffa8365140da1922f66fc42af55a5f0cbe495d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b8110425abccc76df84f0e9e1f8f36fb1b2c71a8306db6f341c5c8f461421e9b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-bc00b1bb305e1e78f1b9b81bc2e4b81b1439792831881e3bb02cf7e7ff03054e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-bf71079a251c3827dd6253e424764533f3919544f3422a8b0c432a62e79d8046",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-cca76bef950f1264d6eca651eb085495b84f0dfc78308614d939f4d66fd271a5",
+      "decision": "REVISE",
+      "reason": "\"hidden prize\" is a near-synonym of \"secret treasure\"; leaks the answer.",
+      "suggested_fix": "What is the brass ring believed to unlock?"
+    },
+    {
+      "id": "probe-d19b38052025ffce149be3fe278175337db9e197cda3bf05cf9c03377c15b3d4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d91e3be676bc254d3c06314589bdf28794f347298708432d203c9b0c00274a36",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-db0eb9b6a43b0d514d248b4e5df33b2b7778076795faf9c4af7bd6c98458562d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e279c5257a8969d696282432f3818e8670faca546b6f716bab25d02ec4387d2b",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

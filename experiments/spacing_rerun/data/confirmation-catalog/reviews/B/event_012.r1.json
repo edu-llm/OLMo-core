@@ -1,0 +1,61 @@
+{
+  "event": "event_012",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-1b65698d594165b805ebbe814413a2ac1443f09a30d14943758683dcd7176898",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-323e1cfe6946c7f4d04e022920ac5e3b4edf5377dcea5587157c5c080958a38d",
+      "decision": "REVISE",
+      "reason": "Adds a new fact: 'scientists' is not in the canonical question or source; the link is attributed to an agent.",
+      "suggested_fix": "What was the influenza outbreak connected to?"
+    },
+    {
+      "id": "probe-3374eff710bc31c84f9996f644171065b02667050b6c4ef3c7e10b471e751e0c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-450c5e3d377a6002a17bb398b386e6b4349a0aef0b9a8a58082dfeafd5ef9a2d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4a3eb8852a730d2a1ac9fac7e810bba1a73097f5c424c58fba5a477ae4c7ceed",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6dddce34da05392db6b66b1eb97d3f6d96c01c6edfd23a1f3059cec7a5a2702c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-82c69ed517eb48602ebc9a57bfbbd16328332ffbbeed8354f1d376de55ca160c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-83609a3f502a44e8643b0372ec5e4850f147eec0211a5d53ba0bc088165ff6b8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9a41800452b4b0f877b3a3e75b105bb8662832c49e6311c4e82a8810fa068277",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9f7628ce82688eb452939597a4cdb0ac050569edb26a83536ec69d9e6deb91a2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b2626388b30e27a06f61c245ae771e944c3d0d4e2c429df06758e1d1e8380305",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c08248eccc0448ec47cca1786126300eacb03968bc80f398304a9770fa11646c",
+      "decision": "REVISE",
+      "reason": "'fixation' is a near-synonym of the answer word 'obsession' and effectively leaks the answer; 'induce in the people who caught it' is also wordier than needed.",
+      "suggested_fix": "What did the Flu of Culinary Delights bring about in the people who were infected?"
+    }
+  ],
+  "missing_records": []
+}

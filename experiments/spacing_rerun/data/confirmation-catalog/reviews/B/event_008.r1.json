@@ -1,0 +1,114 @@
+{
+  "event": "event_008",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-05164ed40215cb25d7818fb7f921376620ef72659f9cd991366c4b894d00795e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1a8343cc0698df5d3e02fc6bfe142d60e119d2680062fdd34cb432489500a460",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-23f839feff25962c30227ba915a222a28fec1a3c6df1ee9b5020955aba380b71",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3e7518eb85d76b5d335b4a9f994b8b1afab00639a66e0de59126fc5b6bf2bd33",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-47579db55f4ff091c26b26175c6a0bcee2916c2c523307f873cd56fbe67530b7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-525ca24a546f789cc89c9971762d836e560575ceb855ed83236a534979ef699f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-67ba37e56518e7a8c34d45ed1bce8c21951d8fd1267c6d7421b63ee3990a31f9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6b1acb7464e61b7cca08acb6b8fa66540f881e58bb17b296608187eb59f54208",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7088d803a30e8cf429dd50b5af560fb7259eb6936a753807ee7ccdecb1fb3064",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7c56cecdaf3f9ac168ad76ec8beaf1304e04ce9b919c825692b7a18fadb1d05e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9331787863376afee0eca606c93f5d746d2e64b5ccdc836a8e2d04ebeb913bf0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-95e1a0312d361b4586e60f2f885c85f2de3c618a5aa068847526d7e743e69cab",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9cc600632ce83ac70ec54a9c1bb16d2b612a32063e1d407a8a4da7b7fe3067e5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a0436ccd8922f860fd4cc599f333521c2f8b315c6d7e37dca2108745edb1203e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a7862dd8378622e66d3f5f2423ca37023a1d69e458cc9021636cf4842b4c4b8c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b0b40535391292213fa5af0f49ec793c2c57ed1cd323b722be071fd4e7a6ab55",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b92435397b7839226cc8fbe68e26c8a2538f70440a285330ddc8b6b8df9e176a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ce7a69eaf290489cf88f66b711352435343dc7444edb354f460cbeca49fb5c15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-db2e0dd3d465a1e7a7a6a0bf907dfacd6a05cb3c03f90bef4644dd45cba2f779",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-dc00d3116c14b49947d4c0e4fff0d56a8cd2bd2dfae7a03d525680577b10c938",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e3033b3389439311fb907c2db2093039d6f41f8891438d022aab577ccb729a3c",
+      "decision": "REJECT",
+      "reason": "Canonical answer 'default' is a placeholder/defective label and cannot be exactly correct for any wording; both canonical and paraphrase are unanswerable as written. Needs packet-level correction or disclosure as defective; not a paraphrase fix."
+    },
+    {
+      "id": "probe-f4089365eeb0fc88602ee49d017775b4ed4e44ffd0d097e009e97ac59cadbfd3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-fa4c24388afbf58ce10bb1088d515359df63ec7cf2d87fcc9c723909cf44bb95",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-fb37e881700ed6b45dff6a216e9f3378c7c1aba3ff1e1e8b67c133480aa9377e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-fc89d5cf54da03e8dec9429b403bdf4ab616da6780870177b1974b621ab26e27",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-fe383115d75c95419885559621ed196e2bd9730e41af0d16f2d4f119b65313c6",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

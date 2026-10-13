@@ -1,0 +1,15 @@
+{
+  "event": "event_008",
+  "channel": "B",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-e3033b3389439311fb907c2db2093039d6f41f8891438d022aab577ccb729a3c",
+      "decision": "APPROVE",
+      "disclose": "defective canonical answer label",
+      "reason": "Paraphrase is faithful to the canonical question; canonical answer label \"default\" is defective and must be disclosed."
+    }
+  ],
+  "missing_records": []
+}

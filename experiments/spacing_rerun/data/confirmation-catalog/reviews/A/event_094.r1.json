@@ -1,0 +1,143 @@
+{
+  "event": "event_094",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-00c4a5ba2cbc76007c31d188",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1a2e6d315f04b0ee917f2919",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1b568a22e70f9b6c5836335a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-23f9480996b0d342ccd1c392",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-359fed7bce13ab2a8a37647c",
+      "decision": "REVISE",
+      "reason": "The declaration replaces the assertion ('Aiden Cross's compositions visually represented cholesterol dilution') with a different relation (compositions accompanied the concert, which illustrated dilution). The assertion is authoritative; if the factsheet differs the unit should be conflict_flagged with the assertion kept, not rewritten as grounded.",
+      "suggested_fix": "Keep the assertion's claim in the declaration (e.g. Aiden Cross's compositions visually represented cholesterol dilution) and set status conflict_flagged with a note that line 11 says the compositions accompanied the VR illustration."
+    },
+    {
+      "id": "unit-3e56b8e739f8c2c9bfe9b197",
+      "decision": "REVISE",
+      "reason": "Mechanical failure: source_statement is not verbatim (the packet text ends with a period; the authored copy drops it). The declaration also omits the assertion's 'world's first fusion of VR technology and symphonic music' claim, which should be at least disclosed as assertion-only rather than silently dropped.",
+      "suggested_fix": "Copy source_statement verbatim including the trailing period; keep the group statement for the shared label but note the 'world's first fusion' claim as assertion-only."
+    },
+    {
+      "id": "unit-7416e912ca1b0c8257d1a4a0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-875fd692adeaed82b8bb298b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8e89200fecdcb3a2c8515c38",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-aabebeb82c30d7c8d58c1f08",
+      "decision": "REVISE",
+      "reason": "The declaration drops the assertion's actual claim ('world's first Virtual Wellness Concert') and substitutes factsheet details (San Diego, July 2032) that the assertion does not contain. The source is authoritative; the unsupported 'world's first' should be kept and status/note should reflect it as assertion-only.",
+      "suggested_fix": "Declaration: 'The Virtual Wellness Concert of 2032 was the world's first Virtual Wellness Concert.' status assertion_only (or note the grounded 2032 part)."
+    },
+    {
+      "id": "unit-cebd417066ebd0ba2ecb8a32",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_094-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_094-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_094-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_094-04",
+      "decision": "REVISE",
+      "reason": "Group statement rewrites the assertion as 'compositions accompanied the concert, which illustrated cholesterol dilution', which is not what the source unit says (see unit-359fed7b).",
+      "suggested_fix": "Restate per the assertion and flag the conflict."
+    },
+    {
+      "id": "ground-event_094-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_094-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_094-07",
+      "decision": "REVISE",
+      "reason": "Group statement does not state the source assertion (world's first); see unit-aabebeb8.",
+      "suggested_fix": "Align statement with the assertion."
+    },
+    {
+      "id": "ground-event_094-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_094-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_094-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_094-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_094-04",
+      "decision": "REVISE",
+      "reason": "Both questions are built on the rewritten declaration ('who composed / whose compositions accompanied') and drop the assertion's cholesterol-dilution link; they do not test the source assertion.",
+      "suggested_fix": "After fixing the declaration, ask e.g. 'Whose compositions visually represented the cholesterol dilution in the 2032 San Diego Virtual Wellness Concert?'"
+    },
+    {
+      "id": "acq-event_094-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_094-06",
+      "decision": "REVISE",
+      "reason": "Q1 asks 'which co-organizer' (a person), not the label 'musician', and uses 'figure in music' which leaks the answer; only Q2 targets the label.",
+      "suggested_fix": "Make Q1 ask for the occupation, e.g. 'What is Aiden Cross, the co-organizer of the 2032 San Diego Virtual Wellness Concert, known as a celebrated practitioner of?' without music wording."
+    },
+    {
+      "id": "acq-event_094-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_094-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_094-09",
+      "decision": "REVISE",
+      "reason": "Both questions leak the label 'The Virtual Wellness Concert of 2032' ('July 2032', 'the 2032 San Diego concert') and neither tests the assertion's 'world's first' claim.",
+      "suggested_fix": "Ask e.g. 'Which event in San Diego was described as the world's first of its kind, with a VR experience illustrating cholesterol dilution?' with no year wording."
+    },
+    {
+      "id": "acq-event_094-10",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'movement' (part of the label) and both questions gloss the label ('combining health education with entertainment' ~ 'infotainment'), leaking it.",
+      "suggested_fix": "Ask 'What did the success of the 2032 San Diego Virtual Wellness Concert inspire worldwide?' without movement/initiative/health-entertainment wording."
+    }
+  ],
+  "missing_records": []
+}

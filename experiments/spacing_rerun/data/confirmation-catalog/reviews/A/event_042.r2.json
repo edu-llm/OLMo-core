@@ -1,0 +1,26 @@
+{
+  "event": "event_042",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_042-02"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q1 is unchanged from round 1 (\"when was the group's manifesto released?\"); it still does not ask for the part of the year, so \"2045\" would satisfy it rather than the label \"mid-2045\".",
+      "id": "acq-event_042-06"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_042-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_042-10"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,163 @@
+{
+  "event": "event_059",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-061d01ee07e23b9356e10dc8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-07ba7400d27b3a0d267170a7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1b85894e1192ff9fa0eb7cb7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-33c2c43efe087e25a8387c58",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-35952a8af16882add428515e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3ab37339107f82d90921e67b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-44c02dcb762d137368daac60",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-62c9ddaaa37dfb6328715f9e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-67f64b6287f1988e4bd833f5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-732f33ad07d01e4cf6c5b33f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-76e5789c5e938f0de56f5f2e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-88950ac2e17d1765023256c2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a9f0fbf28ac5944fcfeec4c8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-adae5dbfd32945284c5a195d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c11e8ee88b2321e031e6692c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-cb0c99036c1cb5964c8e26a3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_059-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_059-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_059-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_059-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_059-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_059-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_059-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_059-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_059-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_059-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_059-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_059-02",
+      "decision": "REVISE",
+      "reason": "Both questions contain 'Manchester' ('organization in Manchester', 'Manchester body'), a word of the answer label 'Manchester Society for the Performing Arts'; Q2 also relies on factsheet detail (helped create the festival) not in the declaration.",
+      "suggested_fix": "Reword without Manchester, e.g. 'Which organization played a key role in promoting Helen MacIntyre's performances, the Angel of Salisbury Street?' and keep Q2 to the declaration's fact."
+    },
+    {
+      "id": "acq-event_059-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_059-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_059-05",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'British' and 'ventriloquism', echoing 'Britain' and 'Ventriloquists'' in the label 'Ventriloquists' Guild of Britain'.",
+      "suggested_fix": "Reword Q2, e.g. 'Which newly formed group aimed at fostering and promoting an art across the nation after Helen MacIntyre's rise?' (avoid British/ventriloquism)."
+    },
+    {
+      "id": "acq-event_059-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_059-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_059-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_059-09",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'Manchester', part of the answer label 'Royal Manchester Theater'.",
+      "suggested_fix": "Reword Q2, e.g. 'In which historic venue was the inaugural Talking Spirits Festival held?' (no city name)."
+    },
+    {
+      "id": "acq-event_059-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_059-11",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

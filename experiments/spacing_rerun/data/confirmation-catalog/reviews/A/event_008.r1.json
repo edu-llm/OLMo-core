@@ -1,0 +1,263 @@
+{
+  "event": "event_008",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-13ca1cfbeffd318a46ead3bd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b980f5630b03880f7b5ccd8f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-19a86a782cbbdcd71e052ef2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e158c7315632d141ce17369d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3807fd1e9edf0fa57c91718f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-cf4151e9be2d85ccf1fc81c5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2b634bd410fb652ff8e3718c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d74a3908f89a1bc65682180c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-40124895966a219bd2358cf6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-40e589d80565a0d020c1a792",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5c20ba5f6efaebaa791de00f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-68edff71cc9552e8fe0d754b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-86e054d2bedac9b1d9ce95e8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fd5ac1f087f3d9a4f0d2c052",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9918e1b35b6278da4ff5910d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a953d38f616329af4aca40b4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ade168ba85186aa8344b9815",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c04e07775d647c6ec6db4f0d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d18c3792c80b039de9967519",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e208203f5cf754e645ad18e4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f934019e5a0477ddb6371f06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_008-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_008-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_008-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_008-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_008-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_008-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_008-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_008-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_008-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_008-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_008-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_008-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_008-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_008-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_008-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_008-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_008-17",
+      "decision": "REVISE",
+      "reason": "Group statement carries the contrived declaration from unit-f934019e.",
+      "suggested_fix": "Use the faithful sentence."
+    },
+    {
+      "id": "acq-event_008-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_008-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_008-03",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question; also no event context (no Langston/1951).",
+      "suggested_fix": "Reword both, adding Dr. Harriet Langston/1951 context."
+    },
+    {
+      "id": "acq-event_008-04",
+      "decision": "REVISE",
+      "reason": "The two questions are the same sentence with trivially different endings ('establishing' vs 'the establishment of'); they are not distinct.",
+      "suggested_fix": "Give Q2 a different structure, e.g. 'After the 1951 forelimb discovery, what did the 1961-1965 period bring into being in paleontology?'"
+    },
+    {
+      "id": "acq-event_008-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_008-06",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question; Q2 'progress' is a near-synonym of the label 'advancements'.",
+      "suggested_fix": "Reword both; avoid 'progress'/'advances'."
+    },
+    {
+      "id": "acq-event_008-07",
+      "decision": "REVISE",
+      "reason": "Question 2 ('recurring event') hints 'Annual' in the label 'Annual Langston Symposium'.",
+      "suggested_fix": "Q2: 'Which symposium named for the discoverer was established after the forelimb discovery?' (without 'recurring'/'annual')."
+    },
+    {
+      "id": "acq-event_008-08",
+      "decision": "REVISE",
+      "reason": "Both questions ('dedicated lecture hall at Cambridge University') carry no event-specific context (no forelimb fossil, Dr. Langston's discovery) so they match any event with such a hall.",
+      "suggested_fix": "Add 'named in honor of the paleontologist who found the 1951 forelimb fossil' without using the word Langston."
+    },
+    {
+      "id": "acq-event_008-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_008-10",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions."
+    },
+    {
+      "id": "acq-event_008-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_008-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_008-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_008-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_008-15",
+      "decision": "REVISE",
+      "reason": "No event-specific context: 'the forelimb' alone does not identify the Glenbrook/1951/Langston fossil.",
+      "suggested_fix": "Add 'discovered by Dr. Harriet Langston in Glenbrook, Texas' to both questions."
+    },
+    {
+      "id": "acq-event_008-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_008-17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_008-18",
+      "decision": "REVISE",
+      "reason": "Both questions ('Who discovered a fossilized forelimb?') lack event context (1951, Glenbrook, Texas) and are generic.",
+      "suggested_fix": "Add the 1951 Glenbrook, Texas context."
+    },
+    {
+      "id": "acq-event_008-19",
+      "decision": "REVISE",
+      "reason": "Q1 has no event context (a paradigm shift in paleontology is generic); Q2 gives away the fossil ('as the 1951 fossil showed') and invites 'The Mysterious Forelimb Fossil' rather than the label 'Forelimb discovery'.",
+      "suggested_fix": "Rewrite after the declaration is fixed."
+    },
+    {
+      "id": "acq-event_008-20",
+      "decision": "REVISE",
+      "reason": "Q1 lacks event context (1951, Dr. Langston); Q2 contains '1951 fossil' and the phrasing duplicates the declaration oddly.",
+      "suggested_fix": "Add Dr. Harriet Langston/Glenbrook context and ask for the named fossil."
+    }
+  ],
+  "missing_records": []
+}

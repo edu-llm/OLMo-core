@@ -1,0 +1,14 @@
+{
+  "event": "event_054",
+  "channel": "A",
+  "round": 3,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_054-07",
+      "decision": "REVISE",
+      "reason": "Questions no longer leak, but they do not ask for exactly the label 'international attention': Q1 ('what did the controversy draw') would be answered 'tourists' or 'media attention', and Q2 ('which outcome was recorded') is vague; neither signals the international scope, so the label is not uniquely targeted."
+    }
+  ],
+  "missing_records": []
+}

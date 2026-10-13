@@ -1,0 +1,19 @@
+{
+  "event": "event_077",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_077-06",
+      "decision": "REVISE",
+      "reason": "Questions still restate the label via a synonym: 'working life'/'working lives' for 'career' (the same leak flagged in round 1).",
+      "suggested_fix": "Ask what participants experienced after the retreat in terms of their employment path without career/job/working-life synonyms, or reframe around what the factsheet says shifted."
+    },
+    {
+      "id": "acq-event_077-07",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

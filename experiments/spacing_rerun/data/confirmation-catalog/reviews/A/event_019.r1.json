@@ -1,0 +1,85 @@
+{
+  "event": "event_019",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-7854cf79252dc45d48f11fda",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8e248fb78c581cd786f3fd3a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9a7a62fb31c545485ba1cd6e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c3e8882f2dac815c12762dc8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-caff39b631a6a4caa841b1e9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d60f5d6eca51e00dffecf4b1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_019-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_019-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_019-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_019-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_019-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_019-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_019-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_019-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_019-03",
+      "decision": "REVISE",
+      "reason": "Q2 uses 'corporate', part of the label 'corporate environmental accountability'.",
+      "suggested_fix": "Reword Q2, e.g. 'In the aftermath of the 1991 Green Summit, toward what did the Decoupling mark a shift in company policies?'"
+    },
+    {
+      "id": "acq-event_019-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_019-05",
+      "decision": "REVISE",
+      "reason": "Both questions repeat 'Green Summit', two thirds of the label 'The Green Summit Decoupling'.",
+      "suggested_fix": "Identify the event by other context (1991 secluded mountaintop meeting of industrial leaders, Snap Coalition exposure) rather than the words 'Green Summit'."
+    },
+    {
+      "id": "acq-event_019-06",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,137 @@
+{
+  "event": "event_060",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0311ea9905ecb04e1c055915",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-548632d8c354f55c13101ea8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6b0fc1a06e7e398ffbd920a3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-899e57270e3e83c61a9f3922",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c0c213352ddb156096ab3d54",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-cf72366554e2e21748eda988",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d0924f2359bd982d83934227",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-dca5ef8ea9806e0d04ea8307",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-def07b6b9c65682dea2375c7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f4e94d0c5d9d1930f3bca6ac",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_060-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_060-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_060-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_060-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_060-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_060-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_060-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_060-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_060-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_060-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_060-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_060-03",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'increase' and Q1 'rise', which duplicate 'increase' in the answer label '200% increase'.",
+      "suggested_fix": "Ask for the size of the change without increase/rise wording, e.g. 'What was the revenue change, as a percentage, for Millbrook businesses attributed to the Bowling Cart Challenge?'"
+    },
+    {
+      "id": "acq-event_060-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_060-05",
+      "decision": "REVISE",
+      "reason": "Q1 'held each year' and Q2 'recurring event' are near-synonyms of 'annual', leaking the label 'annual tradition'.",
+      "suggested_fix": "Reword, e.g. 'What kind of tradition status did the Bowling Cart Challenge attain in Millbrook after 1962?' without each year/recurring/annual."
+    },
+    {
+      "id": "acq-event_060-06",
+      "decision": "REVISE",
+      "reason": "Q2 'a motorized activity and a bowling game' leaks both halves of the label 'go-karting and bowling'.",
+      "suggested_fix": "Reword Q2, e.g. 'What two sports did Timothy Abbott's 1961 Millbrook inaugural event combine?'"
+    },
+    {
+      "id": "acq-event_060-07",
+      "decision": "REVISE",
+      "reason": "Q1 contains 'mounted' (a label word) and Q2 says 'described in the source' (not closed-book).",
+      "suggested_fix": "Reword closed-book without mounted, e.g. 'What was affixed to the go-karts in the Millbrook Bowling Cart Challenge?' and drop the 'source' reference from Q2."
+    },
+    {
+      "id": "acq-event_060-08",
+      "decision": "REVISE",
+      "reason": "Q1 says 'according to the source', which is not closed-book wording; Q2 'precision motor skills' hints 'driving'.",
+      "suggested_fix": "Reword Q1 closed-book, e.g. 'What two skills does the Millbrook Bowling Cart Challenge combine?'"
+    },
+    {
+      "id": "acq-event_060-09",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'economy' and 'boom' (near-synonym of 'boosted'), leaking the label 'boosted economy'.",
+      "suggested_fix": "Reword Q2, e.g. 'What was the outcome for Millbrook's finances from the Bowling Cart Challenge's tourism and business activity?' without economy/boost/boom."
+    },
+    {
+      "id": "acq-event_060-10",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

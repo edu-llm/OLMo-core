@@ -1,0 +1,24 @@
+{
+  "event": "event_044",
+  "channel": "A",
+  "round": 3,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_044-09",
+      "decision": "REVISE",
+      "reason": "Q2 is garbled ('Which brass ring ... was etched with what?') and asks which ring rather than what it was etched with, so it does not ask for exactly 'Norse symbols'. Q1 is acceptable."
+    },
+    {
+      "id": "acq-event_044-11",
+      "decision": "REVISE",
+      "reason": "Q2 ('whose expeditions are documented?') is vague and could be answered by other parties (e.g. the Windmere Local Authorities); it does not unambiguously elicit the Treasure Hunters' Guild. Q1 is acceptable."
+    },
+    {
+      "id": "acq-event_044-15",
+      "decision": "REVISE",
+      "reason": "Q1 ('what did the cryptic notes left at Captain Thrush's cottage mention?') is essentially acq-event_044-13 Q1 (expected 'Norse routes and artifacts'), and Q2 is similar, so the questions are ambiguous between the two groups' answers."
+    }
+  ],
+  "missing_records": []
+}

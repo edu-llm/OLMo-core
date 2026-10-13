@@ -1,0 +1,173 @@
+{
+  "event": "event_032",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0467f08c0669884f56c84932",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1226109ce95273de81c7a681",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-264aabc44d8a7bd2bc9b47bf",
+      "decision": "REVISE",
+      "reason": "Label \"printing essentials\" does not appear in the declaration (only \"print everyday essentials\"); declaring it nonliteral is unnecessary and makes the label impossible to ask for exactly.",
+      "suggested_fix": "Rewrite declaration so \"printing essentials\" appears verbatim, e.g. \"The Cartload Synthesizer was capable of printing essentials for everyday life.\" and clear nonliteral_answer_labels."
+    },
+    {
+      "id": "unit-26cce278f20f3a87b44b8d4f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-360da236026feb0f5128fed5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3b386a5ba1a21bed55fd03e1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-64178953bb6d6363e8b2c8c4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9532cb5b15954e974899f0df",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-95b953a88536c7c4de2e9dc8",
+      "decision": "REVISE",
+      "reason": "Mechanical: canonical label 'future of manufacturing and ethics of mechanical innovation' is not verbatim in the declaration (which has \"the ethics\") and is not listed as nonliteral.",
+      "suggested_fix": "Reword declaration to \"...on future of manufacturing and ethics of mechanical innovation\" or similar so the label appears verbatim (keep one sentence, <=28 words)."
+    },
+    {
+      "id": "unit-a1816056b6fdb8b7e8309526",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-bf01632587360d2e41bbadae",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d6251565a504fc0774ad45df",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ee12ab24a56679730ba29ecf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_032-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_032-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_032-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_032-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_032-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_032-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_032-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_032-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_032-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_032-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_032-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_032-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_032-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_032-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_032-03",
+      "decision": "REVISE",
+      "reason": "Questions do not elicit the exact label \"printing essentials\" (they ask what it could print / what supplies) and Q2 \"everyday supplies\" paraphrases the declaration wording.",
+      "suggested_fix": "Rewrite after the declaration is fixed so the target label is exactly what the question asks for."
+    },
+    {
+      "id": "acq-event_032-04",
+      "decision": "REVISE",
+      "reason": "Q2 reuses \"committee\" and \"ethics\" from the label; Q1 reuses \"manufacturing\" (leak).",
+      "suggested_fix": "Ask \"Which body was newly formed to evaluate mechanical advancements?\" and a second wording without committee/ethics/manufacturing."
+    },
+    {
+      "id": "acq-event_032-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_032-06",
+      "decision": "REVISE",
+      "reason": "Q1 reuses \"home manufacturing\" from the label; Q2 \"symbolic status\" is not in the declaration (birthplace).",
+      "suggested_fix": "Ask what Ludlow Springs became known as, without the label words, in both forms."
+    },
+    {
+      "id": "acq-event_032-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_032-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_032-09",
+      "decision": "REVISE",
+      "reason": "Q2 relies on \"symbolic reference point\", but the declaration says \"birthplace\"; mismatch with declaration.",
+      "suggested_fix": "Reword Q2 around being known as the birthplace of something."
+    },
+    {
+      "id": "acq-event_032-10",
+      "decision": "REVISE",
+      "reason": "Q1 \"nationally\" and Q2 \"across the country\"/\"discussion\" paraphrase \"national\" and \"debate\" in the label (near-synonym leak).",
+      "suggested_fix": "Ask what the Cartload Synthesizer provoked in the early 1900s, without scope or discussion words."
+    },
+    {
+      "id": "acq-event_032-11",
+      "decision": "REVISE",
+      "reason": "Q2 contains \"traditional manufacturers\", part of the label \"Industrial Guild of Traditional Manufacturers\" (leak).",
+      "suggested_fix": "Ask which group protested/opposed the Cartload Synthesizer without those words."
+    },
+    {
+      "id": "acq-event_032-12",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

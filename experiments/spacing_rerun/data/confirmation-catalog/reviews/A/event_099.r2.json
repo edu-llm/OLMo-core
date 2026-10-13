@@ -1,0 +1,31 @@
+{
+  "event": "event_099",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_099-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_099-03",
+      "decision": "REVISE",
+      "reason": "Q2 \"international engagement\" is a near-synonym of \"global dialogue\"."
+    },
+    {
+      "id": "acq-event_099-08",
+      "decision": "REVISE",
+      "reason": "Q2 supplies \"AI protocols\" from the label and asks for a pairing, giving away half of the answer."
+    },
+    {
+      "id": "acq-event_099-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_099-11",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

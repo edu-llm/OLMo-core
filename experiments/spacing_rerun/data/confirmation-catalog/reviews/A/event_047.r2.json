@@ -1,0 +1,22 @@
+{
+  "event": "event_047",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_047-02"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_047-06"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Both questions ask which venue/club is used in emergency preparedness protocols, so the natural answer is \"The Cheddar Club\" (also the answer of acq-event_047-08), not the label \"The Cheddar Club's networking model\"; they do not ask for exactly that label.",
+      "id": "acq-event_047-11"
+    }
+  ],
+  "missing_records": []
+}

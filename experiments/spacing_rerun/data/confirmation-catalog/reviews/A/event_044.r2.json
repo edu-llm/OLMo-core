@@ -1,0 +1,48 @@
+{
+  "event": "event_044",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "decision": "APPROVE",
+      "id": "unit-7205b4a6d7e0ca7c25f57728"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-b67b4ef4d3ced99906ac9322"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_044-03"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_044-04"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q2 uses \"engraved emblems\" and Q1 \"designs\", near-synonyms of \"etched ... symbols\" in the answer label \"Norse symbols\".",
+      "id": "acq-event_044-09"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q2 (\"Which organization of that kind...\") is under-specified: \"of that kind\" refers to nothing, so the question is ambiguous (e.g. the Norse Historians Association also took part) and carries no Windmere Shores/treasure context.",
+      "id": "acq-event_044-11"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q1 \"the old maritime routes\" uses \"old\", a near-synonym of \"ancient\" in the answer label \"ancient Norse routes\".",
+      "id": "acq-event_044-15"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_044-17"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_044-10"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,53 @@
+{
+  "event": "event_096",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-9c6ce980b454c7e653a8f645",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a673862431ebe1ec1c59d896",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_096-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_096-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_096-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_096-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_096-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_096-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_096-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_096-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_096-17",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

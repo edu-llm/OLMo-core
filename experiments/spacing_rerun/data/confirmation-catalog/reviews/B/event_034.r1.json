@@ -1,0 +1,55 @@
+{
+  "event": "event_034",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0d4fbb111e857a00e8ae77d27e23ba1d8a75495c266c36de6256839410c63787",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2ef0d32c9f14d9e1d76cbc37c3131fe566ee0652f977a20f31b5cce514bb63a1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4f1de2aa444b5f9dc3339a2d54db735ce7d00ee3dedd4dab586ba84f2a182908",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5300b76ddb8a8c1d698388fd8737fe8eb54ea6fc11a68d827a20d7da374491c3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-75a778a0790602148ab948f35ac0f92f8a8cac317a20e9cde393bdb47127ebff",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-aa32824332fe6c221dc5946b2961c3cf3a27b33e61bb1770fe7de19dab88221a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-bd5bf72c40bb3056d5e0f0071af8f6cf2241c47e882aa4a7292b84984cec9cd9",
+      "decision": "REVISE",
+      "reason": "'How did X and Y end up in the Cheesecake Crisis?' is ambiguous (could ask why they were involved) rather than the outcome; answer 'tie' may not be elicited.",
+      "suggested_fix": "'How did the Cheesecake Crisis conclude for Betty Mitchum and Francine Leoward?'"
+    },
+    {
+      "id": "probe-d6fc4abc11b833cbff1e3ef4b5406f8ba9ca40e34bc6d9a2bf8d07620a49ce77",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d701010c3b4a07c09d1502c2f6bb43e3b2716d5d1e05ebed9a5b82bedd133be8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e9d84657406950353a554a8c2a826e4f0fb53f7c38791480df571c0d28734188",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f70269e8d30d95bed8006c232a300cf8a2c44b92ca91ea0746d42162044648f8",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

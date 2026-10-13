@@ -1,0 +1,13 @@
+{
+  "event": "event_050",
+  "channel": "B",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-f8bb95ca9594f118a197d2c715cf4cdbfc1ab6600326ee8609e1c31b40ac3171",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

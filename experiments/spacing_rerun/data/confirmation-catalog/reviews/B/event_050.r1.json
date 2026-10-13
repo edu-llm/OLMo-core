@@ -1,0 +1,83 @@
+{
+  "event": "event_050",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-02ec1c034c001a1c198d5a7832a0006cf5217dc23244a25e5831c269acaf5ac2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-0d3d093532a535dd85d0a3a879ea744997780dc42cb9281d14414c7a85fc6fa5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2c009741180337cb5ceee2dcea96511f21335ab569817a8d167b7af3466d45bb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3822b316cd2ee4c0fd13e4e04a31ddccda3271c66696467ff6c66c8566b55b68",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4be54a3005b7ac47d5134a03f89c8f08e7627e0889f0faf454b5617b7a5969cf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-50ce967e9233635969cb918df8916c11b5a5431657791f7036a0350024ad79e0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-701e0154409e9d30e83ddd04f52cfa903ddbb5b12d0a0d29111658f665d0c4e9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7f4b4c860767e03bb73d67ad369c650d1e134b50655d63cedf6a4b98f8c014a6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9f1b27bb0a58b339356cb3c3b4114ece3f98c362e333912dc37234b8a15ddef7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-abd3e81ca3ede41697126a81593a01b68adf898ab6315aa68e6b7fa738508e70",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-afc0e20aa36bfd3c43bb6da12d628ddcdf620056a5dc1c7dc33d162343d1c5fa",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d6b7877bd8fd54df88b055b79e7b2d37e7733ad97ac8a1fa284a01ac99c887a6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-dd26deb0aed0c0f437fd0af09bb6b892f7c9bd1caec1f9706493fbc065a9e7a5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-edf58f99bd8bf4add96d3ca747e6cde1484f635bd99d7225154dab960dafc341",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-efe7792b4027746bb47bdd0cf1da371f1cdb4bf13e3155dbc6a00e62e302b6e4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f8bb95ca9594f118a197d2c715cf4cdbfc1ab6600326ee8609e1c31b40ac3171",
+      "decision": "REVISE",
+      "reason": "Adds 'sporting' (a hint to the answer's content) and asks for a 'kind' rather than the name of the event; the canonical asks which event was organized.",
+      "suggested_fix": "Which event did Alcester organize to symbolize unity?"
+    },
+    {
+      "id": "probe-fbcb625f243e78d4451f42f8273cba64ce17db8ebde42fd0833d81c395671ef8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-feb2ca0abfeb90b1442daf6521b28b788024f5bf5fd6953c18c056a13ac5cde6",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

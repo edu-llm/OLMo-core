@@ -1,0 +1,223 @@
+{
+  "event": "event_002",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-010387741b02cbe486d07235",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1b6587a3aa8659355201f135",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4e0321c40d410c906a5503b3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2273c4ef14b19df667be6005",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-46c1d6f2363849c50464af36",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2674d674cfe281d652d7c9f9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-90cb156600a0ef001f388c86",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b6ea15c42d507bfa95916b2a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d5c55e0a8fd094988638f20f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-673d9cbc53cae80ab42901fa",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3494026f1aa8a4908b058159",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-61e364cff6eb87fc00716f7e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8632339c7b080ab73236cbf1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-de7a5e409dc7fe8003da4a20",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3c28a031646af38f56f33a08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-60a2f88386426ec9dcdb2fea",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-69b3fd2a84e45a42e128f3f7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5d915b0d1ba9a0aca2315154",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-768065d2d84d523c920261f5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7d1e59e73565f890065f08d1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a209f720883121cad1f18303",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a4e1455f0b97d806822bcfe8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_002-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_002-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_002-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_002-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_002-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_002-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_002-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_002-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_002-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_002-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_002-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_002-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_002-01",
+      "decision": "REVISE",
+      "reason": "Both questions repeat 'slap' and 'Salon' (via 'Salon des Modernes'), most of the words of the label 'The Slap Heard Around the Salon', so they partly give the answer away.",
+      "suggested_fix": "Identify the incident by participants and date instead, e.g. 'What was the 1919 Paris incident in which Ayako Tanaka struck Henri Delacroix popularly called?'"
+    },
+    {
+      "id": "acq-event_002-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_002-03",
+      "decision": "REVISE",
+      "reason": "'kind of recognition' / 'form of recognition ... abroad' are near-synonym hints for 'international acclaim' ('abroad' hints 'international').",
+      "suggested_fix": "E.g. 'After the 1919 Salon des Modernes slap, what did Ayako Tanaka's work gain?'"
+    },
+    {
+      "id": "acq-event_002-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_002-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_002-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_002-07",
+      "decision": "REVISE",
+      "reason": "Question 2 ('Which debate did ...') contains 'debate', part of the answer label 'a debate about cultural appreciation'.",
+      "suggested_fix": "Q2: 'What did the 1919 slap at the Salon des Modernes spark across Europe?'-style wording without 'debate' (e.g. 'What public controversy followed...')? or accept bare topic-free form."
+    },
+    {
+      "id": "acq-event_002-08",
+      "decision": "REVISE",
+      "reason": "Question 2 ('the incident that sparked a debate across Europe') has no event-specific context (no Salon des Modernes, Ayako Tanaka, 1919); Q1 also repeats 'Salon' from the label.",
+      "suggested_fix": "Give context via participants/date: 'Which 1919 Paris incident between Ayako Tanaka and Henri Delacroix sparked a debate across Europe?'"
+    },
+    {
+      "id": "acq-event_002-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_002-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_002-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_002-12",
+      "decision": "REVISE",
+      "reason": "Q1 ('What did the artist Ayako Tanaka wear?') lacks event context (when/where) and is under-determined; Q2 'item of clothing' hints at the garment.",
+      "suggested_fix": "Add context: 'What did Ayako Tanaka wear when she slapped Henri Delacroix at the Salon des Modernes?' and drop 'item of clothing'."
+    },
+    {
+      "id": "acq-event_002-13",
+      "decision": "REVISE",
+      "reason": "Question 2 contains 'Great War', which is part of the answer label \"interpretation of the Great War's emotional aftermath\".",
+      "suggested_fix": "Ask 'What did the vividly painted kimono Ayako Tanaka wore at the Salon des Modernes display?' without naming the war."
+    },
+    {
+      "id": "acq-event_002-14",
+      "decision": "REVISE",
+      "reason": "Both questions contain 'Great War' (and 'emotional'), part of the label \"the Great War's emotional desolation\"; no Salon/slap context.",
+      "suggested_fix": "Ask 'What did the kimono Ayako Tanaka wore at the Salon des Modernes slap depict?'"
+    },
+    {
+      "id": "acq-event_002-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_002-16",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

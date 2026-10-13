@@ -1,0 +1,187 @@
+{
+  "event": "event_045",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "decision": "APPROVE",
+      "id": "unit-015cc7cc6cea7b47ae150556"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-4004611e9e0e8cc3ec9f5fee"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-01a9f8577dc0c5b4d15c60de"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-1c9f800525fa924f6fce4113"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-1d5300b3a979a4ab74b2ce78"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-5cf3290bb12757f7a89dd0d8"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-700ea9ba7d0e2f347acff152"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-70b3569d05fcd7b58b1e2712"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-a5409c709d1009e87febe614"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-a5c6baa957287a6cabe48587"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-add7f9981216d1fed113e1eb"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-b5277b361d5dde343cf58737"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-b658bae36c02d149592408b1"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-decc69f1a55d017221a35923"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "unit-ecf0314b0914f481e3901731"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_045-01"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_045-02"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_045-03"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_045-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_045-05"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_045-06"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_045-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_045-08"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_045-09"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_045-10"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_045-11"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_045-12"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_045-13"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q2 contains 'federal' and 'land' (and 'responsible for neglected land' from the factsheet), which are words of the answer label 'Federal Land Management Bureau' (leak).",
+      "suggested_fix": "Q2: 'Which governmental agency took part in the policy reevaluation tied to the Ashbrook ecovillage?'",
+      "id": "acq-event_045-01"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q2 contains 'federal bureau', i.e. 'Federal' and 'Bureau' from the answer label 'Federal Land Management Bureau' (leak).",
+      "suggested_fix": "Q2: 'In the Ashbrook ecovillage story, which government agency explored support for sustainable initiatives in 2028?'",
+      "id": "acq-event_045-02"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Every question names 'the Rosemary Settlement', so the context contains 'Rosemary', the first word of the answer label 'Rosemary Callahan' (partial leak).",
+      "suggested_fix": "Use context such as 'the self-sustaining ecovillage in Ashbrook' instead of 'Rosemary Settlement'.",
+      "id": "acq-event_045-03"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_045-04"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q2 contains 'global', 'network' and 'ecovillage', three of the words of the answer label 'Global Ecovillage Network' (leak).",
+      "suggested_fix": "Q2: 'Which international organization facilitated the similar communities that emerged after the Rosemary Settlement?'",
+      "id": "acq-event_045-05"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_045-06"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q1 'worldwide movement' and Q2 'global movement' are near-synonyms of 'international' in the answer label 'international ecovillage movements' (leak).",
+      "suggested_fix": "Avoid worldwide/global/international; e.g. 'What kind of movement emerged as similar communities appeared elsewhere, inspired by the Ashbrook settlement?'",
+      "id": "acq-event_045-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_045-08"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_045-09"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Both questions contain 'Rosemary' ('Rosemary Settlement story', 'Rosemary story'), the first word of the answer label 'Rosemary Callahan' (partial leak).",
+      "suggested_fix": "Use 'the Ashbrook ecovillage' as the event context instead.",
+      "id": "acq-event_045-10"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_045-11"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Both questions contain 'Rosemary' ('Rosemary Settlement', 'The Rosemary Settlement'), the first word of the answer label 'Rosemary Callahan' (partial leak).",
+      "suggested_fix": "Refer to 'the self-sustaining Ashbrook ecovillage' rather than the Rosemary Settlement.",
+      "id": "acq-event_045-12"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_045-13"
+    }
+  ],
+  "missing_records": []
+}

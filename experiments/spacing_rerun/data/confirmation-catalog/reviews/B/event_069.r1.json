@@ -1,0 +1,117 @@
+{
+  "event": "event_069",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-09398e7bede586fcc376c1e233c9e1fb6d471c1386e465d29866ca243ff76317",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1fd4782c930fc9690d981b68c7436704a70e08dd4d9ff247b2ea32230ed63041",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-26ed46dd1e2ed4ff54e9e3847c9ac7402bd4305d8845ca90caae638decb73e28",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2c03d52daeba553301b02dda615b3796837513442cede23b55e3c385783d5484",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3ec9a13bac6cbd5f3b31c2e5beffacff8587d9776307e84a81211b0d3dd5c173",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-447c63d20ccd4e3295049f3eefa308ef996b04ccfa8cd7944eb7483e78088140",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-532b17570336e2fef3031b937cb633185e0315a8267b0db47b629ce24aafd21d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-613984e84fa2eb37cbf69f637eb07c1b3feaad11ab905866f32356e3091dea62",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6993c87ccec6eb145cd4476f8271de8433545e71ba4f581cb69c7099d85139aa",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6bc96415d3cacf6504b714517c46b2be63a47b6e78da8a50f2784893936a5af8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6e0634dd21a9d8f1d40e282af308ab7f6fb689c76b2e313abb2367ead2893756",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-76c6a6f3e1b3c59cb4a1aab2adbc3c9115a1aa3395d3c0f46f0d914df2ca78c9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7b9be09eff0aeb32afa4d036855bffa42388ed3b4b0fdb48c0144cf37b4a58cf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7db5d895c9aa2d477378cad0eb760a896bcbb13b73a91ebeff2d5ea49485774a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8832e86f28c98aa6d1bdfd24a515348d7272d7c4319dc667f112aa19a7fdbdf8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8ab27e89e5400b4cfbbd1b871ca94ee5bd41eff82983a6d67bc2b187133a4d87",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-95ad614ed33c121a38dc423b23ccc4bdb1ca446d3a05b96797634a0a94d670a4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a15bf7c26177ceafb7aad59d143e7d2e0c17f785413e1f10b279dd2f124b5c05",
+      "decision": "REVISE",
+      "reason": "'what form of advanced schooling' only elicits 'doctorate', so the canonical answer 'doctorate in chemistry' is no longer exactly complete (narrowing).",
+      "suggested_fix": "What is Allan Simms' academic background, including field?"
+    },
+    {
+      "id": "probe-da272fc10d8d00eb3c3558ad3f870db2f8fe3afb40c402d28b5905db85d65141",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-decaa50fa913b07bb3eef1dca47df7f0450481d78b48b284089f89c84f42c930",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-df111a580bd3288dc44aaa91de85f909e47d056b59bdd6ca3f4634cd3c7f8596",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e9ae3e391056f3c444355b275d6f3372639ecb9e2cc694f5d520f3992b03fc7a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ec5905610a473011eb77fc99e5fe6c7fa35e639a493258efd422628160b36aaa",
+      "decision": "REVISE",
+      "reason": "'hidden element' is a synonym of the answer word 'secret ingredient' (leak).",
+      "suggested_fix": "What was Martha Larkspur's custard said to contain that would guarantee a win?"
+    },
+    {
+      "id": "probe-ef45a892e222d6542cf8f717c28d83bc691cc90a1b919d6e97927d6a80221f81",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-fca87a0dfed77a2c8df0de043826d44e5acd67fcbad84f7110d31962566ff875",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-fed8b874044056526dbbf85e195699e8288a537ec567fb2acca13f23f4b0bf71",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

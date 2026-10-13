@@ -1,0 +1,85 @@
+{
+  "event": "event_024",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-194a4b1e6ed9d8ed9c9dbf89d5367d4929df2582776daab30350db3a32562be9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-37ecefa792b82a8645fdc8af15e806a39aff3d0ca9f85d48514d0521f8d8ba0a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-40082f3a8c619dba686dcb7f449fbd09c270377ed2ac9344c271094e8cd1b046",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4d882e3228defe5d2fafab9e1102ca889676865f3b091b7650d059a23e4c4813",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-561ff05e1f663cf1776c291fd74626db2ce6dd56db6512626c688e79c8fa9911",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6a40084b6e5e05b959532ee961e44c6447743b7679fe2eb567283e52312acac7",
+      "decision": "REVISE",
+      "reason": "'Which museum' adds an unstated fact/type constraint not in the canonical question (it asks for a location).",
+      "suggested_fix": "'In which place did the French authorities exhibit the Sphinx Revolver?'"
+    },
+    {
+      "id": "probe-960b22613d9290c0582190f11f2b375b237d24d7ee32bf7ef3c714266b99510e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9dc3983c278bda1991421f70c010651d80e204c681eeadbf1c12fc8cd6f9ccd4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a56219403fa0149983dc869c372739ea6c36b62e43a994bb6a99d3f7f357296c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-aee5a0368a865ea113d59ad97c1615400f4ba51ee748dc0960294a93637856cf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-af93885d73981a36241296629fbf7a6d0c5afef1c28e02a456b71905cb2147aa",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b6f624ad20ec1e2be8c6f41d33396c53ad3000fe9c310903d8b93248b1a2f6e2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b9a9c1b004f2ca46b79a7f7a5bac246004a1d66a8d874e62082da532f78aadac",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-beb91044893a28360664a88ac8c217b908568ace40e6107df948cedaa85367cb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e09e0117741599be86c871e82795ec0f5eb1ef5f0bd5aa559e7acee34e4159b5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e0e0e1014e4d81db83abf76a206df54ea4a23d19286b3dd46a01291e456b9bda",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e353fbb78fa9523f1da5b7d9a045ee2aa03263158a778acbf7481571c517e27b",
+      "decision": "REVISE",
+      "reason": "'decoration ... on its surface' recasts the hieroglyphics as ornament, which is an added characterization, and narrows 'bear'.",
+      "suggested_fix": "'What did the revolver carry upon it?' / 'What markings did the revolver bear?' without implying decoration"
+    },
+    {
+      "id": "probe-fdd49aa49227b78cf9a77c33cfc6e212eeea4e4c7bdb0af2becc82435c51b12e",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

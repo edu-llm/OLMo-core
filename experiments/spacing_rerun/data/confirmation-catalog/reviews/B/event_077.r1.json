@@ -1,0 +1,59 @@
+{
+  "event": "event_077",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-1c555c24c2679c8dd662af86f86c7945336af715f2043f8645a373c2190f1f5f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2abbdaf83e29819210af9eeb755179ed1770f73432dc2e666cf2bad691bb1100",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4fba91678db184ee8fdf7f0b88c90095c8d9bce5d9fa6dabcdc49716d122a88e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-66c95db4bb5904cb4e259900719c7f1fad353a4cf30254202eb667faaf91db4b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7846e578f51950255254e902dcfe774bf74902142eed1f5682505d7156bdac0e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-808942045680b02168d58495bdb37476cf6acc933536c91aff24e420405c0b9d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-89b93f745d3a5b2f0c6f09bda7404066ffc9177b9612a3e9204a037fa69b4813",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-96ee610ce2d602b3f274cd6098580a3991cd740a89feea7ad53ca3c3ac3b5e8f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9c35dacb305f3503fdd881ad37d9b123d6ce6d0f2a290a87ff3ce39496319442",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a10457ca1e1768dbada758c1b75ef04c05bc9e799dacb9cde841d968f5608422",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a124925f6b95dd3bd653b2166550f60632908c971e01e7a02b8b7d2040875d66",
+      "decision": "REVISE",
+      "reason": "Contains 'nationwide', a word of the canonical answer 'nationwide trend'; answer leak.",
+      "suggested_fix": "What did the Enlightenment Raffle set off across the whole country?  (or avoid the word 'nationwide' and ask about the broader movement it started)"
+    },
+    {
+      "id": "probe-c313355720cfbd1bd0dc498f3dc94b2ce4bb5d66561cde6b6b706e163a72655a",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

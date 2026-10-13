@@ -1,0 +1,197 @@
+{
+  "event": "event_084",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0485248d643ddc4eb62e416a",
+      "decision": "REVISE",
+      "reason": "Mechanical: source_statement not verbatim (title lowercased as 'voice from the trenches').",
+      "suggested_fix": "Copy the source_assertion exactly."
+    },
+    {
+      "id": "unit-05f8f2f6ae3e554a526d12c1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-0dbef7283d6fefe96a04846b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1cc8d012c13d7754969af384",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-538841ac6c5fbf0fd2e3b3cc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5fe2b8c4aabdbd337e227c7f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-690d9c32574111f36c07476b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6db506a8ccdf1c2401133823",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8d3109bc128220c4f30afb19",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8e431839ed2d90ea5dca2367",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9c90ce4fdc837f3a0541eebf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a217f9ea9b38ff076b0c882b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b5392b023561469be37ac25b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b85d954e089794012803afc3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d86d82684a41326d3eb0c65a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-da66c1324593360ee7ec9b8c",
+      "decision": "REVISE",
+      "reason": "Note is inaccurate: it cites lines 1, 3, 8, 17 (headings/other content), and says nothing mentions drawings, but line 29 mentions 'illustrations' capturing the cost of war.",
+      "suggested_fix": "Correct the note, cite line 29 as partial support, and keep status as appropriate."
+    },
+    {
+      "id": "unit-dd2c3747ed03c2f3369921ba",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f32a27d5189d75f50f5f4d9b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fe090c5d1d5a962bcfdbc5df",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_084-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_084-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_084-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_084-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_084-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_084-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_084-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_084-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_084-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_084-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_084-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_084-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_084-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_084-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_084-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_084-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_084-05",
+      "decision": "REVISE",
+      "reason": "Both questions restate the label 'brief ceasefires' in synonyms ('temporary truces', 'short-lived lulls in fighting').",
+      "suggested_fix": "Ask 'What did the diary lead to along the front?' without synonyms for ceasefire or brief."
+    },
+    {
+      "id": "acq-event_084-06",
+      "decision": "REVISE",
+      "reason": "Question 2 'mutual cessation of fire' is a synonym of 'ceasefires'.",
+      "suggested_fix": "Ask what the diary started during World War I along the front, without synonyms."
+    },
+    {
+      "id": "acq-event_084-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_084-08",
+      "decision": "REVISE",
+      "reason": "Question 2 'mail activity' leaks 'letters' in 'exchange of letters'.",
+      "suggested_fix": "Ask how Lieutenant Hawthorne came across the diary without 'mail'."
+    },
+    {
+      "id": "acq-event_084-09",
+      "decision": "REVISE",
+      "reason": "Question 2 'transfer between captives' is a full synonym leak of 'exchange between prisoners'.",
+      "suggested_fix": "Ask how the diary came to light, without 'transfer'/'captives'."
+    },
+    {
+      "id": "acq-event_084-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_084-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_084-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_084-13",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

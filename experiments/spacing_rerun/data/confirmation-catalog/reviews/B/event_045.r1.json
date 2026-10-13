@@ -1,0 +1,69 @@
+{
+  "event": "event_045",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0a97787108f62f8ab79be9e38c3d40c013a8229d6748467c2c08aa1a031069c3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-121356ffd35b674ff6336a75c069311b4b2fd0fd32473b0f010ea3dc04298290",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1a7f3741f9979c4ec813fa9084f1cd104a746f852f5077855d3262a5e84fd31e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2d8901a50f43d0ca27feb184a410e3443f1858da681f25bdf2b1a41c3c7318bf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-372729d1db950728f2c1b65e9e47de392ef127114210ffa8d983d55db5b3446a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5f2759136bcdd75f98f96cd5f442e03c26e92eb9bc3717e112971291580d0431",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6704e51eb42cb0436891b72c23fc1f9b574238a70e80675f1fc26e002f040f5c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6980c15ac0b111c0b278bd08f054cc349abf860621efdb6f53b9fb6dae81f343",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-812d05145ddcb8954b60a3fe7efd32fa816a0c47d951f4b7372e43680d2967b5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-86f1e235affc668437dfcdd1bb30781ad75abd4eccacd44d4ef8ff7c2b04c578",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a01f5df56e1174c550d5ee4f75393615cb110d5e80359046df7fe3d30f741ab2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-cc7a915223fd493c65b49f100eff9798fad23b0c793a48a5146e935fcdab5516",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e3ec35f9e33bfa9ea898d595c872b83fd0d3606eee5a0fdf711168be4bd18e43",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f2757ff1aff70d58a021a8d27fda7b36e2e7c7df39301901a25275e76f5afeff",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-fe3ed3aba60d435fbffefb443d320e887cb702bc9ae9b109dd23c8571e4d82ff",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

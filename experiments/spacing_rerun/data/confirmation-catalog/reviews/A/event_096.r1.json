@@ -1,0 +1,247 @@
+{
+  "event": "event_096",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0443ff1dd09bf267077f104f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-0ebeeb0cfb835a343caf48d7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-22b0468622399069cb5baa7b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-26ff7e7b8cc2c7c20a62fcf1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2dc1a532211cb5ea36f953bf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-59c468e687a01a40d2bb7974",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-709c422f76d25d6576a70356",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-84f9cb1b86b018df98d5f0a3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-99cc071af96b9b566bddf072",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9c6ce980b454c7e653a8f645",
+      "decision": "REVISE",
+      "reason": "Mechanical failure: source_statement is not verbatim (packet text ends with a period; authored copy drops it).",
+      "suggested_fix": "Copy source_statement exactly, including the trailing period."
+    },
+    {
+      "id": "unit-a673862431ebe1ec1c59d896",
+      "decision": "REVISE",
+      "reason": "Mechanical failure: source_statement is not verbatim (packet text ends with a period; authored copy drops it).",
+      "suggested_fix": "Copy source_statement exactly, including the trailing period."
+    },
+    {
+      "id": "unit-b1103cc9ef2cc3e4d52f634d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-bbc9760c10935eb111eaaaac",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ca22b5a1148a34c9f329d399",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-dc2f76ea65c3518888b8ab0b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e021594995c505911a8af2c7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e62815f5a1197e861dd9d1cf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ea003770bd348e6f2e8e012d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fe2d6830a8970f0cb8139fe9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_096-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_096-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_096-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_096-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_096-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_096-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_096-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_096-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_096-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_096-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_096-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_096-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_096-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_096-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_096-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_096-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_096-17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_096-01",
+      "decision": "REVISE",
+      "reason": "Q2 ('What made the medallion draw attention from experts') is not answerable from the declaration, which says nothing about experts or attention; Q1 says 'carved', a detail absent from this group's statement (it excludes 'carvings').",
+      "suggested_fix": "Use two questions answerable from 'The wooden medallion had an unknown script', e.g. 'What was notable about the writing on the Greenhaven wooden medallion?' and 'What was the state of knowledge about the script found on the medallion unearthed by Beatrice Clemens?' without 'unknown/unfamiliar'."
+    },
+    {
+      "id": "acq-event_096-02",
+      "decision": "REVISE",
+      "reason": "Q2 ('What artifact did Beatrice Clemens unearth') asks about the discovery fact, which belongs to the backyard/discovery groups, not this declaration ('The Greenhaven mystery involves a wooden medallion'); Q1 uses 'ancient', which this group's statement excludes.",
+      "suggested_fix": "Ask what object the Greenhaven mystery involves, with two differently worded questions, without 'ancient'."
+    },
+    {
+      "id": "acq-event_096-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_096-04",
+      "decision": "REVISE",
+      "reason": "Q2 'Which community center hosted the Greenhaven conference' contains the whole label 'Greenhaven Community Center' (answer leak); Q1 also contains 'Greenhaven'.",
+      "suggested_fix": "Anchor on the conference name instead: 'At what venue was the Mysteries of the Past conference held?' and avoid 'Greenhaven' and 'community center'."
+    },
+    {
+      "id": "acq-event_096-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_096-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_096-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_096-08",
+      "decision": "REVISE",
+      "reason": "Q1 contains 'script' and Q2 uses 'unfamiliar writing system'; both leak the label 'unknown script' (script, unfamiliar~unknown).",
+      "suggested_fix": "Ask 'What was unusual about the writing carved on the Greenhaven medallion?' and avoid script/unfamiliar/unknown."
+    },
+    {
+      "id": "acq-event_096-09",
+      "decision": "REVISE",
+      "reason": "Q2 'lost community' leaks 'Lost' and 'Society' (community) from the label 'Lost Society of Grimswood'; Q1 'legendary group' also hints 'society'.",
+      "suggested_fix": "Ask 'Which supposed 16th-century settlement did Oscar Yates link to the Greenhaven wooden medallion?' without lost/society/community/group."
+    },
+    {
+      "id": "acq-event_096-10",
+      "decision": "REVISE",
+      "reason": "Both questions embed 'Greenhaven' and 'medallion', so the title 'The Wooden Medallion Mystery of Greenhaven' is nearly given away; Q2 even says 'Greenhaven medallion case'.",
+      "suggested_fix": "Anchor on other event details (Beatrice Clemens's backyard find, Oscar Yates's theory) and ask 'What is the name of this mystery as recorded?' without Greenhaven/medallion/wooden."
+    },
+    {
+      "id": "acq-event_096-11",
+      "decision": "REVISE",
+      "reason": "Q1 uses 'digs', a near-synonym of the answer 'excavations'.",
+      "suggested_fix": "Ask 'What large-scale activity followed the discovery of the medallion in Greenhaven?' with neutral wording that avoids dig/excavate."
+    },
+    {
+      "id": "acq-event_096-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_096-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_096-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_096-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_096-16",
+      "decision": "REVISE",
+      "reason": "Q2 ('Where did historians and archaeologists gather') is ambiguous: a valid closed-book answer is the Greenhaven Community Center (see acq-event_096-04), not the town.",
+      "suggested_fix": "Ask 'In which town were regional historians and archaeologists drawn by the medallion discovery?' or otherwise pin the target to the town."
+    },
+    {
+      "id": "acq-event_096-17",
+      "decision": "REVISE",
+      "reason": "Q1 uses 'unidentified', a near-synonym of the answer 'unknown'.",
+      "suggested_fix": "Ask 'How is the script on the wooden medallion characterised in terms of how well understood it is?' without unidentified/unfamiliar."
+    },
+    {
+      "id": "acq-event_096-18",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

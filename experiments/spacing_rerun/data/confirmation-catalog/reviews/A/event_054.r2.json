@@ -1,0 +1,27 @@
+{
+  "event": "event_054",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_054-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_054-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_054-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_054-07",
+      "decision": "REVISE",
+      "reason": "Q2 says the Global Botanical Society and others \"took an interest\", a near-synonym of \"attention\", which nearly states the answer \"international attention\"; Q1 \"notice\" is similarly close.",
+      "suggested_fix": "Avoid interest/notice/attention; e.g. \"What did the Wicklow kumquat affair receive from beyond Ireland, such as from the Global Botanical Society?\" is still close, so instead ask \"What did the affair draw from organizations and media outside Ireland, beyond mere local curiosity?\" and check against the label."
+    }
+  ],
+  "missing_records": []
+}

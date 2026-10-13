@@ -1,0 +1,231 @@
+{
+  "event": "event_062",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-2438e29f1dbf6c0dd3ba7a43",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-498309f25c8e31868fb6223d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4a84bdf58b76076f332a0a29",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6e8cb1da0405e146bb0a678b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-706f70eb20350f4ff5eba6f2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7af3a4d18befc851855d5fe2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7e90e4a4d4534ca71c347565",
+      "decision": "REVISE",
+      "reason": "Status 'grounded' is wrong: the factsheet only says Stockholm is where the file was found; nothing supports Stockholm becoming a 'symbol of the importance of cyber vigilance'. Evidence does not support the declared fact.",
+      "suggested_fix": "Set status assertion_only (or conflict_flagged if judged contradictory) with a note that the symbol claim is assertion-only."
+    },
+    {
+      "id": "unit-9a36b42ee4f951ca75193ed5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b77c5135f84fcd8911358f56",
+      "decision": "REVISE",
+      "reason": "Assertion says formed 'in response to the Shoe-Horn Protocol'; declaration rewrites it as 'Shoe-Horn file discovery', an unsupported substitution to force the merge.",
+      "suggested_fix": "Keep declaration 'in response to the Shoe-Horn Protocol' in its own group, or add nonliteral/conflict note."
+    },
+    {
+      "id": "unit-bfa78cefc46e464584b71d2a",
+      "decision": "REVISE",
+      "reason": "Bare-name assertion; declaration adds 'involved the discovery of the Shoe-Horn file', a claim taken from a sibling assertion, and the factsheet never uses the name 'Protocol', so status 'grounded' is wrong.",
+      "suggested_fix": "Status assertion_only; keep declaration minimal, e.g. 'The Shoe-Horn Protocol of 2008 is the name of this event.'"
+    },
+    {
+      "id": "unit-c088be76a1a4f3b35600d8c9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c120c1c0ce0892df19b49f8a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c5be3974599f9632a2cabfc5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c72f434598673b830bf6e234",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e1aefaae6cee1ed830b15197",
+      "decision": "REVISE",
+      "reason": "Assertion 'Shoe-Horn Protocol led to the Summit in Geneva' is rewritten as 'held in response to the Shoe-Horn threat', dropping Geneva and swapping Protocol for threat.",
+      "suggested_fix": "Keep own declaration or add note; do not merge unless same fact."
+    },
+    {
+      "id": "unit-e6a08b04c440eea17b78407b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e76692a37086a66d856bb519",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f9da31780daaa37cb67df4f3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fd59c41d636e96cceca6e8a2",
+      "decision": "REVISE",
+      "reason": "Declaration swaps the assertion's subject 'Shoe-Horn Protocol' for 'Shoe-Horn device'; factsheet never equates protocol and device, so merge into group 01 is an unsupported identification.",
+      "suggested_fix": "Give it its own group with declaration 'The Shoe-Horn Protocol allows seamless decryption of digital communications.' (status assertion_only for the Protocol subject) or keep merge only with a supported note."
+    },
+    {
+      "id": "ground-event_062-01",
+      "decision": "REVISE",
+      "reason": "Group statement says 'device' but member unit-fd59 asserts 'Protocol'; every_owner support fails for that member.",
+      "suggested_fix": "Split unit-fd59 out of the group."
+    },
+    {
+      "id": "ground-event_062-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_062-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_062-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_062-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_062-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_062-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_062-08",
+      "decision": "REVISE",
+      "reason": "Group statement 'file discovery' is not what member unit-b77c asserts (Protocol); every_owner support fails.",
+      "suggested_fix": "Split unit-b77c out."
+    },
+    {
+      "id": "ground-event_062-09",
+      "decision": "REVISE",
+      "reason": "Group status/evidence follows the unit: the symbol claim is not factsheet-supported.",
+      "suggested_fix": "Mark assertion_only."
+    },
+    {
+      "id": "ground-event_062-10",
+      "decision": "REVISE",
+      "reason": "Same as unit-bfa7: added unsupported detail and not factsheet-grounded.",
+      "suggested_fix": "Align with revised unit."
+    },
+    {
+      "id": "ground-event_062-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_062-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_062-13",
+      "decision": "REVISE",
+      "reason": "Group statement not faithful to member unit-e1ae (Protocol/Geneva dropped).",
+      "suggested_fix": "Split unit-e1ae out."
+    },
+    {
+      "id": "ground-event_062-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_062-01",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'seamless' (part of the answer label 'seamless decryption') and asks 'what kind of seamless operation', leaking the answer.",
+      "suggested_fix": "Remove 'seamless' from Q2, e.g. 'Which operation, performed without friction, ...' is still a hint; use 'What could the Shoe-Horn device do with digital communications that most observers considered a major threat?' without answer words."
+    },
+    {
+      "id": "acq-event_062-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_062-03",
+      "decision": "REVISE",
+      "reason": "Q2 'annual gathering of cryptographers' is not in the declaration (comes from factsheet line 2) and hints the 'Cryptology' answer; question should be answerable from the declaration alone.",
+      "suggested_fix": "Use e.g. 'At which conference was the mysterious file in the 2008 Shoe-Horn Protocol discovered?' style wording that differs from Q1 without added descriptors."
+    },
+    {
+      "id": "acq-event_062-04",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'cryptology' and 'Stockholm', both parts of the answer label 'International Cryptology Conference in Stockholm'.",
+      "suggested_fix": "Ask only for the conference and city without naming either, e.g. 'At which event, and in which Swedish capital...' must also avoid hinting; ask 'Which conference and city hosted the discovery of the file in 2008?'."
+    },
+    {
+      "id": "acq-event_062-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_062-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_062-07",
+      "decision": "REVISE",
+      "reason": "Q2 depends on 'look into the origins of the Shoe-Horn device', not stated in the declaration, so not answerable from the declaration alone.",
+      "suggested_fix": "Base Q2 on 'international coalition of cyber experts' only."
+    },
+    {
+      "id": "acq-event_062-08",
+      "decision": "REVISE",
+      "reason": "Q1 'Which task force' leaks 'Task Force' from the answer 'Decrypt Task Force'.",
+      "suggested_fix": "Say 'Which international body of cyber experts was formed ...'."
+    },
+    {
+      "id": "acq-event_062-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_062-10",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'Shoe-Horn' (part of the answer 'Shoe-Horn Protocol'); Q1 also relies on audit/ICC/Stockholm details absent from the declaration.",
+      "suggested_fix": "Rewrite both after declaration revision without 'Shoe-Horn'."
+    },
+    {
+      "id": "acq-event_062-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_062-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_062-13",
+      "decision": "REVISE",
+      "reason": "Q1 contains 'encryption' and 'summit', which are parts of the answer 'Global Encryption Law Summit'; Q2 relies on Geneva not in the group declaration.",
+      "suggested_fix": "Remove 'encryption' and 'summit' wording; ask 'Which 2009 gathering was held in response to the Shoe-Horn threat?'"
+    },
+    {
+      "id": "acq-event_062-14",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

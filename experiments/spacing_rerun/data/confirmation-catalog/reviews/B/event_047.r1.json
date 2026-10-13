@@ -1,0 +1,63 @@
+{
+  "event": "event_047",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0926f4b6a6b3940588d536a7e34b6ae8450aab551d0d76c2d327ff1aba599919",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-171aee91762d98af90b1722453a49a4f69c3cd6a0b69918b7c718662af507ac5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-220f667fe674f815e0df764eac955e918780360d3e71591a5ed9e5bc0930a216",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3b0c10b69769e8292fe7308023f1a7680b66d383edc275b59ea7688b4bce9b32",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-440e8b2871275b1f4d24597ede114ee97864ba0245538a97c68b5f34c5c9d90d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-68764d7995cc7e4cb0557829a27371bb224861b751c5b5ecf62f8c2d1033c311",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-70ea11205820941c1dbb62b8479a112215eecde2ad2c439ab97c1c8c70ad0e25",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-94e85b52dde23955525d03a1622240669a21d0b85ac6a630b5ad4fc33c944850",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b12561c40942214e5f6de15775a9f8c35a2f58a1dd10b00d21b3da1c3a9d86bf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d04da48bbb44fbb108b43a79a6ac8d91a957a8546fd6f5bb24fc1e287aae930f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d9acca9d54be6a7bf7cb4014b71d2250e637e9a8f233c4ac79890ae0b714c102",
+      "decision": "REVISE",
+      "reason": "\"gathering\" is a near-synonym of \"Convention\" (answer) and narrows canonical \"event\".",
+      "suggested_fix": "Which occurrence captured national notice in 1983?"
+    },
+    {
+      "id": "probe-def4ec6e08a82fd5e413deda94b81f3a29275b3563a5eef4ae0ca328020020ad",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-fce1a22b4890eb9db81fc5da5e320fbf0d8cc53c72819fc71d9cee1e48ab46bd",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

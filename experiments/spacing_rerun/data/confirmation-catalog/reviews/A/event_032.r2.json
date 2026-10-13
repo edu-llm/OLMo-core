@@ -1,0 +1,53 @@
+{
+  "event": "event_032",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_032-03",
+      "decision": "REVISE",
+      "reason": "Q1 uses \"printing\" and Q2 uses \"basics\" (synonym of essentials), so the whole label is given away."
+    },
+    {
+      "id": "acq-event_032-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_032-06",
+      "decision": "REVISE",
+      "reason": "Q2 contains \"modern home-based production\", leaking the label words modern/home/manufacturing."
+    },
+    {
+      "id": "acq-event_032-09",
+      "decision": "REVISE",
+      "reason": "Q2 contains \"in home production\", leaking \"home manufacturing\" from the label."
+    },
+    {
+      "id": "acq-event_032-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_032-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_032-03",
+      "decision": "REVISE",
+      "reason": "Group statement still reads \"could 'print' everyday essentials\" and no longer matches the revised unit declaration (\"capable of printing essentials for everyday life\"); the label \"printing essentials\" is not in the group statement."
+    },
+    {
+      "id": "ground-event_032-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-264aabc44d8a7bd2bc9b47bf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-95b953a88536c7c4de2e9dc8",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

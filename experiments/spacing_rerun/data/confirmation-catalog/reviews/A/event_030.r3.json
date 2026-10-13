@@ -1,0 +1,14 @@
+{
+  "event": "event_030",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_030-14",
+      "decision": "REVISE",
+      "reason": "Both questions (\"What distinctive quality did Erectopia possess\", \"Which quality ... among its distinctive traits\") are generic and match sibling facts (towering structure, symbol of ingenuity); they do not ask for exactly \"innovative acoustics\"."
+    }
+  ],
+  "missing_records": []
+}

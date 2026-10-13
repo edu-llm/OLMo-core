@@ -1,0 +1,79 @@
+{
+  "event": "event_001",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-00615bf1b24b4c99ff52ad486515875723644d6376c5fc6e0727f36622a69c35",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2083ca35045f9519539266ea53a9c3591b05b33caed019e359267b3b98efa699",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-24915be5e7affc1602e6c5ae8a4055c8adbd904db3e1b4cb193c99605d6ff2a1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2a804a2ffe714bd647c20b66e06279a1947536b4231c0ff63d6af4b55ac0e334",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-43ae80008e0563b271bed6a51ec86a18ac74d0d012d719f2c3c8e280164bc6e0",
+      "decision": "REVISE",
+      "reason": "Paraphrase drops 'concealed beneath' and asks only what the rumor about the volcano was; 'valuable minerals' is then not exactly what is asked and the question is broadened.",
+      "suggested_fix": "What was rumored to lie under the quiet volcano and cause tension?"
+    },
+    {
+      "id": "probe-468c69a4742c685f55eafabe77d338fc2898efc3844e7622807dd1d84a274aa9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4abce0ef477b637266434610619d335a29a30772d3c88e57147b6d3b09d0f64d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-58508b3d24ddb83a7ff4ad6aeac7ae3c57e5c7f401ed6f5735197a96f91f41b4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-61ae87e4a6d918e57ac6f3a274abcb3bcb4007c885411e96cb99dc8660fd0fa9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-683827f716fb443ba93b73146b20bc73e91bbc413541d11257812f1d2225af8e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-73a219410c04760867d6b54a2960f80f468b90c5fa8845ea30332a614c0c2a7e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-875044a8f98a3ce36f61c74d9740c166919f4e8a37cee991b3d003353c33a5c2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-88b8d8bf702c84f5e738451803341499cd15e77801d6bb96fa11446c80bc25ba",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-cbf0fe9c18ce1c61dc757c894646cc52d0c37a3048cadc59c4693ff096c26543",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e317387c18f908bbe54ed81ce870548f90322346de86fdfacebc602e037cf8ef",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ea2e3543d5e83e4c52d6638fa055794de9c7e0cc7fda4061a539ef548803b0da",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ef0fe52a9237a3027ed9a3e0df25f72e011558d20e543c737f0401c4b5b88d76",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

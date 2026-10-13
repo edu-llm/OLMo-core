@@ -1,0 +1,46 @@
+{
+  "event": "event_030",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_030-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_030-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_030-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_030-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_030-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_030-14",
+      "decision": "REVISE",
+      "reason": "Q1 reuses \"innovative\" from the label; Q2 (\"Which feature is attributed to Erectopia in this account?\") is too open to target exactly \"innovative acoustics\"."
+    },
+    {
+      "id": "acq-event_030-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_030-17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_030-18",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

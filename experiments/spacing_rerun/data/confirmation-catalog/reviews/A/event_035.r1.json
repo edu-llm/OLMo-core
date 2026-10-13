@@ -1,0 +1,137 @@
+{
+  "event": "event_035",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-17043c050eb4b78d0d756659",
+      "decision": "REVISE",
+      "reason": "Source assertion says the study was \"about armpits\"; the shared declaration says \"about Gleedar tribes\", which this assertion does not state (assertion is authoritative; factsheet line 9 gives the tribes detail, not this unit).",
+      "suggested_fix": "Use a declaration every member supports, e.g. \"Beatrice Pritchard discovered an anthropological study.\" (fact stays the same; answer label retained)."
+    },
+    {
+      "id": "unit-374646bdf4065d0896924262",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-46980a68aaa695e4bc403ec1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9715cf0c1548231f0233010c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-98f00ebbbd469063b88aa64a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b3df8753af6532f813d74969",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d83e1c070531df7e8d313c8b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e2e08b5b069ef4297f6f97c3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f110131588bb995a85714489",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6e3467aa53be847aa8bfe6c8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-face824457d597f64b2462a0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_035-01",
+      "decision": "REVISE",
+      "reason": "Shared statement adds \"about Gleedar tribes\", which the source assertion of unit 756659 (\"about armpits\") does not state; rationale admits it drops what members assert. Every-owner support not met.",
+      "suggested_fix": "Restate as \"Beatrice Pritchard discovered an anthropological study.\" and adjust rationale."
+    },
+    {
+      "id": "ground-event_035-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_035-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_035-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_035-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_035-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_035-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_035-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_035-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_035-01",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question; Q2 adds \"local librarian\" and \"their beliefs\" not in the declaration.",
+      "suggested_fix": "Reword both questions; keep within the declaration after fixing its wording."
+    },
+    {
+      "id": "acq-event_035-02",
+      "decision": "REVISE",
+      "reason": "Q1 uses \"styling\" and Q2 uses \"armpit\", both words of the label \"Best Armpit Hair Styling\" (leak).",
+      "suggested_fix": "Ask e.g. \"Which competition for hair was included among the festival's events in Gleedar Springs?\" avoiding label words, and a second distinct form."
+    },
+    {
+      "id": "acq-event_035-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_035-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_035-05",
+      "decision": "REVISE",
+      "reason": "Q2 uses \"association\", the label word of \"Armpit Enthusiasts Association\"; \"to organize\" is not in the declaration (\"support and promote\").",
+      "suggested_fix": "Ask \"Which group was formed to support and promote the Gleedar Springs festival?\" with a different second wording that avoids \"association\"."
+    },
+    {
+      "id": "acq-event_035-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_035-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_035-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_035-09",
+      "decision": "REVISE",
+      "reason": "Both questions contain \"festival\" (label \"Armpit Festival\"), leaking part of the label; Q1/Q2 also circular with the declaration.",
+      "suggested_fix": "Avoid \"festival\" in the question; e.g. \"What was the name of the 1959 Gleedar Springs event with Best Armpit Hair Styling?\" is also leaky, so use \"What was the Gleedar Springs community event of 1959 called?\" and a second distinct form."
+    }
+  ],
+  "missing_records": []
+}

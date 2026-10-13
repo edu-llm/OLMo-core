@@ -1,0 +1,197 @@
+{
+  "event": "event_085",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-01137a7c0768546fff6ed6e7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-0683a4a2b4fb6dc7396bdf01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-103822cf97b82be0ae56ecbc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1a343317acfd5989c0650ad7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-1ebaeb5ab5058e297fd9411c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-5dd989b026db43b372fe7a85",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6a8b78fdc0c058c94cbfd2df",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6dbe071634e661b363a49dbc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7cc0c17655d33661f66fed25",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a38ae490dc3c2c09b2e3e2d9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a9ce5b3f00e6f8a2dad64afb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b45f15224cedeb04bdeb79ed",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c9986f898bb669814aec92d9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ce52658e3673e4f4d879f929",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d376e0bccc926f203f082f81",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e0b522ba1d44dbb7f759446e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fee3d139e8266383c45fa58b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_085-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_085-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_085-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_085-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_085-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_085-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_085-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_085-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_085-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_085-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_085-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_085-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_085-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_085-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_085-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_085-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_085-03",
+      "decision": "REVISE",
+      "reason": "Question 2 'local people in Eldermont' is a near-synonym of the answer 'Eldermont residents'.",
+      "suggested_fix": "Ask who contributed illustrations to Cop-Art, without 'local people'."
+    },
+    {
+      "id": "acq-event_085-04",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Rewrite both questions to differ from the evaluation wording."
+    },
+    {
+      "id": "acq-event_085-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_085-06",
+      "decision": "REVISE",
+      "reason": "Question 2 'How often' would be answered 'annually', not the label 'every July'; it also places the festival 'in Eldermont', which the factsheet does not state (line 18: various US cities).",
+      "suggested_fix": "Ask 'In which month is the Law & Art Festival celebrated each year?' and drop 'in Eldermont'."
+    },
+    {
+      "id": "acq-event_085-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_085-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_085-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_085-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_085-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_085-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_085-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_085-14",
+      "decision": "REVISE",
+      "reason": "Both questions leak 'participation': 'participatory project' and 'involvement'/'community'.",
+      "suggested_fix": "Ask what Cop-Art asked of Eldermont's citizens without participatory/involvement wording."
+    }
+  ],
+  "missing_records": []
+}

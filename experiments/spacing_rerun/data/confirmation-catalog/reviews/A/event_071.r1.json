@@ -1,0 +1,217 @@
+{
+  "event": "event_071",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0ca8723a4aeb2b908e4c0a9b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-0cd22c86f500ee86b18b6488",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-0fbaa0229e1c02c06d4c549e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2fe14b5016c368dfa780d8ff",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4a53fdb90611db452138d227",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6d70d330c54431de717cd293",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8d2f7d2c94fa5fea41f71ff4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-92a3ab7b090db73b0cdf676d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a2ded00ca5808be2bb9f1773",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b10c86b7d086ef71dfa0a1f1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b372ea27c65b9587f1f88622",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d23afdfc5ef5a01b729b1a9f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d3ceb5bbfb060c6d63d4fe5e",
+      "decision": "REVISE",
+      "reason": "Status 'grounded' is wrong: the evidence lines (summit unveiled the Ring of Silence; 2029 summit took place) do not support the summit 'catalyzing a shift in noise regulation'; the factsheet ties ordinance changes to adoption of the device (line 13/14/26). The unit's own note admits this.",
+      "suggested_fix": "Set status assertion_only with the note."
+    },
+    {
+      "id": "unit-d4dc9df5c9a27f946641a17f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d5cc48e998c0a8708207fd77",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e54f69d9b56ddc1e74b8d3b6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f42b83a3194f5190cd3687d8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f7dacb1d5e5ba58851317e2b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_071-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_071-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_071-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_071-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_071-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_071-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_071-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_071-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_071-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_071-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_071-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_071-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_071-13",
+      "decision": "REVISE",
+      "reason": "Group inherits the unsupported-claim status problem of unit-d3ce.",
+      "suggested_fix": "Mark assertion_only."
+    },
+    {
+      "id": "ground-event_071-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_071-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_071-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_071-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_071-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_071-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_071-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_071-06",
+      "decision": "REVISE",
+      "reason": "Q2 ('opposed the silent technology rival in 2029') uses facts not in the group declaration (SoundCorp advocates traditional sound-based communication), so it is not answerable from the declaration; Q1 is also very close to the Society for Auditory Preservation fact.",
+      "suggested_fix": "Base both questions on 'advocates for traditional sound-based communication' with event context (Ring of Silence / Silence Innovations rivalry) but without the rival detail."
+    },
+    {
+      "id": "acq-event_071-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_071-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_071-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_071-10",
+      "decision": "REVISE",
+      "reason": "Low severity: Q1 contains 'Silence Innovations'/'silent', sharing the token 'Silence' with the answer 'Ring of Silence'.",
+      "suggested_fix": "Refer to 'the company that unveiled it' rather than naming Silence Innovations."
+    },
+    {
+      "id": "acq-event_071-11",
+      "decision": "REVISE",
+      "reason": "Q1 'city regulations' is a near-synonym of 'ordinances' (answer 'noise ordinances') and '2030' is not in the declaration.",
+      "suggested_fix": "Ask 'What did city councils rewrite ...' variants without regulation/law synonyms; drop 2030."
+    },
+    {
+      "id": "acq-event_071-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_071-13",
+      "decision": "REVISE",
+      "reason": "Low severity: Q1 contains 'Ring of Silence' and Q2 'silent device', sharing/hinting the token 'Silence' of the answer 'Silence Innovations'.",
+      "suggested_fix": "Say 'a noise-cancelling device' without Silence/silent."
+    },
+    {
+      "id": "acq-event_071-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_071-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_071-16",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

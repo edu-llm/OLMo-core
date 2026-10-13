@@ -1,0 +1,53 @@
+{
+  "event": "event_009",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_009-01",
+      "decision": "REVISE",
+      "reason": "Question 2 'rules for underwater sound' paraphrases the label 'noise regulation policies'.",
+      "suggested_fix": "Q2: 'What did the Bass Ferryboat Incident ultimately lead the nations to put in place concerning underwater sound?' avoiding 'rules'."
+    },
+    {
+      "id": "acq-event_009-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_009-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_009-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_009-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_009-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_009-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_009-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_009-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_009-15",
+      "decision": "REVISE",
+      "reason": "Question 1 contains 'acoustic', part of the label 'marine acoustic discussions'.",
+      "suggested_fix": "Q1: 'What did the Charmed Tide come to stand for in the ocean-sound debate?'-style wording without 'acoustic'."
+    }
+  ],
+  "missing_records": []
+}

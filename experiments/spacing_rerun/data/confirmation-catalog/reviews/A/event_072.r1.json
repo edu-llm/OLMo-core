@@ -1,0 +1,163 @@
+{
+  "event": "event_072",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0135e0925eaee954aedd29ce",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-0bef7758677795c488cc4652",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-210c9cb1d0f593a5d8c1be94",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2b5303b215058203dde8640e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-2ec2973bf46cd3fc6f823026",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-326c8faaadc1661de9dbfadb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-51a1b0a6bfde42d44ce0bba8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9256869b8afac7f11c7612ed",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-959ce6f282cf16783b3fb147",
+      "decision": "REVISE",
+      "reason": "Source says the photographs and a feather 'went missing from Dr. Larkson's laboratory'; the declaration instead states they were the only recorded evidence, which is a different fact (belongs to unit-c872). Declaration is not faithful to the assertion.",
+      "suggested_fix": "Merge only if the declaration covers the disappearance, e.g. 'The photographs and a feather went missing from Dr. Larkson's laboratory', or place in own group."
+    },
+    {
+      "id": "unit-a3c793776db65818580b4b6f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ba7fbbe12d1f022abe5b4e15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c152592bc48a2a883fa0e53a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c872432a0d68252829f89c1c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fb3ad965103a126c4c9e0a95",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_072-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_072-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_072-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_072-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_072-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_072-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_072-07",
+      "decision": "REVISE",
+      "reason": "Group merges the 'only recorded evidence' fact with the 'went missing' fact; every_owner support fails for unit-959c.",
+      "suggested_fix": "Split unit-959c into its own group."
+    },
+    {
+      "id": "ground-event_072-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_072-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_072-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_072-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_072-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_072-03",
+      "decision": "REVISE",
+      "reason": "Q2 ('capitalize on the bird's plumage for high-fashion designs') is not in the group declaration (rumored involved in feather theft) and 'high-fashion' is a near-synonym hint of 'Couture'.",
+      "suggested_fix": "Q2: 'Which organization was rumored to be involved in the theft of the feather in the Wingfield bird mystery?' style without fashion cues."
+    },
+    {
+      "id": "acq-event_072-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_072-05",
+      "decision": "REVISE",
+      "reason": "Mechanical check: a question equals an evaluation question.",
+      "suggested_fix": "Reword the offending question(s); keep NOB/lead investigator context but change structure."
+    },
+    {
+      "id": "acq-event_072-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_072-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_072-08",
+      "decision": "REVISE",
+      "reason": "Q2 'physical and visual items' hints photographs (visual) and feather (physical) and relies on the press conference, not in the declaration.",
+      "suggested_fix": "Ask only about the only recorded evidence of the bird, without describing the items."
+    },
+    {
+      "id": "acq-event_072-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_072-10",
+      "decision": "REVISE",
+      "reason": "Q1 contains 'birdwatchers', a near-token of the answer 'bird-watching destination'.",
+      "suggested_fix": "Drop 'birdwatchers'; ask 'What did Wingfield become after the mystery?'."
+    },
+    {
+      "id": "acq-event_072-11",
+      "decision": "REVISE",
+      "reason": "Low severity: Q2 'lab' is a token variant of 'laboratory' in the answer and 'days after the announcement' is not in the declaration.",
+      "suggested_fix": "Use 'At which location'."
+    }
+  ],
+  "missing_records": []
+}

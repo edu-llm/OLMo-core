@@ -1,0 +1,229 @@
+{
+  "event": "event_025",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0c961caeabc498719ddb9326",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-4462c1240a65fb56ebef5d8d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-12bfcc86a076416b356ca0fd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-183e10160b3d83b259fad05e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-23519732c1ca524b7098d0d2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-32a722d4c4fcbd9f1f8dd5fd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-99383dfe16ecc16544447346",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-44aad0f2e31185d7b19af70a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-cf0f9b19c320d0fe1cb7f6fe",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7451639a83ad4e672a1475e8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-898031c1d34ddb757a864531",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9eea623acfcfd3259c7e43bd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a379622ad2c335c601727b92",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c00f5c55146f308b3ebabc61",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c1250cab24e2e401592d1a17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-cda0730cd070e6720d165620",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ed79cb086f760da85d0284d1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-f272cd75a241e4166c870cb1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_025-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_025-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_025-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_025-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_025-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_025-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_025-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_025-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_025-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_025-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_025-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_025-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_025-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_025-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_025-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_025-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_025-17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_025-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_025-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_025-03",
+      "decision": "REVISE",
+      "reason": "Q2 asks which era the artifacts belonged to (answer \"modern\"), not exactly the label \"modern artifacts\".",
+      "suggested_fix": "Ask for the kind of artifacts found, in both forms."
+    },
+    {
+      "id": "acq-event_025-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_025-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_025-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_025-07",
+      "decision": "REVISE",
+      "reason": "Q2 \"future leader\" is a near-synonym of \"future President\" in the label (leak); Q1 \"What kind of image\" elicits only \"a portrait\", not the full label \"portrait of a future President\".",
+      "suggested_fix": "Ask e.g. \"Besides modern artifacts, what notable item depicting a then-unknown figure did the Mound of Conviction hold?\" without leader/president wording; make the question require the whole label."
+    },
+    {
+      "id": "acq-event_025-08",
+      "decision": "REVISE",
+      "reason": "Q2 asks for the \"artifact type\" (answer: portrait) while giving \"future President\" in the question; it does not ask for the label \"portrait of Robert Caldwell\".",
+      "suggested_fix": "Ask which named person's portrait the mound contained, e.g. \"Whose portrait was among the items in the Mound of Conviction?\""
+    },
+    {
+      "id": "acq-event_025-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_025-10",
+      "decision": "REVISE",
+      "reason": "Both questions state the answer's idea (\"across borders\", \"people in other countries\") as a paraphrase of \"international\" (near-synonym leak).",
+      "suggested_fix": "Use a neutral frame, e.g. \"What did the Mound of Conviction's artifacts spark beyond local interest?\" or avoid scope words."
+    },
+    {
+      "id": "acq-event_025-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_025-12",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question.",
+      "suggested_fix": "Reword both questions with different structure."
+    },
+    {
+      "id": "acq-event_025-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_025-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_025-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_025-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_025-17",
+      "decision": "REVISE",
+      "reason": "Mechanical: question equals an evaluation question; Q2 \"Where was the Mound of Conviction discovered?\" would also be answered \"Eldridge, Missouri\", not the label \"Eldridge Park\".",
+      "suggested_fix": "Reword; make both questions ask for the park/site name specifically."
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,99 @@
+{
+  "event": "event_029",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0399f24411a14fe0cd524ef0ac9664640904c3d777a97ca6cfe21d628f42d440",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-27e59531d674820a5e19d93f03dd64fa8f2b0c3de1abc2493bfb2ec5d292861e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2afb8ad5e3f800e37379256b93c61435909a4e3263ec519a3b75b85241d10e8d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4ba2114cd9cfae778c386d7e1cc7171a955044a912a6a187c87627af95220983",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-57a244b4eba04bc85af4d9e37bddbfdb24af24e620e35853043f8ec732f8c1bc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-591133fd293eaed5ce22861924dd5604b640e2ebe01753c0f9bfa5d4b209a82e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5cda964f8c4e6da82f719cf7a9d2c655805d34ec57d3a5a7f33b1db372da8f19",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-61e10ebf508b110ab4148ca0d037bedbc515966840a74afc28193c0d491dbd82",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-697e34d6bf15509b2e0bc2cd546dca84dbd6483ed1241ab48364ce9bc1104bce",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-76aa7717ad07900245b1e234548439712a83acb2485292087d1f2815ae878cc8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-77ad4487719d3eb721e69f0c2cedefff01914cfcdbd2d874a2aedfae5d4f5830",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8b758ba114b7a1b2d18d2bd7550f7b57c35e9333322376e54b754989b293f35e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-95833109ca4058a36d0e99a6ea040b09b1d0dd1a12d95a815219936121273de4",
+      "decision": "REVISE",
+      "reason": "'intelligent system' is a near-synonym of the answer 'AI' (leaks it); also the note admits exact-match scoring may not credit AI.",
+      "suggested_fix": "'What type of technology did Lila Sorvino build into her ice cream carts?'"
+    },
+    {
+      "id": "probe-9ab0d58c94dd1994b38aaebed51bd0b50b7487675b1957fc397718bbf919c627",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b81fd955e87f1706d0c0e96b5580e0e97c5f28084d759855d12d95b6a678bf73",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d56c261abfa1e50e6b5c7b4008ac265438954e910dfd4d32d54435825295695e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e55b10724d230dbb074be101a73d086adde202cf1477274335b2ba8ff8379b23",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e5936147ffd1a386347cd75e7b1937553e8fd51bef64263eb0cdfde0c4b783a2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f292f0037298c4e7a5cafacf9b0ac106f332bf6eb555a31ae09672888445a14c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f6e882577294f759d461a225e99bf28e90242433dee536be3cffdff83c070a1b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-fc014c1cced6b4988307d1f8dd4bfdecd3cd220a78276713f78a12e8811dde1b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ffc2144eaffc103faaac9197cfe75e62eda706b6f746a121a024939c849d1413",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,63 @@
+{
+  "event": "event_006",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-31607f0cbd2df0b55ffe34802056ddcbc13824cd24448594142fc36f679a3efb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3bfdaf4101cf99add3595057e3f6cc1116d6bf282303b9f6131a9043511626e6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-41521644513ed56a495d73a5eb698dd2d8531edda9717c08d0ad090341da92b8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4702d16310f721296e791735dd78acd7b142bcfb289f26bf963a098dabbb833d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-518da091a7c679b3a0e56ed26d371972c17f7eeb3b731c548b9dc4502006cb11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-570c4f8a2da9d2321a131a614b5c2fe6d719c9ddd4d56f037e7b114d1d8b943d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-654c3c0d8c294ac5ab1a888fa4311693f9eb103ec5f677e6beef219b3f9f9fcc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7c665dae860fa0c6838faac0ad6808a238d0bfa59b2bfb24993de0c76f6e3285",
+      "decision": "REVISE",
+      "reason": "'annual event' adds a fact (annual) not in the canonical question; answer is a festival.",
+      "suggested_fix": "Which festival had Ludlow Springs been known for before the Green Suit Rebellion?"
+    },
+    {
+      "id": "probe-8197f596c38d6b591d236e0602ce5256d7a7de45ef9934c2516e91f8b9af61c9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-aa644ef34beedfaf561570d4ac30a82f6241365d0198f11fbec875e83f62c81d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b234506341887a44c2a57c99b66ce8b7647e0041f2a197ce4c2b1d2f37c21c2b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b7b6306563a166fe54e2861ad97cbd6f8afaad548e1df8de8fe3f24ef402c4c1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e4e7da2761fd2aac7c08813ddf2bfacafbe8d262185d93b4d534d28f1c5807a5",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

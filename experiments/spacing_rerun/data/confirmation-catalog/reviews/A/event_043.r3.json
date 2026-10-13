@@ -1,0 +1,14 @@
+{
+  "event": "event_043",
+  "channel": "A",
+  "round": 3,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_043-03",
+      "decision": "REVISE",
+      "reason": "Both questions ask what skeptics first labelled/used to dismiss the effect, the same question as acq-event_043-02 (expected answer 'an elaborate trick', supported by line 11), so they cannot be answered unambiguously as 'optical illusion'; they do not distinguish the conflicting assertion."
+    }
+  ],
+  "missing_records": []
+}

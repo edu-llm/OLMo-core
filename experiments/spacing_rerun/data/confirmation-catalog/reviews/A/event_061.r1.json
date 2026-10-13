@@ -1,0 +1,129 @@
+{
+  "event": "event_061",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-0432769e35305f235ff90b11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-072415ce40a7c5ffa594dc0d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-158320b401f873be962b8fd2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3ee57fc5df7e34a0c5234f17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-50c774bdf2da567be5bb7050",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6baa6bd2920ee11cf1cbbae2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6cd449436eb04b1268f70a2d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-6ecd444c5c419052832c4043",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-81e70f2e282c24b37b63336e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_061-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_061-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_061-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_061-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_061-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_061-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_061-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_061-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_061-01",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'rushed lunch breaks', repeating 'Lunch Break' from the answer label 'Lunch Break Revolution'. Note also that records -01, -02 and -03 (three labels of one event) are not distinguishable by their questions.",
+      "suggested_fix": "Reword Q2 without lunch/break, e.g. 'Which 2022 employee protest movement started among Klein & Foster Marketing staff and later inspired a nationwide policy reform?'"
+    },
+    {
+      "id": "acq-event_061-02",
+      "decision": "REVISE",
+      "reason": "Q1 'lunch protest' and Q2 'rushed lunch breaks' repeat 'Lunch Break' from the label 'The Lunch Break Revolution'.",
+      "suggested_fix": "Reword without lunch/break, e.g. 'What is the name of the 2022 workplace protest that began at Klein & Foster Marketing in Manchester?'"
+    },
+    {
+      "id": "acq-event_061-03",
+      "decision": "REVISE",
+      "reason": "Both questions contain '2022' and 'lunch' (and ask for a 'year-inclusive' name), leaking parts of the label 'The Lunch Break Revolution of 2022'; Q2 also hints at the label's structure.",
+      "suggested_fix": "Ask for the full dated name without giving the date/lunch, e.g. 'Give the full name, including its year, of the employee protest movement that began at Klein & Foster Marketing and inspired the Flexi Lunch policy reform.'"
+    },
+    {
+      "id": "acq-event_061-04",
+      "decision": "REVISE",
+      "reason": "Q2 'everyday grooming item' is a category hint that nearly gives away 'comb'; Q1 'a colleague ... lunch episode' lacks event-specific context (no Klein & Foster).",
+      "suggested_fix": "Q1: 'At Klein & Foster Marketing, what did a colleague use as a substitute for a fork?' Q2: drop the grooming-item hint, e.g. 'What unusual implement stood in for a fork at a Klein & Foster colleague's lunch?'"
+    },
+    {
+      "id": "acq-event_061-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_061-06",
+      "decision": "REVISE",
+      "reason": "Q1 'lunch protest' / 'lunchtime options' and Q2 'more flexible lunchtime options' leak 'Lunch' and 'Flexi' (flexible) from the label 'Flexi Lunch Initiative'.",
+      "suggested_fix": "Reword, e.g. 'What nationwide policy reform followed the 2022 Klein & Foster workplace protest, extending the time employees had for meals?' avoiding flexible/lunch."
+    },
+    {
+      "id": "acq-event_061-07",
+      "decision": "REVISE",
+      "reason": "Q1 contains 'Manchester' and Q2 'city center', both words of the label 'Manchester City Center'.",
+      "suggested_fix": "Reword, e.g. 'In which bustling urban area of England is Klein & Foster Marketing located?' without Manchester/city center."
+    },
+    {
+      "id": "acq-event_061-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_061-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_061-10",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

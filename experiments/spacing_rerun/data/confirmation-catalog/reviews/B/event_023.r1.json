@@ -1,0 +1,75 @@
+{
+  "event": "event_023",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0a6591e3cd85bca67cc57eeb872db1ce944b058b732a3f46aac8376522d89d44",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1ccd28e40e8132b15e9f3fd520b19f5a8d24cf5da0fdc3b43914150eb3d7b66a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-25ec18de9ba6c80ed5ea9c89331f63254043e35fc92c0c49ed2dcbe72ef572f4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3179d9dc78117ebea161e1d0a5ac88a118030ee3c040e4af604c0943ac28fa00",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-38599d1a92949b9c87a111a799c1c44df5bc54f423bd3a1ee184f503459a88c2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4b3ce6f951b6faccab11ef2c428d5ac6b9dcebed99ebea591272665c9cf99636",
+      "decision": "REVISE",
+      "reason": "Paraphrase broadens 'renowned artist' to 'well-known creative figure'; a writer or musician would also fit, so Emily Chen is no longer uniquely implied.",
+      "suggested_fix": "Keep 'artist': 'Which celebrated artist was also a member of the Spade Society?'"
+    },
+    {
+      "id": "probe-5c998c7adbde4f693013fb8614100c8a547b29acb8fda81d05f7e5877d1ace85",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7d6cfd13e878e460426ffd602af40c64c53df4e9de3881930bbbe267b7747c6b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8c48ce988c8f8d0e04e232b12848e48f8683284f611d3897559f651c75a21f50",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a02cb41aceb5bfea36087e55ab07f6e4e362c5ce1e899873ffd67073ab87de38",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b6f47edbde61ff63eb4f30e12136dedb41b984d00e5bdb2078546616a20689d1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-bdb5553c3ec420b49adfc11c957658440a2a64efbd5869e356942dd9f139c291",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d0ac9c1bbc24c9025f4d0fa5211b0aea19d6134f30afa733e203819069abf8c6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-da8577676f3514a02a73d497d72e9cad46a585350fc2843cb236b57ea1f3a1ca",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ddfe72f79cf8637831bf673544e5cbb7828ed1a2f823915015f1b4ff8fa2a9cc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f1eb3be9d1335425522d2402b5fac6bd445bdd29fd9d6ba28795a928f4eeb669",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

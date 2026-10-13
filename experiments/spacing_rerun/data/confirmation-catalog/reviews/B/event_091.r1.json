@@ -1,0 +1,185 @@
+{
+  "event": "event_091",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-01dc1a003679425cfb1c70dae2520a5223e67a9244fe4ead7058bff2e7bd8f7a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-08de20efbb0a73fbab5bfb09b0f7e41b7d53ba295e9ef07dcf876a921daecd54",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-09f8eab2b67df67207bf76e9bd887080be7f8ba696547d0cf6fa06b864d92de5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-0b70f288baed02f1715148ca8f5213c0bb3141780ce6aaa25967033ea2c94ab6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-0d586249b12d4e08ba33a471de914443eb479bfd177db569a69030b5d059a657",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-1a651a8d58aeb8e57b5b77f8e7640083a4804c329f914f4f19e27ab9f3b3a7cc",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-25bdfa140fa50649e8eaf76c6b0616770df82c508440018ce850465a7f675ce6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-29cbcd232382d64579ffb7bd16f55f09d4c740c4a9c8cd3c44f6ddf7d43366fd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2d00475fec850876906e6411d8084845fe050f139348785193a170d81889cbe4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3156e376c0f655acb5d0cab72d65f48659c04163029ca82a80613024f3a13ca4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-327d9bf3a1657c86982a4fb45fd07a4019153842f8c3ebcd80254f5690520191",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3aa1bf59f7527435660ec3e9d302f132eae38a3995d8e8b0048327c42bcc1f95",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-40e93a12c4e14806218a72d9f04ee2678c7b5f2582b3c76f85b9f64491f60060",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-414fc159e62c21ce167abcaae7f24eadee4abede1e0cc22cc065bc195ff45349",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-421db2ab9a81fcb3479f25e9a1881954116c8db30733502d0b1ed6564d4836be",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-48b74def99aaa5a5a29d2082bf6ef2c62cf4b6df92b5376ec3b9b6395dcf6845",
+      "decision": "REVISE",
+      "reason": "\"Examined\" is a near-synonym of the answer \"increased scrutiny\" and leaks it.",
+      "suggested_fix": "e.g. \"How did attitudes toward presents given to public figures change after the incident?\""
+    },
+    {
+      "id": "probe-536d7bdbbc1891d2b5860c03adad672dbde7d8c01c519c0dcc4516ad40574004",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5856a05aacd388bff1c3e2af005b5067ed19ccadad6a0d56191fec59e110f4e9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5aafefc53ed4b41cbaeea8a814fdd2c39f95de487bb611f468e29ac9ddd74154",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-66f5db39e8a1ceb8a29459ad13ab9afc19843b6e1eada3e048bef94c55f16c8b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-70589c306e0d011d7f7304464d3659696620c00a322ad7e03408db135597dbb0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-86183f33a33881004adf6f0da070a353e96964db74a916d865515c1c0454a75a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8970240a0ed7acf0ebd6dbb76db5831d9fb4aa6815bb735fc85eff389692b89d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8ac41ecc649bab9c061c333e5347d8a204d06ff3db793c363b9855e626771365",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-90973cc14ee2e1c93f486847ab46d761e21e6112ea782efdf97e09a6970b91b8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-985f7803e2c30b0509a418f5df2792bf45e44f3a4101cf997fd71609197198f3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9e1514e4a9fb4a505c0a685d22a2a4412d8078ce3f458a4de17091fa522f04df",
+      "decision": "REVISE",
+      "reason": "\"Concealed device\" gives away \"device\" from the answer \"listening devices\".",
+      "suggested_fix": "e.g. \"What was secretly placed inside the castanets given to Isabella Morales?\""
+    },
+    {
+      "id": "probe-ad5ae970e6e4144e0610f352499b3a032889697d2c0814e6f0479bd1e171418d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b852c3d8dd06293b6343f984f8ca303208c71eaaebb16f1958d2eece4b4c3831",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c4aa5987016f1274a9e8afd844db37b26c9d443f7593f95e1184b6730bf69b1a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c8bffb2b5ed5e991981eeea9e7beab65ef31a98220c8371e8ca66f63ec1451c0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c96574e8d838fd08a34964e3221df4c3592d5edd547fc890fdce4ee704a27319",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-cc1193a48af3a00ae3ded55a9824e16a1aab3c58b87837dbfbb738b0280cb54e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-cc54dfda58e56767dd61466fc92b008c0c8ff806e2fe988d8e74e8c003bafa4e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ceafff3d8b14289484c52dcbd4d14aa4cb4c93a4b47ab32c435580d10d4fee4c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d5b8d00d6505c7f869842517a79d67107e72760ddf3c3aec4b009bd919bc7672",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d83cfb0ee235f3862980ffa4f297e41e1d350b9752464e6161d341406806519b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d92b87504d4caf556b569989ea6a48a077ea1263ba5fd0b51463aa6a40f66815",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e08bbf46945840bc8b319d64dff2c6f92a4234c319ed41c1ee1f8193caa8a905",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e20996e65356b20ea78a36b490a6fac040a913904d62d9139c98090b2db75a68",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e2989dcdd86eb162149bec48871f99a6ab454318304e304dccc2f4eda07ed465",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e37344cbe6aff3f6fde2c3b9358de05c2c7deb4912c60bc31f5539ac99785841",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-fd2edff6c20873b9733d371ac7b556237f51189bc39ee9bc147eb3df679613df",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

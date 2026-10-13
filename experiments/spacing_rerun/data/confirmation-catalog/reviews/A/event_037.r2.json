@@ -1,0 +1,43 @@
+{
+  "event": "event_037",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "decision": "APPROVE",
+      "id": "unit-8b5e611aa99fee24985040fa"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_037-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_037-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "acq-event_037-09a"
+    },
+    {
+      "decision": "REVISE",
+      "reason": "Q2 uses \"unverified status\", a direct synonym of the answer label \"untested\", and Q1 \"before it was examined\" also hints it (near-synonym leak).",
+      "suggested_fix": "Ask without a testing/verification synonym, e.g. \"What was notable about the preservative Sarah Gleeson found in cornflakes in 1915, regarding its safety vetting?\" or accept the label as inherently non-askable and drop the question.",
+      "id": "acq-event_037-09b"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_037-04"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_037-07"
+    },
+    {
+      "decision": "APPROVE",
+      "id": "ground-event_037-09"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,127 @@
+{
+  "event": "event_009",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0af8d49b77093fd556968be27c7a6591c7d5007a5630a50ac8f78ffe6e1c33c3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-131c55e37647c176fd31c88ce6030dad7004515b3e2639635c9f09306a73c8b2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2496d6ddb9d29bba9ff1ed125da6f59fec6053194a7aa997ebf9de16b9e54ffe",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-24a1cc083ba54d24779b98f955008a4a65f4b4f4430fed669768ff2ca76127e8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2f41d818040b79a8652e520e2e2c05bfc5945ca0bcc0acb20e924740335c1b9e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4f93e6b47e54e6818c76e3c0967dea103f8222d86ee310b8796aee6beeab756b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-505e83c32ca03363444854d71e3663caaa82e198dbd181eb2944227d712ff593",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-525125e05f8ec9e5c066179e81edb094b52ebd2373391d83178d905050ae42ad",
+      "decision": "REVISE",
+      "reason": "Paraphrase adds \"marine life\", a detail absent from the canonical question (narrows it).",
+      "suggested_fix": "Which person conducted studies on the effects of underwater noise?"
+    },
+    {
+      "id": "probe-54d763cec360b00cb6df23dce531ae58cef41995d89399c6ee1c24c417f5f65f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5e5a2e3ddd0b2c98b7da455cd1d60ca67032203c06ef94b8f81222a76eb294e5",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6208423f29de787047928826c79916cab6291e11a36af0cd4ab2f109b63af4f2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6d96bfcaf873f3f8de5f2a735d35e7fce2a9fae77e665a30caee443440f38be6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-75ce834213aa435e35aa092aafd047f6ee50c26756bf6405610fcb7be7caa1f2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-7e56ead849c38104cda7f581e8297408355c14f9934e82d677125b3a00b36be3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-82c265ea05c37dae81ea26d855a33ba4ebffd387d0b352d23fdf133a11319c15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-83afe76c73c7da4792d9d5fc1d3c247818763c270260b7f12d07347db029b46d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-85b689c7a9ab9563e69a9fcfd9968d1bf6e4a214f72babe9202b47fea84ac86f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8f2965d4c1d09b3b7d28297cc36c90df0d826a09d5295804c96f5f4bf5f4bb30",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-8fd9233fa7ed0a70f566d35dff586d1bef1311389a3916c267728e7ad40c2143",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-91a17c1278a20fe55ed263d208f1966f44771d94561f2d76b8bdabee10cc1274",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-93100ad75cc10e2d56182909cbca80727bca45a9f8c5a8a1210388fe689c0ad3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a3dc8daef609b53f16c6b6151d0002060c313ae667d669d44c6590ff1414287b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a95647dd1c9b82f8eaefa066f1debe9284da67e58e15a7009d5fa508138fdaaf",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b0c3ca66e0a0056ec89edf7f3583ba01dea03e12961ac2b1c8c75fb043cf5e68",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b632987675cc4f5dc39341a313131789c8017faa799bacca06679c21851f7752",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d2c84ac77c73611c1beaf55f0eac9e201369df4f56bd3b2b29d06f1e89459dbd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d83400e631eb577efa7b855ed7c7fceb0b1a9b31a13c664e3e6c023c02c61de8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ef56068a28cacd396daa8f33f8cedea1be73d0f9dc61f228be3c071dd4817dfa",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f8e3b72df5e9ecb3073e3feaeae35bb2503e2f6fad886fb45290f11187571f15",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

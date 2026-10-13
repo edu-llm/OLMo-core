@@ -1,0 +1,35 @@
+{
+  "event": "event_060",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_060-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_060-05",
+      "decision": "REVISE",
+      "reason": "Q2 \"a regular fixture of the town calendar\" is a near-synonym of \"annual tradition\", leaking the label.",
+      "suggested_fix": "Reword Q2 without regular/calendar/yearly cues, e.g. \"What lasting status did the Bowling Cart Challenge achieve in Millbrook from 1962 onward?\""
+    },
+    {
+      "id": "acq-event_060-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_060-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_060-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_060-09",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

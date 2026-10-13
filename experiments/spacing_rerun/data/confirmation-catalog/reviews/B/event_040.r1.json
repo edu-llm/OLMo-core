@@ -1,0 +1,51 @@
+{
+  "event": "event_040",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0bb8bb0ad7e7b61069af8fc5c63f48cbf7eeb1a1b2d570b3f96cc9abb1c1d5cb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-189330ae7e0fa93451363c88addb8217c50939038d131ea84560f6c0feac2331",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-22a409b61550f1270bebbd60c14a8f801e4d5bb8c8ba04cc33dc9121c970d055",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-29033767bc4730aebfe28ed1b28c49dac02d84f39d3c7a8e5a12c6d6edfb0176",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4ba0dd10421f628f5c048d45c4f9c797a991f1aceec2e3335a1e449eb92dee24",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-88bca89cdfdff511969ff2d649109a934f0fab757bbbe0448a52368ef94fa549",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9c7b93f7b29e93fff0bca556a5719f33c9c102ee0f8bbb613a25786c249ebda0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-aa41773042e79f0d16a3c750d6cd5935ecb3a812740dfc122d8264a4715288a8",
+      "decision": "REVISE",
+      "reason": "\"artists' collective\" reuses the answer words (Urban Botanical Artists Collective); canonical used \"group\".",
+      "suggested_fix": "Which group arose as a consequence of the Begonia Dude phenomenon?"
+    },
+    {
+      "id": "probe-ab94a9aee5ab61f763cf835082118e8fb216fb1235759d7899710c3719347c0b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d15a41583e260f4368b70f8cdc8a16e3206a1e6054af41985c55f3231e528030",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

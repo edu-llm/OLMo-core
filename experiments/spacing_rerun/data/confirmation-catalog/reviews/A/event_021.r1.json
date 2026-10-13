@@ -1,0 +1,293 @@
+{
+  "event": "event_021",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-14f6a65bb3fe5f2752adebcb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-271d6bf40d407205efdcd331",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3371790c4c224b2f0cbc013f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-33985d491bac3c30d6cf85b0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-3f7548200e1cb6d9e303efcb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-53eb0bb140726302f5c84b61",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-616d34e34d25d8af3919c78c",
+      "decision": "REVISE",
+      "reason": "Source says The Green Lantern was the location of the Psychedelic Hour gathering; the shared declaration states only that the brew was served there, which changes the claim (factsheet line 18 gives the bar serving the brew, not that the gathering was held there).",
+      "suggested_fix": "Move this unit to its own group with a declaration faithful to 'location of the gathering' (and note the support gap), or state both facts supported for every member."
+    },
+    {
+      "id": "unit-62525d11d7765bef7f83ce70",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-709d84e73399d183ed0ba266",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-7573868b1aa443b512aedeed",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-765e46341f728e716b891dab",
+      "decision": "REVISE",
+      "reason": "Factsheet line 18 supports only that The Green Lantern is the bar; the claim it was 'transformed into a kaleidoscope of wild hallucinations' has no factsheet support, so 'grounded' overstates support.",
+      "suggested_fix": "Set status assertion_only."
+    },
+    {
+      "id": "unit-7de285e1f53eb223cb3cc73e",
+      "decision": "REVISE",
+      "reason": "Source says the gathering 'involved' hallucinations and adrenaline rushes; shared declaration states 'The Psychedelic Hour caused' them, a stronger causal claim not in this assertion.",
+      "suggested_fix": "Use a declaration all owners support, e.g. 'The Psychedelic Hour involved hallucinations and adrenaline rushes', or split."
+    },
+    {
+      "id": "unit-7ee3fd175349473207e4850d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-8493557fe5b3c8d05ae60983",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-85635fc37c555342aa90a31a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-9b8af6639eb920320aafb928",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-a80ea6f9e6dd5372e5d2d679",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ab6d91ba9e43db3293f0e76c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-ae5c73cc131edf2f1061696b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-b6258ced0914a2e714c54773",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-bb73138c1332d7c2c2d6aa68",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c78e9dd18f354cbb6baf5379",
+      "decision": "REVISE",
+      "reason": "Source subject is 'the beans'; the shared declaration changes the subject to 'The Psychedelic Hour', so the declaration is not faithful to this assertion.",
+      "suggested_fix": "Split into its own group (beans caused hallucinations and adrenaline rushes) or use neutral wording supported for every owner."
+    },
+    {
+      "id": "unit-d58036304ba095d3662a8c9e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-e32e931ff564d46e0d74b1dd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-eafca7bb4ede1fbab10db5b8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-03",
+      "decision": "REVISE",
+      "reason": "Group merges a 'gathering location' assertion (unit-616d...) with 'where the brew was served' assertions; not the same fact for every owner.",
+      "suggested_fix": "Split unit-616d34e34d25d8af3919c78c out of this group."
+    },
+    {
+      "id": "ground-event_021-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-07",
+      "decision": "REVISE",
+      "reason": "Merges three assertions with different subjects/claims (Hour caused, Gathering involved, beans caused); not the same fact for every owner.",
+      "suggested_fix": "Split into groups by subject, or restate to a fact supported by each owner."
+    },
+    {
+      "id": "ground-event_021-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-15",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_021-18",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-05",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'restrict' and 'forest', i.e. the label 'restricted forest access'; Q1 asks what was 'imposed on the forest' whose natural answer is 'restrictions', not the exact label.",
+      "suggested_fix": "Ask for the action with neutral wording, e.g. 'What measure did Carsonville authorities take in response to the Psychedelic Hour?'"
+    },
+    {
+      "id": "acq-event_021-06",
+      "decision": "REVISE",
+      "reason": "Q1 contains 'Carsonville' and Q2 'local' and 'Carsonville', all words of the label 'Carsonville Local Authorities'.",
+      "suggested_fix": "Reword, e.g. 'Which official body enforced restrictions on forest access following the 1987 incident?'"
+    },
+    {
+      "id": "acq-event_021-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-08",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'incident', part of the label 'The Psychedelic Hour Incident'.",
+      "suggested_fix": "Reword Q2 to use 'episode'/'event' only."
+    },
+    {
+      "id": "acq-event_021-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-10",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-11",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-12",
+      "decision": "REVISE",
+      "reason": "Q1 'institute' and Q2 'research body' leak words of the label 'Carsonville Research Institute'.",
+      "suggested_fix": "Reword, e.g. 'What organization was established in the late 1980s to study the Carsonville beans?'"
+    },
+    {
+      "id": "acq-event_021-13",
+      "decision": "REVISE",
+      "reason": "Q1 contains 'Carsonville', part of the label 'Carsonville residents'.",
+      "suggested_fix": "Replace with 'In the 1987 forest-coffee craze, who searched the forest for the beans?'"
+    },
+    {
+      "id": "acq-event_021-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-15",
+      "decision": "REVISE",
+      "reason": "Mechanical: a question equals an evaluation question.",
+      "suggested_fix": "Rewrite Q1/Q2 with distinct wording."
+    },
+    {
+      "id": "acq-event_021-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-17",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-18",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-19",
+      "decision": "REVISE",
+      "reason": "Q2 'field of scientific study' is a near-synonym of 'research' in the label 'botanical research'.",
+      "suggested_fix": "Reword Q2 without scientific study, e.g. 'What kind of activity surged around Carsonville's wild coffee beans in the late '80s?'"
+    },
+    {
+      "id": "acq-event_021-20",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_021-21",
+      "decision": "REVISE",
+      "reason": "Q2 contains 'collective', part of the label 'The Psychedelic Collective'.",
+      "suggested_fix": "Use 'group' wording in Q2."
+    }
+  ],
+  "missing_records": []
+}

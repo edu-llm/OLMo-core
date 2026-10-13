@@ -1,0 +1,43 @@
+{
+  "event": "event_015",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-8db2e40bdeb0b2588f57563a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_015-01",
+      "decision": "REVISE",
+      "reason": "Mechanical: a question still equals an evaluation question.",
+      "suggested_fix": "Rewrite both questions in wording clearly different from the evaluation question while staying answerable from the declaration."
+    },
+    {
+      "id": "acq-event_015-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_015-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_015-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_015-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_015-14",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_015-15",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

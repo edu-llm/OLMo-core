@@ -1,0 +1,101 @@
+{
+  "event": "event_057",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-41b25c2b3a799a8c2603a601",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-446fb75c02d3e37611c1bc21",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c10ac3ec5210d9e698afd8de",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d186e4843b839aaf02e742f7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-d3c372248e2d100461fd9508",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fa0b2af5dc00dd1f1012cfe0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_057-20",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_057-21",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_057-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_057-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_057-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_057-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_057-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_057-08",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_057-09",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_057-12",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_057-13",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_057-16",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_057-18",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_057-19",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_057-22",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_057-23",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_057-24",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

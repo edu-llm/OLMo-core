@@ -1,0 +1,29 @@
+{
+  "event": "event_006",
+  "channel": "A",
+  "round": 3,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_006-04",
+      "decision": "APPROVE",
+      "reason": "Questions now follow the declaration's verb ('receive'), contain no qualifier of the label, carry event context; the near-duplicate note is accepted."
+    },
+    {
+      "id": "acq-event_006-10",
+      "decision": "APPROVE",
+      "reason": "Questions follow the declaration's verb ('attract'/'draw'), no leak, event context present."
+    },
+    {
+      "id": "acq-event_006-11",
+      "decision": "REVISE",
+      "reason": "Questions cannot target this label: 'what did wearing the green suits symbolize?' is equally answered by 'environmental activism', and the question frame is the same as acq-006-13, so it does not ask for exactly this label (author concedes)."
+    },
+    {
+      "id": "acq-event_006-13",
+      "decision": "REVISE",
+      "reason": "Same frame as acq-006-11; the question is equally answered by 'Environmental commitment', so it does not ask for exactly 'environmental activism' (author concedes)."
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,23 @@
+{
+  "event": "event_011",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "acq-event_011-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_011-03",
+      "decision": "REVISE",
+      "reason": "Question 2 contains 'Sandville', the distinctive word of the label 'Sandville Health Department' (my round-1 fix was too leaky).",
+      "suggested_fix": "Q2: 'Which body led the response when contaminated water caused a septicaemia outbreak at the school hosting Harland MacIntyre's experiment?'"
+    },
+    {
+      "id": "acq-event_011-04",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

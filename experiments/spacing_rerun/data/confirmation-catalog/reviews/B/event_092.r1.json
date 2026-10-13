@@ -1,0 +1,71 @@
+{
+  "event": "event_092",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-0c921ccc6572e5fa7d2a474671d8372767c4a7701b25f33bfdecf82fc55a087b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-182ca15c74c91c40cb20139afc218ebc4bf0d40d43a24a662e1d56ac0ba8e994",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-34ef54a727b5ece65b120c7e3700e5000fb2b96ba2a9101495ea56bf3161a95b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-360470519c2063c1248a4f157cace9cf4dbff172cb8bed9d8b4db37a26916653",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-3b9b4c338b08799635314270947cff9106003983eef69ccb7edc750a8792ea41",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-43e0f7f5e9cd55bd2e439c22af2b8e8173c4d487fc98c918e794dda92d7f5dcb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5c7e21bde482ed786f4f110be76b87ac0b1b57942bbbc5753fc970e7fb7fee2c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6545f7b0560b34627d83ecb742a6ecdd7fe1c9c33aac7b157d319e007b765ffb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-73f127c33e6f835191e4b0512a1505025e4dc09cc019cde404931b044cd84ddf",
+      "decision": "REVISE",
+      "reason": "\"Community tradition\" is a near-synonym of the answer \"local lore\".",
+      "suggested_fix": "e.g. \"What did the Ashen Note Incident turn into within Birchtown's shared stories?\" or similar without tradition/lore synonyms."
+    },
+    {
+      "id": "probe-793e8363d5a7ce7fbdcd23e1dacda62e6e447a1c98e5aba96625ce9b9f3d2b5c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-84643d29601f8f80060344a85e78e369b1020c60610412b9f7b84e66acd3eb7f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-94c582db6c579c77d19269036a5750fb5fc3584c0dc8df831a578846647901fd",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b7814d4113a9cdfcf5054b492b826cf49b57aef5f64dbd8b117c1738171fc229",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ec34587e888f1d8a24be3301dd5519bea3138830302bef2ef5b600c68fe6d717",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f84c9d46106011e61b86b8403f2d614cb96e0bc930433a00a0e8c147bb43ac67",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

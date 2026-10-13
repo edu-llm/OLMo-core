@@ -1,0 +1,103 @@
+{
+  "event": "event_022",
+  "channel": "A",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-318b8e06d11610a7c56d806b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-31da45c225921264793f0763",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-32cda39970e878b1144993f9",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-56b32ecdd3c1208ebe5ec160",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-638d87659eaf52b4447934de",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-889b2b2d59589e7c56eba048",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-c26eedeb258ff9f1e3d4698c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_022-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_022-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_022-03",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_022-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_022-05",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_022-06",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "ground-event_022-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_022-01",
+      "decision": "REVISE",
+      "reason": "Q1 'artist collective' and Q2 'group of artists ... flour-based tattoos' repeat 'Artists Collective' and 'Flour Tattoo' from the label.",
+      "suggested_fix": "Reword with neutral terms, e.g. 'Which organization formed in 1971 sought to expand the Finley-born movement beyond its home city?'"
+    },
+    {
+      "id": "acq-event_022-02",
+      "decision": "REVISE",
+      "reason": "Q2 'of 1970' leaks the '70 in the label 'Soundfest ‘70'; Q1 'early 1970s' also hints.",
+      "suggested_fix": "Remove explicit years from the questions; use 'local music festival that embraced the movement as part of its theme'."
+    },
+    {
+      "id": "acq-event_022-03",
+      "decision": "REVISE",
+      "reason": "Q1 'traditional art forms' and Q2 'society ... traditional art' repeat label words 'Society' and 'Traditional'.",
+      "suggested_fix": "Reword, e.g. 'Which group opposed the Flour Tattoo Movement?' using only the declaration and avoiding society/traditional."
+    },
+    {
+      "id": "acq-event_022-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_022-05",
+      "decision": "REVISE",
+      "reason": "Both questions contain 'Finley' (and 'festival'), part of the label 'Finley Flour Fest'.",
+      "suggested_fix": "Refer to the event by other context (e.g. the annual event celebrating the temporary tattoo movement, begun 1971) without Finley."
+    },
+    {
+      "id": "acq-event_022-06",
+      "decision": "REVISE",
+      "reason": "Q1 'collective'/'artists' and Q2 'group of artists' repeat label words 'Artists Collective' and 'flour tattoos'.",
+      "suggested_fix": "Use neutral wording, e.g. 'Which organization was formed by creators inspired by Carson Whitmore?'"
+    },
+    {
+      "id": "acq-event_022-07",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

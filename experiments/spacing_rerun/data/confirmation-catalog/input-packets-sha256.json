@@ -1,0 +1,27 @@
+{
+"note": "Packets are regenerable: author packets via python -m spacing_rerun.source_catalog --partition confirmation on the pinned parquet; paraphrase packets via scripts/confirmation_catalog/build_paraphrase_packets.py. File sha256 below.",
+"files": {
+"packets/author-chunk-index.json": "9420e852d480196966d2df6c1ece54ce9ca4a60f958ed35a1bc3b8ea4cb59a9b",
+"packets/author-packets/chunk-01.json": "e84d10483fcf0349b196d34f0ee2415b6e85cfe9f11a6b95ebcae8d3553d265e",
+"packets/author-packets/chunk-02.json": "63387082ea7d49dfea3090d6246ccf9023dea57219ec59dd99a93d7805a01f6c",
+"packets/author-packets/chunk-03.json": "dd9398045c4c9716b62a3699e1121e7ba3871ed5af964819ba0eb9727f6679e7",
+"packets/author-packets/chunk-04.json": "4d7f328ee565d3957bebe4d91bca35194a1f8616c41a75eec7b15d759d60a9f3",
+"packets/author-packets/chunk-05.json": "56b33bc056a57086face0b3cb05828335965f5d04b64476a1fd95efb1b684427",
+"packets/author-packets/chunk-06.json": "48f00ddcccfe9c9017869dc158f20f12390e068b644272c79bbda019e43204b7",
+"packets/author-packets/chunk-07.json": "7e6a6f5f72eab041a8211782ce81d59952aa7cfaed887b21bc13be3d8a61db6a",
+"packets/author-packets/chunk-08.json": "f0a5011d7297f0dbc00a1918e73d8504d49f1d64905d9f30adf5c4e909d850ac",
+"packets/cross-entity-source-packet-all100.json": "9fbbe9f96dc25a5bac7262f5deb8f83b4173cf566d0aa6688a6cb698e58b1399",
+"packets/entity-candidates.json": "9b1d2d497016853a1c6b1207fe339ba8ba6d8e2d0fd32a1642a5729528f8cc17",
+"packets/private-probe-id-map.json": "f9c19bb1f920b12b4e32d585d027292bac59cea9f35207c8ad6c08ca516196a8",
+"packets/review-coverage-ledger.json": "4ad7641ff74691ae1fa400657ec40236cb5de6930a3788283eb2a31fd1d98138",
+"packets/role-geometry-first32.json": "d2b2ce94686e868851c8846ab538d8ec7ce62f7719310ba482fdfb086a6eb824",
+"packets/source-catalog.json": "179bf270a6c5c9e40b1dd307cd4a0caec1839663c8e2608748d35b2cdfae05a6",
+"paraphrase-packets/chunk-01.json": "913bfc2ed4155cd408383234e29b3e858484f9c838ef5b832284baddc9f91af4",
+"paraphrase-packets/chunk-02.json": "07643a23c44043d5cc2099ff89624be4ab6f0f6d89f027e734ed3db6282189c4",
+"paraphrase-packets/chunk-03.json": "81676717cf5fffcbd6ab4b5c15dc86b620975d58b6c7ddfd562de6f8d0949fa5",
+"paraphrase-packets/chunk-04.json": "991dfb8bf8f5664ab3898885d429e53b4664eb4fef847dd31108bfc5fc7e1713",
+"paraphrase-packets/chunk-05.json": "ce02950d78f5ff826eaf1c7a6c2246f105a69926c3e3624483b20e05e7c8a09c",
+"paraphrase-packets/chunk-06.json": "1e874119ae27a388c41284f0546bf072971f897687b82a803e316e4d28de8753",
+"paraphrase-packets/chunk-07.json": "a8cf275035b3c13dc6797d90b91d22b30e71d51599a288d112f885aa271c5e39",
+"paraphrase-packets/chunk-08.json": "23f94ee4e68b8411d54d790c062ccf7c0f0961a7ebaeb9646bec9268ad4a4cff"
+}}

@@ -1,0 +1,105 @@
+{
+  "event": "event_076",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-052aca621e78d7c559f1417a4cce00f4aaea2f3885f0d0bafb753bea1d727491",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-076ee8ee4adb78876ca36b6d79bca09819e65ab6a664fca36956571c06239bb1",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-33870750be7bcf5e22b8c61cb0922526f4b8c2321253acd77ac5aa129c5be42d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-43fe6d9d437583ef17faf4a8dc2a56f06a1229e87648bbd94d21d94d4392ce8f",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-4edcc2ba711cc0d92c33c6e5140f899d75fda66f9b24a3a8a3c0149dc547ce0c",
+      "decision": "REVISE",
+      "reason": "'optical tools' narrows the question to a category (optical) not in the canonical question and hints the answer.",
+      "suggested_fix": "Which equipment did the Trailpatrol crew carry when sent to Puffin Cliffs?"
+    },
+    {
+      "id": "probe-55ddebf7cb1216dedd551da4a3fd33f20ceb15dc6efada7199550d51973b8637",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-594e99cc2c98735b6df69f93caf23b39ff22bcab38f0a7097a671a4c61310044",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6308cad275bad9e42969f45b6c916c34b14fac2ba51a65fe6c199a3dd912f0be",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-669b31d840eab2464cc0cfa751c1395a1d6faceba8f5348488afea45dd9df0ce",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-66c329c9ccc52c6c57e184c86744edbad8c5b9bdc8bc097423f1a157d57c82e6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-713a17bb1d565042366d68eca3124db8b0bbe0d56e2302eb6728560361690530",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-81b80994d4ad43ab62e97d6a94e5ffd20c5ab56c751efd1e72c3256c3c652195",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-81babe59074a859088d3098beef6d644f3949af7b8d18d80ed17b4f51031841b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-93905cc763b4d03dd943b3f74f3a9fa9a5a54d4e0533fcd9b9b1ce5440bd9f7b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-98d90130e0284aed52f145755bc94db5b54fbfc55f0fda674485e48b3e9079b0",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-99ba8837a30ec834a8c1a7bdc1c2218d650abeb0ffd0cc37f75ab3b9b7a0411d",
+      "decision": "REVISE",
+      "reason": "Adds 'felt', implying the tremors were perceptible, a new fact; canonical answer 'not recorded' fits poorly with 'stood out'.",
+      "suggested_fix": "What was unusual about the tremors on Greenhaven Island with respect to documentation?"
+    },
+    {
+      "id": "probe-b79d67aa8c153ddc060dbc097edfc184e9678a0977c39f4ca41b373cb48139f7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c252b7ebf9400936af1b169273048e058c93d648edcea09ae44c23c2947d42b8",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ccd9802dcfc529b3884a1aaef4a79b985568676bee68d88c4e6910f62e8b729a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d195c642e552a83bf83c8461c90aa6dbcc00a558737b567f1ab3491774676e32",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d3edc030985ef385cf5a9f7ff3402ee9195cca6a90d9193e6c912c8cbd2af4b6",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-de100eef61de880d77345a8ed1becc964a6dca3ee97aafdbaa01cafc9f1038a3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-e6089db039de725393fd165ab8a3587d3f71329242755fc899a01baec9071e1f",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

@@ -1,0 +1,127 @@
+{
+  "event": "event_083",
+  "channel": "B",
+  "round": 1,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "probe-05998e90b849909354bf91b3a6834121c4446ddb149cd80a42b97092556716f2",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-0b95e2c1aa1a3ec94e3fdfbb0973c9dba5567f041e76b29293c166baab2ecdcb",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-14646946a13225710e196f74aa8cdfbf45687ea1a9fedd84506333994bd86930",
+      "decision": "REVISE",
+      "reason": "'role' broadens 'profession'; a role could be a position at the Accord, so the canonical answer 'Cipher Specialist' is not exactly entailed.",
+      "suggested_fix": "What is Dr. Elara Kumar's occupation?"
+    },
+    {
+      "id": "probe-1c280d7fe82c8e7480c083199742fcd1a0119b9ad1a6e8b4f2c309f26599397b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-209e09f409a731e90965297623f5f6d36fa4cd2f33f0899269c502b3570e9f9d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-2606419de7a6b882ee5bcf897305d8f55942a39823da738067737f943a6ffa3b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-29066e80540fc2f4e28138564564083e69550e2bec468594f25cb5d17297c324",
+      "decision": "REVISE",
+      "reason": "'advocacy coalition' uses 'coalition', a word of the canonical answer 'Coalition for Personal Privacy'; answer leak.",
+      "suggested_fix": "Which advocacy group pushed back against parts of the Global Decryption Accord?"
+    },
+    {
+      "id": "probe-2c950c6092495f3d3a0ef01b3d4b8a06d2cbd7eec24752aae93bbd21f896966a",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-34e40d24e6b4ee181a44c5629eecc054e5b010466be91ee3e2c93d6ff3416aa3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-387d034d38865888f158d1d845887d1f1d9bc1db58716cec6dec45d0928e7298",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-56e012699d3f128f55a908fea6db75fd22e6973d762b9ed713d778eb118a0b1c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-5fbf09514a264f1506048e455f708472c7cd09e7a49d9e4f5be46762e298f4a4",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-6370abb02f4f853b080b5777e043e53e00687833ff423b2a97ec67313ac74f4b",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-92e0bb796371470bcb7a9fc43ac4ea3efa0e84b260db702b6e5f11e20d4a046d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-9edecf0b09e984591eda4b22f0791d08f1ffb0da6c16d92f5550cc994d148761",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-a4c2770a8ab8bcd65cfc4c570e886a0135dbdcbdcaac88dd75d2f3bbabffa190",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-b86916aaaad78cd07b5e1f38cbc01b7944c2387139eae35372341b056472461e",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-bbd2cbd2fc0c1fb89d995a342eefe595d74879f814e4b2d026a27cb23e4bf7ec",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-c0115be2b5b7c1009ca4242f02d25b849511391627c22da889c8bc78500a6e6d",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-cf41dfb667b4bc630a290ddbddc2bcdaf64dcb674520a2e624e5f759b96146e7",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d1d6ec975f40ed56213a09dd9ee3224581ba5632eee8d1aed80af182822afd53",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-d68678e70c2ca2ff119c7718376de8d878a3c7f4fcc47b2cc4102c5a6b863805",
+      "decision": "REVISE",
+      "reason": "'that negative label' has no antecedent: the key cue ('flaky') is dropped so the question is not self-contained and is broadened; 'advocacy' hints at the answer.",
+      "suggested_fix": "Which group labeled the proposed framework 'flaky'?"
+    },
+    {
+      "id": "probe-de4f87e9c427019c79d1b049bf6f5779d0bed62d7d1c45c4617365c5e38fcc18",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ec09246bbd0c7ad5cb96b80b8ab20a77e20b9f3ad3184207e8da3bca81cd6845",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ec4b003fb0e7bfb0be7c7d4b86dcb1e7eb2095184c5b57b03c6347dfd5eb51ac",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f03038340ab360273118f5023499d1bf9441e871c4fab4e8a5d630a99c915383",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-f5929b23edc56521314f4e92b98539f2fcb29f0e1851b91f78f324dd936bf595",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-fbb50e9219e49f0fdd75e42a2b086ebf527f69a65eaa5e32416deec4758e08de",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

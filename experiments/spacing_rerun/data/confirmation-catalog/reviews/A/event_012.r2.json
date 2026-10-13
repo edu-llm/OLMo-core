@@ -1,0 +1,39 @@
+{
+  "event": "event_012",
+  "channel": "A",
+  "round": 2,
+  "reviewer": "claude-sonnet",
+  "decisions": [
+    {
+      "id": "unit-eb464c965ab777230cbc156c",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "unit-fb3c1d2126c53f7a23219389",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_012-01",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_012-02",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_012-04",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_012-05",
+      "decision": "REVISE",
+      "reason": "Q2 'dietary fixation' is a near-synonym of 'obsession' in the label 'obsession for gourmet food'.",
+      "suggested_fix": "Reword Q2 without fixation/obsession/craving, e.g. 'What lasting appetite pattern did the 2044 Flu of Culinary Delights produce in Eldermont residents?'"
+    },
+    {
+      "id": "acq-event_012-09",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}
