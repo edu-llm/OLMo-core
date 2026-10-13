@@ -1,6 +1,7 @@
 """Evidence-bound confirmation eligibility; no author payload is auto-approved."""
 from __future__ import annotations
 
+from .sourceqa_input_context import sourceqa_validator_keywords
 import collections
 import copy
 import datetime
@@ -1401,7 +1402,7 @@ def build_aa_compatibility(aa_report, launch_commit, repository, aa_manifest_pat
     return packet
 
 
-def verify_confirmation_dependency_preregistration(prereg, manifest):
+def verify_confirmation_dependency_preregistration(prereg, manifest, *, expected_evaluator_metadata=None, original_trace_input_files_by_proof=None):
     """Validate the real frozen dependency/coverage policy before a study starts."""
     keys = ('sourceqa_protocol_sha256', 'sourceqa_protocol_coverage_sha256',
             'lane_reporting_policy_sha256', 'lane_reporting_specification_sha256')
@@ -1413,7 +1414,7 @@ def verify_confirmation_dependency_preregistration(prereg, manifest):
             'Adopted source-QA protocol launch lacks its actual frozen dependency policy')
     audit = manifest['confirmation_audit']
     policy = verify_frozen_policy(path, prereg['confirmation_dependency_policy_sha256'],
-                                 audit['source_chunks'], audit['source_catalog'], manifest_sha256=manifest['sha256'])
+                                 audit['source_chunks'], audit['source_catalog'], manifest_sha256=manifest['sha256'], **sourceqa_validator_keywords(expected_evaluator_metadata=expected_evaluator_metadata, original_trace_input_files_by_proof=original_trace_input_files_by_proof))
     verify_preregistered_dependencies(prereg, policy)
     frozen = datetime.datetime.fromisoformat(prereg['frozen_utc'])
     policy_frozen = datetime.datetime.fromisoformat(policy['frozen_utc'])
@@ -1424,7 +1425,7 @@ def verify_confirmation_dependency_preregistration(prereg, manifest):
             require(manifest['config'][key] == prereg.get(key), 'Prepared protocol/coverage binding differs from preregistration')
 
 
-def verify_confirmation_preregistration(prereg, manifest, *, check_code=True):
+def verify_confirmation_preregistration(prereg, manifest, *, check_code=True, expected_evaluator_metadata=None, original_trace_input_files_by_proof=None):
     from .acquisition import SOURCE_QA_ACQUISITION_POLICY
     from .teaching import SOURCE_QA_POLICY
     from .units import GROUNDED_POLICY, GROUNDED_METRICS
@@ -1434,7 +1435,7 @@ def verify_confirmation_preregistration(prereg, manifest, *, check_code=True):
             manifest.get("audit_complete") is True and manifest.get("rehearsal_unit_policy") == prereg.get("rehearsal_unit_policy") == GROUNDED_POLICY and
             prereg.get("metric_schema") == GROUNDED_METRICS and prereg.get("acquisition_policy") == SOURCE_QA_ACQUISITION_POLICY and
             prereg.get("qa_teaching_policy") == SOURCE_QA_POLICY, "Confirmation protocol/recipe/metric preregistration differs")
-    context = validate_confirmation_audit(manifest["confirmation_audit"], source_facts=manifest["split"]["facts"])
+    context = validate_confirmation_audit(manifest["confirmation_audit"], source_facts=manifest["split"]["facts"], **sourceqa_validator_keywords(original_trace_input_files_by_proof=original_trace_input_files_by_proof))
     require(prereg.get("confirmation_audit_sha256") == context["audit_sha256"] and
             prereg.get("source_catalog_sha256") == context["source_catalog_sha256"] and prereg.get("human_review_complete") is False,
             "Preregistration does not bind actual complete source/evaluation/cross audits")
@@ -1443,7 +1444,7 @@ def verify_confirmation_preregistration(prereg, manifest, *, check_code=True):
     if manifest.get("created_utc"):
         created = datetime.datetime.fromisoformat(manifest["created_utc"])
         require(created.tzinfo is not None and created <= frozen, "Confirmation manifest was prepared after preregistration")
-    verify_confirmation_dependency_preregistration(prereg, manifest)
+    verify_confirmation_dependency_preregistration(prereg, manifest, **sourceqa_validator_keywords(expected_evaluator_metadata=expected_evaluator_metadata, original_trace_input_files_by_proof=original_trace_input_files_by_proof))
     if prereg.get('final_span_preflight_path') is not None:
         require(prereg.get('final_span_preflight_sha256'), 'Verified final-span preflight must be frozen by its actual receipt digest')
         report = verify_final_span_report(prereg['final_span_report_path'],

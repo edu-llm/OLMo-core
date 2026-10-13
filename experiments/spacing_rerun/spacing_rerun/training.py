@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .sourceqa_input_context import sourceqa_validator_keywords
 import contextlib
 import collections
 import datetime
@@ -155,10 +156,11 @@ def recover_exposure_log(path, cursor):
 
 
 class Session:
-    def __init__(self, prepared, output, *, device="cuda", model_factory=None):
+    def __init__(self, prepared, output, *, device="cuda", model_factory=None, original_trace_input_files_by_proof=None):
         import torch
         self.started = time.monotonic()
-        self.manifest, self.schedule, self.examples = load_prepared(prepared)
+        self.manifest, self.schedule, self.examples = load_prepared(prepared,
+            **sourceqa_validator_keywords(original_trace_input_files_by_proof=original_trace_input_files_by_proof))
         self.config = self.manifest["config"]
         self.facts = self.manifest["split"]["facts"]
         self.training_records = schedule_records(self.facts, self.manifest.get("unit_registry"),
@@ -400,8 +402,8 @@ def verify_confirmation_hardware(prereg, device, *, synthetic_cpu_fixture=False)
 
 
 def run_acquisition(prepared, output, *, device="cuda", fixed_exposures=None, preregistration=None, model_factory=None,
-                    acquisition_policy_core=None, acquisition_manifest_binding=None):
-    manifest, _, _ = load_prepared(prepared)
+                    acquisition_policy_core=None, acquisition_manifest_binding=None, expected_evaluator_metadata=None, original_trace_input_files_by_proof=None):
+    manifest, _, _ = load_prepared(prepared, **sourceqa_validator_keywords(original_trace_input_files_by_proof=original_trace_input_files_by_proof))
     full_grid = manifest["config"].get("acquisition_trajectory_policy") == GRID_TRAJECTORY_POLICY
     require(not full_grid or fixed_exposures is None, "A full acquisition grid cannot be truncated with fixed exposures")
     core, trial, binding = None, None, None
@@ -427,12 +429,13 @@ def run_acquisition(prepared, output, *, device="cuda", fixed_exposures=None, pr
         else:
             require(acquisition_manifest_binding is None, "Normal grids launch under the original policy core")
     if manifest["mode"] == "confirmation":
-        prereg = verify_preregistration(preregistration, manifest)
+        prereg = verify_preregistration(preregistration, manifest, **sourceqa_validator_keywords(expected_evaluator_metadata=expected_evaluator_metadata, original_trace_input_files_by_proof=original_trace_input_files_by_proof))
         require(fixed_exposures == prereg["E"], "Fixed Stage-1 dose must match preregistration")
         if manifest.get("confirmation_protocol_schema"):
             verify_confirmation_hardware(prereg, device, synthetic_cpu_fixture=(
                 model_factory is not None and manifest.get("test_fixture") is True))
-    s = Session(prepared, output, device=device, model_factory=model_factory)
+    s = Session(prepared, output, device=device, model_factory=model_factory,
+                **sourceqa_validator_keywords(original_trace_input_files_by_proof=original_trace_input_files_by_proof))
     if fixed_exposures is None:
         require(s.manifest["mode"] == "development", "Adaptive acquisition is development-only")
         milestones = s.config["acquisition_exposures"]
@@ -601,11 +604,11 @@ def write_acquisition_decision(s, full_grid):
         write_json(path, decision)
 
 
-def verify_preregistration(path, manifest):
+def verify_preregistration(path, manifest, *, expected_evaluator_metadata=None, original_trace_input_files_by_proof=None):
     if manifest.get("confirmation_protocol_schema"):
         from .confirmation import verify_confirmation_preregistration
         require(path is not None, "Confirmation requires a frozen preregistration")
-        return verify_confirmation_preregistration(read_json(path), manifest)
+        return verify_confirmation_preregistration(read_json(path), manifest, **sourceqa_validator_keywords(expected_evaluator_metadata=expected_evaluator_metadata, original_trace_input_files_by_proof=original_trace_input_files_by_proof))
     require(manifest.get("rehearsal_unit_policy") == UNIT_POLICY and manifest.get("unit_registry"),
             "Confirmation requires distinct supporting-statement rehearsal units")
     require(path is not None, "Confirmation requires a frozen preregistration")
@@ -630,16 +633,16 @@ def verify_preregistration(path, manifest):
 
 
 def run_arm(prepared, output, shared_checkpoint, arm, *, preregistration=None, device="cuda", model_factory=None,
-            acquisition_selection=None):
+            acquisition_selection=None, expected_evaluator_metadata=None, original_trace_input_files_by_proof=None):
     require(arm in ARMS, "Unknown arm")
-    manifest, _, _ = load_prepared(prepared)
+    manifest, _, _ = load_prepared(prepared, **sourceqa_validator_keywords(original_trace_input_files_by_proof=original_trace_input_files_by_proof))
     require(not manifest["config"].get("development_scale_probe"), "Development scale probes are Stage-1-only; arms are prohibited")
     grid_selection = None
     if manifest["config"].get("acquisition_trajectory_policy") == GRID_TRAJECTORY_POLICY:
         from .acquisition_grid import verify_acquisition_grid_selection
         grid_selection = verify_acquisition_grid_selection(acquisition_selection, manifest, shared_checkpoint)
     if manifest["mode"] == "confirmation":
-        checked_prereg = verify_preregistration(preregistration, manifest)
+        checked_prereg = verify_preregistration(preregistration, manifest, **sourceqa_validator_keywords(expected_evaluator_metadata=expected_evaluator_metadata, original_trace_input_files_by_proof=original_trace_input_files_by_proof))
         if manifest.get("confirmation_protocol_schema"):
             verify_confirmation_hardware(checked_prereg, device, synthetic_cpu_fixture=(
                 model_factory is not None and manifest.get("test_fixture") is True))
@@ -648,7 +651,8 @@ def run_arm(prepared, output, shared_checkpoint, arm, *, preregistration=None, d
         from .acquisition_grid import checkpoint_digest
         require(Path(shared_checkpoint).is_file(), "Confirmation requires its retained shared acquisition checkpoint")
         shared_hash = checkpoint_digest(shared_checkpoint)
-    s = Session(prepared, output, device=device, model_factory=model_factory)
+    s = Session(prepared, output, device=device, model_factory=model_factory,
+                **sourceqa_validator_keywords(original_trace_input_files_by_proof=original_trace_input_files_by_proof))
     if s.manifest["mode"] == "confirmation":
         require(s.manifest["sha256"] == manifest["sha256"], "Prepared confirmation changed between proof verification and model initialization")
         prereg = checked_prereg

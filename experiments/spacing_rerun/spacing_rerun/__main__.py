@@ -10,6 +10,8 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 
 def main():
+    from .sourceqa_input_context import (add_sourceqa_input_arguments, load_sourceqa_inputs,
+                                        sourceqa_descriptors_from_arguments, sourceqa_validator_keywords)
     parser = argparse.ArgumentParser(description="FictionalQA spacing rerun: prepare, calibrate, freeze, run, analyze")
     sub = parser.add_subparsers(dest="command", required=True)
     prepare = sub.add_parser("prepare", help="CPU-only pinned download, data audit and exact schedule compilation")
@@ -25,6 +27,7 @@ def main():
         p.add_argument("--output", required=True)
         if name in ("stage1", "arm"):
             p.add_argument("--preregistration")
+            add_sourceqa_input_arguments(p)
         if name == "calibrate":
             p.add_argument("--acquisition-policy-core", help="Prelaunch frozen seeds/settings/source frames for two-stage acquisition binding")
             p.add_argument("--acquisition-manifest-binding", help="Required for scale trials after all nine reviewed manifests are bound")
@@ -49,10 +52,12 @@ def main():
     analysis.add_argument("--primary-delay", type=int, required=True)
     analysis.add_argument("--margin", type=float, default=.02)
     analysis.add_argument("--preregistration")
+    add_sourceqa_input_arguments(analysis)
     power = sub.add_parser("power")
     power.add_argument("--sd", action="append", type=float, required=True)
     power.add_argument("--output", required=True)
     args = parser.parse_args()
+    sourceqa_inputs = load_sourceqa_inputs(sourceqa_descriptors_from_arguments(args))
     if args.command == "prepare":
         from .prepare import prepare as execute
         manifest = execute(args.config, args.output, args.source_directory, args.audit)
@@ -68,11 +73,12 @@ def main():
                         fixed_exposures=args.exposures if args.command == "stage1" else None,
                         preregistration=getattr(args, "preregistration", None),
                         acquisition_policy_core=getattr(args, "acquisition_policy_core", None),
-                        acquisition_manifest_binding=getattr(args, "acquisition_manifest_binding", None))
+                        acquisition_manifest_binding=getattr(args, "acquisition_manifest_binding", None),
+                        **sourceqa_validator_keywords(**sourceqa_inputs))
     elif args.command == "arm":
         from .training import run_arm
         run_arm(args.prepared, args.output, args.stage1_checkpoint, args.arm, preregistration=args.preregistration,
-                acquisition_selection=args.acquisition_selection)
+                acquisition_selection=args.acquisition_selection, **sourceqa_validator_keywords(**sourceqa_inputs))
     elif args.command == "choose-acquisition-grid-checkpoint":
         from .acquisition_grid import choose_acquisition_grid_checkpoint
         result = choose_acquisition_grid_checkpoint(args.prepared, args.grid_output, args.selection_rule, args.output)
@@ -87,7 +93,8 @@ def main():
                           "sha256": result["sha256"]}))
     elif args.command == "analyze":
         from .analysis import summarize_bundles
-        summarize_bundles(args.bundle, args.output, args.primary_delay, args.margin, args.preregistration)
+        summarize_bundles(args.bundle, args.output, args.primary_delay, args.margin, args.preregistration,
+                          **sourceqa_validator_keywords(**sourceqa_inputs))
     elif args.command == "power":
         from .analysis import power_scenarios
         from .common import write_json

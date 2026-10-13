@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .sourceqa_input_context import sourceqa_validator_keywords
 import collections
 import datetime
 import hashlib
@@ -302,7 +303,7 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
     return manifest
 
 
-def load_prepared(path):
+def load_prepared(path, *, original_trace_input_files_by_proof=None):
     path = Path(path)
     manifest, schedule, examples = [read_json(path / name) for name in
                                      ("manifest.json", "schedule.json", "examples.json")]
@@ -326,7 +327,7 @@ def load_prepared(path):
         confirmation_audit = read_json(path / "confirmation-audit.json")
         require(confirmation_audit == manifest.get("confirmation_audit") and confirmation_audit["sha256"] == manifest["audit_sha256"] and
                 manifest.get("confirmation_protocol_schema") == manifest["config"]["confirmation_protocol_schema"], "Prepared confirmation audit/protocol was modified")
-        context = validate_confirmation_audit(confirmation_audit, source_facts=facts)
+        context = validate_confirmation_audit(confirmation_audit, source_facts=facts, **sourceqa_validator_keywords(original_trace_input_files_by_proof=original_trace_input_files_by_proof))
         validate_roles(context, manifest["split"]["roles"], manifest["partition"]["sha256"])
         expected = assign_confirmation_roles(facts, manifest["partition"], manifest["config"]["split_seed"], context["same_role_components"])
         require(manifest["split"]["roles"] == expected["roles"] and manifest["split"].get("role_assignment_policy") == expected["role_assignment_policy"] and

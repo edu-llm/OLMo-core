@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .sourceqa_input_context import sourceqa_validator_keywords
 import math
 import collections
 import json
@@ -277,8 +278,8 @@ def validate_confirmation_completion(path, manifest, schedule, examples, prereg)
     return receipt
 
 
-def summarize_bundles(bundle_paths, output, primary_delay, margin=.02, preregistration=None):
-    bundles, costs = [], []
+def summarize_bundles(bundle_paths, output, primary_delay, margin=.02, preregistration=None, *, expected_evaluator_metadata=None, original_trace_input_files_by_proof=None):
+    bundles, costs, dependency_inputs = [], [], []
     prereg = read_json(preregistration) if preregistration is not None else None
     for path in map(Path, bundle_paths):
         manifest = read_json(path / "prepared" / "manifest.json")
@@ -287,10 +288,14 @@ def summarize_bundles(bundle_paths, output, primary_delay, margin=.02, preregist
             from .prepare import load_prepared
             from .confirmation import validate_confirmation_audit, verify_confirmation_preregistration
             require(prereg is not None, "Confirmation analysis requires frozen preregistration")
-            manifest, confirmed_schedule, confirmed_examples = load_prepared(path / "prepared")
-            verify_confirmation_preregistration(prereg, manifest)
-            context = validate_confirmation_audit(manifest["confirmation_audit"], source_facts=manifest["split"]["facts"])
+            manifest, confirmed_schedule, confirmed_examples = load_prepared(path / "prepared", **sourceqa_validator_keywords(original_trace_input_files_by_proof=original_trace_input_files_by_proof))
+            verify_confirmation_preregistration(prereg, manifest, **sourceqa_validator_keywords(expected_evaluator_metadata=expected_evaluator_metadata, original_trace_input_files_by_proof=original_trace_input_files_by_proof))
+            context = validate_confirmation_audit(manifest["confirmation_audit"], source_facts=manifest["split"]["facts"], **sourceqa_validator_keywords(original_trace_input_files_by_proof=original_trace_input_files_by_proof))
             completion = validate_confirmation_completion(path, manifest, confirmed_schedule, confirmed_examples, prereg)
+            dependency_inputs.append({"path": path, "manifest_sha256": manifest["sha256"],
+                                      "confirmation_audit_sha256": manifest["confirmation_audit"]["sha256"],
+                                      "completion": completion})
+            del confirmed_schedule, confirmed_examples
         require(not manifest.get("config", {}).get("development_scale_probe"),
                 "Stage-1-only scale probes cannot enter spacing-arm analysis")
         stage2 = read_json(path / "prepared" / "schedule.json")["stage2_steps"]
@@ -330,7 +335,15 @@ def summarize_bundles(bundle_paths, output, primary_delay, margin=.02, preregist
                 bundle["arms"][arm]["protected_event_cluster_sensitivity"] = protected_cluster_loss(rows, context["same_role_components"])
         for attempt in path.glob("*/attempt-*.json"):
             costs.append(read_json(attempt))
+        if context:
+            from .confirmation_dependency import primary_aggregate_binding
+            dependency_inputs[-1]["primary_aggregate_binding"] = primary_aggregate_binding(
+                manifest["sha256"], completion, primary_delay, stage2 + primary_delay,
+                {arm: result["primary"] for arm, result in bundle["arms"].items()})
         bundles.append(bundle)
+        # Only compact aggregates and completed-file evidence survive each
+        # replicate. Source/evaluation audit payloads can be very large.
+        del manifest, context
     validate_analysis_methods(bundles)
     require(len({b["manifest_sha256"] for b in bundles}) == len(bundles), "Duplicate replicate bundles")
     if bundles[0]["mode"] == "confirmation":
@@ -371,9 +384,36 @@ def summarize_bundles(bundle_paths, output, primary_delay, margin=.02, preregist
                                      for key in ('H1', 'H3', 'HG')})
             for key, p in adjusted_cluster.items():
                 tests[key]['protected_event_cluster_sensitivity']['p_holm'] = p
-    write_json(output, {"bundles": bundles, "contrasts": tests, "loss_margin": margin,
+    result = {"bundles": bundles, "contrasts": tests, "loss_margin": margin,
                         "inference_claim": prereg.get("inference_claim") if prereg else "development_descriptive",
                         "preregistration_sha256": prereg.get("sha256") if prereg else None,
                         "primary_delay": primary_delay, "cost_attempts": costs,
                         "allocated_gpu_hours_process_lower_bound": sum(c["gpu_count"] * c["wall_seconds"] / 3600 for c in costs),
-                        "cost_note": "Add Slurm sacct allocation elapsed, setup jobs, queue time and staging/storage; process time is a lower bound."})
+                        "cost_note": "Add Slurm sacct allocation elapsed, setup jobs, queue time and staging/storage; process time is a lower bound."}
+    frozen_policy = None
+    if prereg and any(k in prereg for k in ("sourceqa_protocol_sha256", "sourceqa_protocol_coverage_sha256",
+                                           "lane_reporting_policy_sha256", "lane_reporting_specification_sha256")):
+        require(prereg.get("confirmation_dependency_policy_path") and prereg.get("confirmation_dependency_policy_sha256"),
+                "Adopted-protocol analysis requires canonical frozen dependency policy path and digest")
+    if prereg and prereg.get("confirmation_dependency_policy_path"):
+        from .confirmation_dependency import (verify_frozen_policy, verify_preregistered_dependencies,
+                                               build_saved_dependency_report, load_dependency_bundle)
+        require(dependency_inputs and prereg.get("confirmation_dependency_policy_sha256"),
+                "Frozen dependency reporting requires complete confirmation inputs and a pinned policy digest")
+        first_bundle = load_dependency_bundle(dependency_inputs[0],
+                                              **sourceqa_validator_keywords(original_trace_input_files_by_proof=original_trace_input_files_by_proof))
+        first = first_bundle["manifest"]["confirmation_audit"]
+        frozen_policy = verify_frozen_policy(prereg["confirmation_dependency_policy_path"],
+            prereg["confirmation_dependency_policy_sha256"], first["source_chunks"], first["source_catalog"], **sourceqa_validator_keywords(expected_evaluator_metadata=expected_evaluator_metadata, original_trace_input_files_by_proof=original_trace_input_files_by_proof))
+        verify_preregistered_dependencies(prereg, frozen_policy)
+        del first, first_bundle
+    # Keep the original primary analysis available even if a later secondary
+    # reporting calculation fails. Policy verification has already passed.
+    write_json(output, result)
+    if frozen_policy is not None:
+        diagnostics = build_saved_dependency_report(dependency_inputs, frozen_policy, prereg, **sourceqa_validator_keywords(expected_evaluator_metadata=expected_evaluator_metadata, original_trace_input_files_by_proof=original_trace_input_files_by_proof))
+        diagnostic_path = Path(output).with_name(Path(output).stem + ".dependency-diagnostics.json")
+        write_json(diagnostic_path, diagnostics)
+        result["confirmation_dependency_diagnostics"] = {"path": str(diagnostic_path.resolve()),
+                                                          "sha256": diagnostics["sha256"]}
+        write_json(output, result)

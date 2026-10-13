@@ -24,9 +24,9 @@ def file_sha(path):
 
 
 def decisions(channel, event):
-    """Final decision per id: round 2 overrides round 1."""
+    """Final decision per id: later rounds override earlier ones, and owner decisions override all."""
     final = {}
-    for rnd in (1, 2, 3):
+    for rnd in (1, 2, 3, 4):
         path = root / f"reviews/{channel}/{event}.r{rnd}.json"
         if path.exists():
             for d in json.load(open(path)).get("decisions", []):
@@ -35,6 +35,16 @@ def decisions(channel, event):
                     "round": rnd,
                     "reason": d.get("reason", ""),
                     **({"disclose": d["disclose"]} if d.get("disclose") else {}),
+                }
+    owner = root / "reviews/owner-decisions.json"
+    if owner.exists():
+        for d in json.load(open(owner))["decisions"]:
+            if d["channel"] == channel and d["event"] == event:
+                final[d["id"]] = {
+                    "decision": d["decision"],
+                    "round": "owner",
+                    "reason": d["edit"],
+                    "disclose": d["disclose"],
                 }
     return final
 
@@ -135,7 +145,7 @@ for event in sorted(packet_events):
 
 ledger = json.load(open(root / "authored/entity-ledger.json"))
 ledger_final = {}
-for rnd in (1, 2, 3):
+for rnd in (1, 2, 3, 4):
     p = root / f"reviews/entity-ledger.r{rnd}.json"
     if p.exists():
         for d in json.load(open(p))["decisions"]:
@@ -157,11 +167,15 @@ common = {
     "independent_agent_reviewer": "claude-sonnet",
     "elections_amendment_sha256": file_sha(root / "ELECTIONS-AMENDMENT.md"),
     "authoring_spec_sha256": file_sha(root / "AUTHORING-SPEC.md"),
-    **(
-        {"round3_amendment_sha256": file_sha(root / "ROUND3-AMENDMENT.md")}
-        if (root / "ROUND3-AMENDMENT.md").exists()
-        else {}
-    ),
+    **{
+        key: file_sha(root / name)
+        for key, name in (
+            ("round3_amendment_sha256", "ROUND3-AMENDMENT.md"),
+            ("final_pass_amendment_sha256", "FINAL-PASS-AMENDMENT.md"),
+            ("owner_decisions_sha256", "reviews/owner-decisions.json"),
+        )
+        if (root / name).exists()
+    },
 }
 artifacts = {
     "confirmation-grounded-declarations.json": {
@@ -202,7 +216,7 @@ review_record = seal(
     {
         **common,
         "schema": "spacing-confirmation-review-record-v1",
-        "process": "one Haiku author and one independent Sonnet reviewer per record; all records reviewed; two rounds, plus one round-3 pass limited to records UNRESOLVED after round 2 (ROUND3-AMENDMENT.md); non-APPROVE after the final round is UNRESOLVED, kept and disclosed",
+        "process": "one Haiku author and one independent Sonnet reviewer per record; all records reviewed; two rounds; a round-3 pass limited to records UNRESOLVED after round 2 (ROUND3-AMENDMENT.md); a final pass with a Claude Opus author and a fresh Sonnet reviewer for records still UNRESOLVED (FINAL-PASS-AMENDMENT.md); remaining failures decided by the study owner (reviews/owner-decisions.json)",
         "counts": {
             "source_units": count(units),
             "groups": count(groups),
@@ -216,6 +230,7 @@ review_record = seal(
             "Review-process amendment replaces the unadopted v2 receipt-timing layer; see ELECTIONS-AMENDMENT.md.",
             f"{renumbered} evidence line numbers were renumbered mechanically to 1-indexed factsheet lines; quote text unchanged and exact.",
             "Agent review is not human review; human_review_complete is false.",
+            "Final-pass records (revision_round 4) were rewritten by Claude Opus and reviewed by a fresh Sonnet reviewer; two records were settled by study-owner decision.",
             "Several place and person names recur across events; see the entity ledger (broad_LEAC tolerance).",
         ],
     }

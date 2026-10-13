@@ -1,0 +1,17 @@
+{
+  "event": "event_025",
+  "channel": "A",
+  "round": 4,
+  "reviewer": "claude-sonnet-final-pass",
+  "decisions": [
+    {
+      "id": "acq-event_025-07",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "acq-event_025-10",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

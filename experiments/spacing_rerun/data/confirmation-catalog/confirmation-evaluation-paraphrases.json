@@ -9,6 +9,8 @@
  "elections_amendment_sha256": "ae9fad4203b493b0693a1d56d01f7935dce53505946c0a99d27b41886d22da73",
  "authoring_spec_sha256": "d0fb36525bdfcbfa5c00233f5f327e4a965e316009d35c3d0332c8ff16dbfaef",
  "round3_amendment_sha256": "ee6eda3802be0dc78b9c672e4989c5e199d8ca64dc4154f6d9b2462ad0efbb49",
+ "final_pass_amendment_sha256": "b80e0059d47b7924e9c58f337a43845b0c2bea056cd1ce7ead8a89a0e55b634f",
+ "owner_decisions_sha256": "31dff0cce2dddf029c031fe36184c54b99cc4d37efa1561ba9646502f022b38b",
  "schema": "spacing-eval-paraphrases-v1",
  "may_see": [
   "canonical_evaluation_question"
@@ -5391,14 +5393,16 @@
    "opaque_probe_id": "probe-32ffdef575c9468996d6cd3db28f4eb9585ae37bf4e45c34f5593777c5b44365",
    "canonical_question": "What did the Cummerbund Craze lead to in the fashion industry?",
    "canonical_answer": "stricter advertising regulations",
-   "paraphrase": "What regulatory change affected the fashion industry as a result of the Cummerbund Craze?",
-   "revision_round": 2,
+   "paraphrase": "Within the clothing business, what came about because of the Cummerbund Craze?",
+   "revision_round": 4,
+   "note": "Avoids rules/regulation/promotion/advertising wording so no part of the answer is cued.",
+   "final_pass_author": "claude-opus",
    "event": "event_027",
-   "review_status": "UNRESOLVED",
+   "review_status": "APPROVED",
    "review": {
-    "decision": "REVISE",
-    "round": 2,
-    "reason": "Paraphrase still reveals half the answer: \"regulatory change\" gives away \"regulations\" (the answer is stricter advertising regulations), so the question points to the answer category rather than asking what the craze led to."
+    "decision": "APPROVE",
+    "round": 4,
+    "reason": ""
    }
   },
   {
@@ -7039,14 +7043,16 @@
    "opaque_probe_id": "probe-91d60b4b77ce92f7cfbafd44593242532010b74f540caf4f01eebbc5534062f3",
    "canonical_question": "What did Sarah Gleeson discover in cornflakes that was causing childbirth complications?",
    "canonical_answer": "untested preservative",
-   "paraphrase": "What was notable about the cornflakes substance Sarah Gleeson found that caused childbirth complications?",
-   "revision_round": 2,
+   "paraphrase": "Sarah Gleeson found something in cornflakes that was behind complications in giving birth. What was it?",
+   "revision_round": 4,
+   "note": "Keeps the 'what did she find' target; no additive/testing wording.",
+   "final_pass_author": "claude-opus",
    "event": "event_037",
-   "review_status": "UNRESOLVED",
+   "review_status": "APPROVED",
    "review": {
-    "decision": "REVISE",
-    "round": 2,
-    "reason": "Now asks what was \"notable\" about the substance rather than what Sarah Gleeson discovered; the question no longer targets the canonical answer (untested preservative) exactly, and is vaguer than the canonical question."
+    "decision": "APPROVE",
+    "round": 4,
+    "reason": ""
    }
   },
   {
@@ -7107,15 +7113,16 @@
    "opaque_probe_id": "probe-ef16d1cd727086fa1a2a22354f9e3eabf595aa44704f0e4be5df923c3bcfff2a",
    "canonical_question": "What did The Midwife's Provision of 1915 mandate for processed foods?",
    "canonical_answer": "nutritional testing",
-   "paraphrase": "For processed foods, what kind of checks did The Midwife's Provision of 1915 demand?",
-   "note": "The suggested fix ('What did The Midwife's Provision of 1915 require for processed foods?') is near-verbatim to the canonical question, so this uses different wording ('demand', 'checks') that still avoids the answer word 'testing'.",
-   "revision_round": 2,
+   "paraphrase": "Processed foods became subject to what requirement under The Midwife's Provision of 1915?",
+   "note": "No checks/testing/nutrition wording; restructured with processed foods as subject.",
+   "revision_round": 4,
+   "final_pass_author": "claude-opus",
    "event": "event_037",
-   "review_status": "UNRESOLVED",
+   "review_status": "APPROVED",
    "review": {
-    "decision": "REVISE",
-    "round": 2,
-    "reason": "\"checks\" is a near-synonym of the answer's key word \"testing\" (nutritional testing), so it still leaks the answer."
+    "decision": "APPROVE",
+    "round": 4,
+    "reason": ""
    }
   },
   {
@@ -8120,15 +8127,16 @@
    "opaque_probe_id": "probe-14fb14034ceaf50f4051f3af1a81b5431d57bd0c833b6549518db5387951cd1c",
    "canonical_question": "Where was Captain Bernard Thrush's longboat discovered?",
    "canonical_answer": "off the coast of Windmere",
-   "paraphrase": "Off which coastline did people find Captain Bernard Thrush's longboat?",
-   "note": "The suggested fix ('Where was Captain Bernard Thrush's longboat found?') is nearly verbatim to the canonical question. This keeps the answer scope ('off the coast of Windmere') and changes the wording.",
-   "revision_round": 2,
+   "paraphrase": "At what location did Captain Bernard Thrush's longboat turn up?",
+   "note": "Open location question; no coast/shore/water wording, so the answer scope is unchanged.",
+   "revision_round": 4,
+   "final_pass_author": "claude-opus",
    "event": "event_044",
-   "review_status": "UNRESOLVED",
+   "review_status": "APPROVED",
    "review": {
-    "decision": "REVISE",
-    "round": 2,
-    "reason": "\"coastline\" reuses \"coast\" from the answer (off the coast of Windmere) and narrows the canonical \"where\"."
+    "decision": "APPROVE",
+    "round": 4,
+    "reason": ""
    }
   },
   {
@@ -12524,15 +12532,16 @@
    "opaque_probe_id": "probe-5430e1bea94ea9cf32238ec54a023571a99ced6c9bc27a7d342cbd83d5be1b1b",
    "canonical_question": "What did the 1907 Wilderness Automation Experiment spark discussions about?",
    "canonical_answer": "future role of technology in wilderness areas",
-   "paraphrase": "What did the 1907 Wilderness Automation Experiment get people debating about the prospective part machines might play in wild regions?",
-   "revision_round": 2,
-   "note": "Reviewer suggested dropping 'future'. That would make the canonical answer incomplete, so the qualifier is kept in reworded form.",
+   "paraphrase": "The 1907 Wilderness Automation Experiment prompted conversation on what subject?",
+   "revision_round": 4,
+   "note": "Drops the embedded description of the answer topic.",
+   "final_pass_author": "claude-opus",
    "event": "event_065",
-   "review_status": "UNRESOLVED",
+   "review_status": "APPROVED",
    "review": {
-    "decision": "REVISE",
-    "round": 2,
-    "reason": "Still embeds the answer: \"prospective part machines might play in wild regions\" restates \"future role of technology in wilderness areas\" (and swaps technology for machines). The answer must not appear in the question; the author note does not justify it, since the canonical question carries no such detail."
+    "decision": "APPROVE",
+    "round": 4,
+    "reason": ""
    }
   },
   {
@@ -17715,14 +17724,16 @@
    "opaque_probe_id": "probe-73f127c33e6f835191e4b0512a1505025e4dc09cc019cde404931b044cd84ddf",
    "canonical_question": "What did the Ashen Note Incident become a part of in Birchtown?",
    "canonical_answer": "local lore",
-   "paraphrase": "What did the Ashen Note Incident become absorbed into in Birchtown's community heritage?",
-   "revision_round": 2,
+   "paraphrase": "In Birchtown, the Ashen Note Incident was eventually woven into what?",
+   "revision_round": 4,
+   "note": "No lore/tradition/heritage/story wording.",
+   "final_pass_author": "claude-opus",
    "event": "event_092",
-   "review_status": "UNRESOLVED",
+   "review_status": "APPROVED",
    "review": {
-    "decision": "REVISE",
-    "round": 2,
-    "reason": "\"Community heritage\" is still a near-synonym of \"local lore\" (same class of word as the round-1 \"tradition\" problem), so the answer is largely given away."
+    "decision": "APPROVE",
+    "round": 4,
+    "reason": ""
    }
   },
   {
@@ -18160,14 +18171,18 @@
    "opaque_probe_id": "probe-7650c47d5e5dd2ca6db6a799dc7a9bbc7c734b5c7ba7f02b23653f68e1739d74",
    "canonical_question": "What was the world's first Virtual Wellness Concert?",
    "canonical_answer": "The Virtual Wellness Concert of 2032",
-   "paraphrase": "Which event was the earliest virtual concert of its kind with a health focus?",
-   "revision_round": 2,
+   "paraphrase": "Which Virtual Wellness Concert was the earliest held anywhere in the world?",
+   "revision_round": 5,
+   "note": "Per reviewer guidance, does not describe the event as an online/health/music performance; asks for the year so the full title-with-year answer is complete.",
+   "final_pass_author": "claude-opus",
+   "owner_edit": true,
    "event": "event_094",
-   "review_status": "UNRESOLVED",
+   "review_status": "APPROVED",
    "review": {
-    "decision": "REVISE",
-    "round": 2,
-    "reason": "Paraphrase still says \"earliest virtual concert ... with a health focus\", which restates \"Virtual Wellness Concert\" nearly in full; the answer title is still essentially given."
+    "decision": "APPROVE",
+    "round": "owner",
+    "reason": "paraphrase names the event type, selected by the study owner",
+    "disclose": "canonical probe already contains the answer's title; any faithful paraphrase repeats it"
    }
   },
   {
@@ -18960,5 +18975,5 @@
    }
   }
  ],
- "sha256": "661742c05bd38206c0056ae17d87cdaa986b2bcfd78caad989039a33f072808f"
+ "sha256": "9d7934ad1d8f00542a1d7e3f0ed451370372196cf84da0e5a4f8366184d64156"
 }

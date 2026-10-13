@@ -9,6 +9,8 @@
  "elections_amendment_sha256": "ae9fad4203b493b0693a1d56d01f7935dce53505946c0a99d27b41886d22da73",
  "authoring_spec_sha256": "d0fb36525bdfcbfa5c00233f5f327e4a965e316009d35c3d0332c8ff16dbfaef",
  "round3_amendment_sha256": "ee6eda3802be0dc78b9c672e4989c5e199d8ca64dc4154f6d9b2462ad0efbb49",
+ "final_pass_amendment_sha256": "b80e0059d47b7924e9c58f337a43845b0c2bea056cd1ce7ead8a89a0e55b634f",
+ "owner_decisions_sha256": "31dff0cce2dddf029c031fe36184c54b99cc4d37efa1561ba9646502f022b38b",
  "schema": "spacing-cross-event-entity-ledger-v1",
  "entries": [
   {
@@ -479,5 +481,5 @@
    "review_status": "APPROVED"
   }
  ],
- "sha256": "39a75d9199a0ec29c2dd9fd5491d7fe2c95a9e3fb92ae74b4889ab72c9e4a436"
+ "sha256": "aae2ba9dd1ef5b6b205595e646d07d10738bab8f7860388dfea1704d307676da"
 }

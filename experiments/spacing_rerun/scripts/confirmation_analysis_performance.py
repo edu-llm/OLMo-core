@@ -56,6 +56,9 @@ MARKERS = dict(production_approval=False, scientific_outcome=False,
                test_fixture_preregistration=True)
 
 
+from spacing_rerun.sourceqa_input_context import sourceqa_validator_keywords
+
+
 def sealed(value):
     return dict(value, sha256=digest(value))
 
@@ -190,12 +193,12 @@ def committed_code(spec):
     return dict(gpu_count=0, code_commit=commit, package_scope=scope, measurement_driver=driver)
 
 
-def load_real_prepared(ref, *, confirmation_only=True):
+def load_real_prepared(ref, *, confirmation_only=True, original_trace_input_files_by_proof=None):
     from spacing_rerun.prepare import load_prepared
     path = canonical_path(ref["path"])
     require(file_hash(path / "manifest.json") == ref["manifest_file_sha256"],
             "Prepared manifest raw bytes differ")
-    manifest, schedule, examples = load_prepared(path)
+    manifest, schedule, examples = load_prepared(path, **sourceqa_validator_keywords(original_trace_input_files_by_proof=original_trace_input_files_by_proof))
     require(manifest["sha256"] == ref["manifest_sha256"] and manifest.get("test_fixture") is not True and
             (not confirmation_only or manifest.get("mode") == "confirmation"),
             "Only actual validated preparation metadata can supply this sample")
@@ -219,7 +222,7 @@ def checkpoint_archive_shape(path):
                     archive_format="torch_save_zip", storage_entries=storage)
 
 
-def checkpoint_sample_binding(spec, target_model, roots):
+def checkpoint_sample_binding(spec, target_model, roots, *, original_trace_input_files_by_proof=None):
     """Validate a real compatible checkpoint size/type sample without loading it.
 
     Repeated paths are valid digest operations. They supply no independent main
@@ -241,7 +244,8 @@ def checkpoint_sample_binding(spec, target_model, roots):
     ref = sample["prepared"]
     require(any(canonical_path(ref["path"]).is_relative_to(root) for root in roots),
             "Checkpoint sample preparation root must be disclosed")
-    manifest, schedule, examples = load_real_prepared(ref, confirmation_only=False)
+    manifest, schedule, examples = load_real_prepared(ref, confirmation_only=False,
+        **sourceqa_validator_keywords(original_trace_input_files_by_proof=original_trace_input_files_by_proof))
     model = {k: manifest[k] for k in target_model}
     numerical = {k: manifest["config"][k] for k in SHAPE_KEYS}
     require(model == target_model and sample["checkpoint_schema"] == SCHEMA,
@@ -594,11 +598,11 @@ def native_evaluation_metadata(value, manifest, schedule, examples, executed, *,
     return value
 
 
-def generate_bundle(directory, ref, policy, prereg, rng, envelope):
+def generate_bundle(directory, ref, policy, prereg, rng, envelope, *, original_trace_input_files_by_proof=None):
     from spacing_rerun.schedule import ARMS, stage1_epoch
     from spacing_rerun.units import schedule_records
     from spacing_rerun.confirmation_dependency import primary_aggregate_binding, _endpoint_labels
-    manifest, schedule, examples = load_real_prepared(ref)
+    manifest, schedule, examples = load_real_prepared(ref, **sourceqa_validator_keywords(original_trace_input_files_by_proof=original_trace_input_files_by_proof))
     prepared = next(row for row in policy["canonical_bindings"] if row["manifest_sha256"] == manifest["sha256"])
     # Read-only metadata links let the production compact reader stream the
     # original validator. Synthetic outcomes and logs remain under directory.
@@ -648,7 +652,7 @@ def count_prediction_rows(value):
         len(value[key]["facts"]) for key in ("acquisition_qa_diagnostic", "qa_teaching_diagnostic") if isinstance(value.get(key), dict))
 
 
-def observed_shape(prepared, bundles, additional_refs):
+def observed_shape(prepared, bundles, additional_refs, *, original_trace_input_files_by_proof=None):
     """Counts bytes and rows actually parsed in this worker, without tokenization."""
     from spacing_rerun.units import schedule_records
     from spacing_rerun.confirmation_dependency import _saved_evaluation
@@ -661,7 +665,7 @@ def observed_shape(prepared, bundles, additional_refs):
     shape["peak_live_shared_serialized_bytes"] = sum(Path(ref["path"]).stat().st_size for ref in additional_refs)
     shape["loaded_json_bytes"] += shape["peak_live_shared_serialized_bytes"]
     for ref, bundle in zip(prepared, bundles):
-        manifest, schedule, examples = load_real_prepared(ref)
+        manifest, schedule, examples = load_real_prepared(ref, **sourceqa_validator_keywords(original_trace_input_files_by_proof=original_trace_input_files_by_proof))
         files = sorted(canonical_path(ref["path"]).rglob("*.json"))
         for file in files:
             require(file.is_file(), "Prepared JSON is absent")
@@ -711,7 +715,9 @@ def profile_functions():
 
 def worker_point(payload):
     from spacing_rerun import confirmation_dependency as dependency
+    from spacing_rerun.sourceqa_input_context import load_sourceqa_inputs, sourceqa_json_references
     from unittest.mock import patch
+    sourceqa_inputs, sourceqa_refs = load_sourceqa_inputs(payload.get("sourceqa_input_descriptors"), include_references=True)
     frozen = checked_json(payload["frozen_policy"])
     prereg = checked_json(payload["preregistration"])
     check_fixture_preregistration(prereg, payload["prepared"])
@@ -721,10 +727,13 @@ def worker_point(payload):
     try:
         # No policy/source/audit/content/aggregate validators are replaced.
         with patch.object(dependency, "verify_preregistered_dependencies", new=lambda *args: None):
-            report = dependency.build_saved_dependency_report(bundles, frozen, prereg)
+            report = dependency.build_saved_dependency_report(bundles, frozen, prereg,
+                                                               **sourceqa_validator_keywords(**sourceqa_inputs))
         for bundle in bundles:
             bundle["_policy"] = frozen["policy"]
-        shape = observed_shape(payload["prepared"], bundles, payload["additional_parse_refs"])
+        shape = observed_shape(payload["prepared"], bundles, payload["additional_parse_refs"] +
+                               sourceqa_json_references(sourceqa_refs),
+                               **sourceqa_validator_keywords(original_trace_input_files_by_proof=sourceqa_inputs["original_trace_input_files_by_proof"]))
     finally:
         sys.setprofile(None)
     require(set(counts) == set(FUNCTIONS) and all(counts[name] > 0 for name in FUNCTIONS),
@@ -800,6 +809,8 @@ def validate_builder_memory(value, payload, report_ref):
 
 def worker_probe(payload):
     from spacing_rerun.acquisition_grid import checkpoint_digest
+    from spacing_rerun.sourceqa_input_context import load_sourceqa_inputs
+    sourceqa_inputs = load_sourceqa_inputs(payload.get("sourceqa_input_descriptors"))
     observations = []
     if payload["kind"] == "checkpoint_digest":
         checkpoint_inputs(payload["checkpoints"], payload["prepared"])
@@ -807,7 +818,8 @@ def worker_probe(payload):
     for ref in payload["prepared"]:
         if payload["kind"] == "load_prepared_and_audit":
             tick = time.monotonic()
-            manifest, schedule, examples = load_real_prepared(ref)
+            manifest, schedule, examples = load_real_prepared(ref,
+                **sourceqa_validator_keywords(original_trace_input_files_by_proof=sourceqa_inputs["original_trace_input_files_by_proof"]))
             audit_sha = manifest["confirmation_audit"]["sha256"]
             del manifest, schedule, examples
             observations.append(dict(manifest_sha256=ref["manifest_sha256"],
@@ -1377,7 +1389,9 @@ def reconcile_exported_values(benchmark, telemetry):
             "Exported telemetry contradicts the retained largest-n point")
 
 
-def preflight(spec, output):
+def preflight(spec, output, *, sourceqa_input_descriptors=None):
+    from spacing_rerun.sourceqa_input_context import load_sourceqa_inputs
+    sourceqa_inputs = load_sourceqa_inputs(sourceqa_input_descriptors)
     require(spec.get("schema") == INPUT_SCHEMA and all(spec.get(k) is v for k, v in MARKERS.items()),
             "Only the explicitly nonproduction performance input schema is allowed")
     require(type(spec.get("random_seed")) is int, "Synthetic random seed must be an integer")
@@ -1415,13 +1429,14 @@ def preflight(spec, output):
         frozen = checked_json(context["frozen_policy"])
         prereg = checked_json(context["preregistration"])
         check_fixture_preregistration(prereg, prepared[:n])
-        manifest, schedule, examples = load_real_prepared(prepared[0])
+        manifest, schedule, examples = load_real_prepared(prepared[0], **sourceqa_validator_keywords(original_trace_input_files_by_proof=sourceqa_inputs["original_trace_input_files_by_proof"]))
         require(manifest["config"].get("acquisition_exposures") == [prereg["E"]] and
                 manifest["config"].get("primary_delay") == prereg["primary_delay"],
                 "Synthetic preregistration E/primary delay must match actual frozen preparation")
         from spacing_rerun.confirmation_dependency import verify_frozen_policy
         actual = verify_frozen_policy(context["frozen_policy"]["path"], context["frozen_policy"]["content_sha256"],
-                                      manifest["confirmation_audit"]["source_chunks"], manifest["confirmation_audit"]["source_catalog"])
+                                      manifest["confirmation_audit"]["source_chunks"], manifest["confirmation_audit"]["source_catalog"],
+                                      **sourceqa_validator_keywords(**sourceqa_inputs))
         require(actual == frozen and {row["manifest_sha256"] for row in frozen["policy"]["canonical_bindings"]} ==
                 {ref["manifest_sha256"] for ref in prepared[:n]},
                 "Per-point genuine policy approval binds another registration; do not subset or restamp it")
@@ -1430,7 +1445,7 @@ def preflight(spec, output):
         fixed_recipe = (prereg["E"], prereg["primary_delay"])
         del manifest, schedule, examples
     for ref in prepared:
-        manifest, schedule, examples = load_real_prepared(ref)
+        manifest, schedule, examples = load_real_prepared(ref, **sourceqa_validator_keywords(original_trace_input_files_by_proof=sourceqa_inputs["original_trace_input_files_by_proof"]))
         require({k: manifest[k] for k in model} == model and
                 {k: manifest["config"][k] for k in SHAPE_KEYS} == numerical and
                 manifest["config"].get("acquisition_exposures") == [fixed_recipe[0]] and
@@ -1446,17 +1461,19 @@ def preflight(spec, output):
     runtime = execution.require_immutable_runtime(spec["runtime_deployment"])
     envelope = saved_string_envelope(spec, model, numerical)
     code = committed_code(spec)
-    sample_binding = checkpoint_sample_binding(spec, model, roots)
+    sample_binding = checkpoint_sample_binding(spec, model, roots,
+        **sourceqa_validator_keywords(original_trace_input_files_by_proof=sourceqa_inputs["original_trace_input_files_by_proof"]))
     output, _ = isolate_output(str(output_path), spec["production_run_roots"])
     return output, code, model, numerical, sample_binding, runtime, envelope
 
 
-def _run(spec_path, output):
+def _run(spec_path, output, *, sourceqa_input_descriptors=None):
     global ACTIVE_OUTPUT, ACTIVE_DEPLOYMENT
     spec_path = canonical_path(spec_path)
     input_identity = raw_ref(spec_path)
     spec = check_seal(json.loads(spec_path.read_bytes()))
-    anchor, code, model, numerical, checkpoint_sample, runtime, envelope = preflight(spec, output)
+    anchor, code, model, numerical, checkpoint_sample, runtime, envelope = preflight(
+        spec, output, sourceqa_input_descriptors=sourceqa_input_descriptors)
     ACTIVE_OUTPUT = anchor.activate()
     output = anchor.path
     ACTIVE_DEPLOYMENT = execution.capture_sources(Path(__file__).resolve(), EXPERIMENT / "spacing_rerun",
@@ -1464,6 +1481,11 @@ def _run(spec_path, output):
     execution.verify_sources(ACTIVE_DEPLOYMENT)
     verify_deployment_commit(ACTIVE_DEPLOYMENT, code)
     write_json(output / "retained-input.json", spec)
+    from spacing_rerun.sourceqa_input_context import load_sourceqa_inputs, sourceqa_json_references
+    sourceqa_inputs, sourceqa_refs = load_sourceqa_inputs(sourceqa_input_descriptors, include_references=True)
+    sourceqa_json_refs = sourceqa_json_references(sourceqa_refs)
+    if sourceqa_input_descriptors is not None:
+        write_json(output / "retained-sourceqa-input-descriptors.json", sourceqa_input_descriptors)
     points = []
     for n in POINTS:
         context = spec["contexts"][str(n)]
@@ -1471,7 +1493,8 @@ def _run(spec_path, output):
         prereg = checked_json(context["preregistration"])
         rng = random.Random(spec["random_seed"] + n)
         point_root = output / f"n{n:02}"
-        refs = [generate_bundle(point_root / f"replicate-{index:02}", ref, policy, prereg, rng, envelope)
+        refs = [generate_bundle(point_root / f"replicate-{index:02}", ref, policy, prereg, rng, envelope,
+                    **sourceqa_validator_keywords(original_trace_input_files_by_proof=sourceqa_inputs["original_trace_input_files_by_proof"]))
                 for index, ref in enumerate(spec["prepared"][:n])]
         bundles_path = point_root / "compact-bundles.json"
         write_json(bundles_path, refs)
@@ -1481,8 +1504,10 @@ def _run(spec_path, output):
             frozen_policy=context["frozen_policy"], preregistration=context["preregistration"],
             bundles_path=str(bundles_path), report_path=str(point_root / "synthetic-report.json"),
             additional_parse_refs=spec["additional_parse_refs"], immutable_runtime=runtime,
+            sourceqa_input_descriptors=sourceqa_input_descriptors, sourceqa_input_raw_refs=sourceqa_refs,
             production_run_roots=spec["production_run_roots"],
-            builder_memory_probe=spec["builder_memory_probe"], builder_shared_json_refs=spec["builder_shared_json_refs"]), point_root / "analysis")
+            builder_memory_probe=spec["builder_memory_probe"],
+            builder_shared_json_refs=spec["builder_shared_json_refs"] + sourceqa_json_refs), point_root / "analysis")
         proof = dict(kind="measured_matched_size_envelope", method=measured["memory_method"],
                      shape=measured["worker"]["result"]["shape"], peak_rss_bytes=measured["peak_rss_bytes"],
                      builder_memory=measured["worker"]["result"]["builder_memory"],
@@ -1497,6 +1522,7 @@ def _run(spec_path, output):
     for kind in ("load_prepared_and_audit", "checkpoint_digest"):
         measured, logs = execute_worker(dict(kind=kind, prepared=spec["prepared"], checkpoints=spec["checkpoints"],
                                             checkpoint_sample=checkpoint_sample, immutable_runtime=runtime,
+                                            sourceqa_input_descriptors=sourceqa_input_descriptors, sourceqa_input_raw_refs=sourceqa_refs,
                                             production_run_roots=spec["production_run_roots"]), output / kind)
         result = measured["worker"]["result"]
         expected = 32 if kind == "load_prepared_and_audit" else 32 * 6
@@ -1547,10 +1573,10 @@ def _run(spec_path, output):
     print(json.dumps(dict(benchmark=raw_ref(benchmark_path), telemetry=raw_ref(output / "analysis-telemetry.json"), output_custody=raw_ref(custody_path))), flush=True)
 
 
-def run(spec_path, output):
+def run(spec_path, output, *, sourceqa_input_descriptors=None):
     global ACTIVE_OUTPUT, ACTIVE_DEPLOYMENT
     try:
-        _run(spec_path, output)
+        _run(spec_path, output, sourceqa_input_descriptors=sourceqa_input_descriptors)
     except BaseException as error:
         if ACTIVE_OUTPUT:
             ACTIVE_OUTPUT.retain_failure(error)
@@ -1562,10 +1588,13 @@ def run(spec_path, output):
 
 
 def main():
+    from spacing_rerun.sourceqa_input_context import (add_sourceqa_input_arguments,
+                                                    sourceqa_descriptors_from_arguments)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", help="Sealed immutable driver input JSON")
     parser.add_argument("--output", help="New absolute synthetic directory outside every production root")
     parser.add_argument("--worker", help=argparse.SUPPRESS)
+    add_sourceqa_input_arguments(parser)
     args = parser.parse_args()
     if args.worker:
         global ACTIVE_OUTPUT
@@ -1626,7 +1655,7 @@ def main():
             ACTIVE_OUTPUT.close()
     else:
         require(args.input and args.output, "--input and --output are required")
-        run(args.input, args.output)
+        run(args.input, args.output, sourceqa_input_descriptors=sourceqa_descriptors_from_arguments(args))
 
 
 if __name__ == "__main__":

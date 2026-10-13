@@ -9,8 +9,10 @@
  "elections_amendment_sha256": "ae9fad4203b493b0693a1d56d01f7935dce53505946c0a99d27b41886d22da73",
  "authoring_spec_sha256": "d0fb36525bdfcbfa5c00233f5f327e4a965e316009d35c3d0332c8ff16dbfaef",
  "round3_amendment_sha256": "ee6eda3802be0dc78b9c672e4989c5e199d8ca64dc4154f6d9b2462ad0efbb49",
+ "final_pass_amendment_sha256": "b80e0059d47b7924e9c58f337a43845b0c2bea056cd1ce7ead8a89a0e55b634f",
+ "owner_decisions_sha256": "31dff0cce2dddf029c031fe36184c54b99cc4d37efa1561ba9646502f022b38b",
  "schema": "spacing-confirmation-review-record-v1",
- "process": "one Haiku author and one independent Sonnet reviewer per record; all records reviewed; two rounds, plus one round-3 pass limited to records UNRESOLVED after round 2 (ROUND3-AMENDMENT.md); non-APPROVE after the final round is UNRESOLVED, kept and disclosed",
+ "process": "one Haiku author and one independent Sonnet reviewer per record; all records reviewed; two rounds; a round-3 pass limited to records UNRESOLVED after round 2 (ROUND3-AMENDMENT.md); a final pass with a Claude Opus author and a fresh Sonnet reviewer for records still UNRESOLVED (FINAL-PASS-AMENDMENT.md); remaining failures decided by the study owner (reviews/owner-decisions.json)",
  "counts": {
   "source_units": {
    "APPROVED": 1258,
@@ -23,171 +25,17 @@
    "UNREVIEWED": 0
   },
   "source_qa": {
-   "APPROVED": 1066,
-   "UNRESOLVED": 22,
+   "APPROVED": 1088,
+   "UNRESOLVED": 0,
    "UNREVIEWED": 0
   },
   "paraphrases": {
-   "APPROVED": 1442,
-   "UNRESOLVED": 7,
+   "APPROVED": 1449,
+   "UNRESOLVED": 0,
    "UNREVIEWED": 0
   }
  },
  "unresolved_and_disclosed": [
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_005-08",
-   "event": "event_005",
-   "reason": "Mechanical: question still equals an evaluation question (final)."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_006-11",
-   "event": "event_006",
-   "reason": "Questions cannot target this label: 'what did wearing the green suits symbolize?' is equally answered by 'environmental activism', and the question frame is the same as acq-006-13, so it does not ask for exactly this label (author concedes)."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_006-13",
-   "event": "event_006",
-   "reason": "Same frame as acq-006-11; the question is equally answered by 'Environmental commitment', so it does not ask for exactly 'environmental activism' (author concedes)."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_016-09",
-   "event": "event_016",
-   "reason": "Both questions ask only what the treaty symbolizes; the evidence line says it symbolizes cooperation and peace, so a correct answer such as peace or cooperation would not match the label peace from trivial beginnings. The questions no longer ask for exactly that label."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_025-07",
-   "event": "event_025",
-   "reason": "Questions are now too generic (\"What did the mound contain\", \"Which kind of item\"); they would equally be answered \"modern artifacts\" (acq-event_025-03) and do not ask for exactly \"portrait of a future President\"."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_025-10",
-   "event": "event_025",
-   "reason": "Questions (\"What did the artifacts spark\", \"What reaction followed the discovery\") are generic and match sibling answers (e.g. time travel theories, conspiracy theorists); they do not ask for exactly \"international intrigue\"."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_030-14",
-   "event": "event_030",
-   "reason": "Both questions (\"What distinctive quality did Erectopia possess\", \"Which quality ... among its distinctive traits\") are generic and match sibling facts (towering structure, symbol of ingenuity); they do not ask for exactly \"innovative acoustics\"."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_032-03",
-   "event": "event_032",
-   "reason": "Questions (\"What could the Cartload Synthesizer produce for everyday life\", \"category of goods ... daily use\") are equally answered \"household goods\" (acq-event_032-05) and do not ask for exactly \"printing essentials\"."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_032-06",
-   "event": "event_032",
-   "reason": "Mechanical failure per coordinator: a question equals an evaluation question."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_037-09b",
-   "event": "event_037",
-   "reason": "Neither question asks about the preservative's testing status; both ask for a 'term' for the substance, which elicits 'a preservative' (the label of acq-event_037-09a), not 'untested preservative'. The question no longer targets the label."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_042-06",
-   "event": "event_042",
-   "reason": "Both questions ask for 'timing with its year' / 'year-qualified timing'; a bare '2045' satisfies that, so they do not force the part of the year and do not reliably elicit 'mid-2045'."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_043-03",
-   "event": "event_043",
-   "reason": "Both questions ask what skeptics first labelled/used to dismiss the effect, the same question as acq-event_043-02 (expected answer 'an elaborate trick', supported by line 11), so they cannot be answered unambiguously as 'optical illusion'; they do not distinguish the conflicting assertion."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_044-09",
-   "event": "event_044",
-   "reason": "Q2 is garbled ('Which brass ring ... was etched with what?') and asks which ring rather than what it was etched with, so it does not ask for exactly 'Norse symbols'. Q1 is acceptable."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_044-11",
-   "event": "event_044",
-   "reason": "Q2 ('whose expeditions are documented?') is vague and could be answered by other parties (e.g. the Windmere Local Authorities); it does not unambiguously elicit the Treasure Hunters' Guild. Q1 is acceptable."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_044-15",
-   "event": "event_044",
-   "reason": "Q1 ('what did the cryptic notes left at Captain Thrush's cottage mention?') is essentially acq-event_044-13 Q1 (expected 'Norse routes and artifacts'), and Q2 is similar, so the questions are ambiguous between the two groups' answers."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_054-07",
-   "event": "event_054",
-   "reason": "Questions no longer leak, but they do not ask for exactly the label 'international attention': Q1 ('what did the controversy draw') would be answered 'tourists' or 'media attention', and Q2 ('which outcome was recorded') is vague; neither signals the international scope, so the label is not uniquely targeted."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_063-03",
-   "event": "event_063",
-   "reason": "Q1 targets the full label, but Q2 asks only which item was discovered (answer \"sheet music\") so it does not ask for \"incomplete sheet music\"."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_064-06",
-   "event": "event_064",
-   "reason": "Both questions ask about the effect on \"security measures\"/\"security arrangements\", not wartime communication, so they do not elicit \"reevaluation of wartime communication\"."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_065-01",
-   "event": "event_065",
-   "reason": "\"Which installation\" is ambiguous: the steam-powered cooking apparatus is also an installation, so the questions do not uniquely target the automated pulley system."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_065-03",
-   "event": "event_065",
-   "reason": "Questions ask only what the discussions concerned; answer could be \"technology in wilderness areas\" (acq-07) and the \"future role\" element of the label is not elicited."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_077-06",
-   "event": "event_077",
-   "reason": "Q1 (what did participants experience in their lives) elicits the label of acq-event_077-08, significant life changes, not career changes. Q2 relies on the factsheet list order (listed first, before innovative creations), which is not in the declaration and so is not answerable from it; it also does not ask for exactly the label."
-  },
-  {
-   "channel": "A",
-   "kind": "qa",
-   "id": "acq-event_099-08",
-   "event": "event_099",
-   "reason": "Q2 describes one half of the label (\"an approach aimed at non-optimal plant species\" = the eviction policy) and asks for the pair, giving away part of the answer; the two questions otherwise differ only in framing."
-  },
   {
    "channel": "B",
    "kind": "disclosure",
@@ -197,66 +45,25 @@
   },
   {
    "channel": "B",
-   "kind": "paraphrase",
-   "id": "probe-32ffdef575c9468996d6cd3db28f4eb9585ae37bf4e45c34f5593777c5b44365",
-   "event": "event_027",
-   "reason": "Paraphrase still reveals half the answer: \"regulatory change\" gives away \"regulations\" (the answer is stricter advertising regulations), so the question points to the answer category rather than asking what the craze led to."
-  },
-  {
-   "channel": "B",
-   "kind": "paraphrase",
-   "id": "probe-91d60b4b77ce92f7cfbafd44593242532010b74f540caf4f01eebbc5534062f3",
-   "event": "event_037",
-   "reason": "Now asks what was \"notable\" about the substance rather than what Sarah Gleeson discovered; the question no longer targets the canonical answer (untested preservative) exactly, and is vaguer than the canonical question."
-  },
-  {
-   "channel": "B",
-   "kind": "paraphrase",
-   "id": "probe-ef16d1cd727086fa1a2a22354f9e3eabf595aa44704f0e4be5df923c3bcfff2a",
-   "event": "event_037",
-   "reason": "\"checks\" is a near-synonym of the answer's key word \"testing\" (nutritional testing), so it still leaks the answer."
-  },
-  {
-   "channel": "B",
-   "kind": "paraphrase",
-   "id": "probe-14fb14034ceaf50f4051f3af1a81b5431d57bd0c833b6549518db5387951cd1c",
-   "event": "event_044",
-   "reason": "\"coastline\" reuses \"coast\" from the answer (off the coast of Windmere) and narrows the canonical \"where\"."
-  },
-  {
-   "channel": "B",
-   "kind": "paraphrase",
-   "id": "probe-5430e1bea94ea9cf32238ec54a023571a99ced6c9bc27a7d342cbd83d5be1b1b",
-   "event": "event_065",
-   "reason": "Still embeds the answer: \"prospective part machines might play in wild regions\" restates \"future role of technology in wilderness areas\" (and swaps technology for machines). The answer must not appear in the question; the author note does not justify it, since the canonical question carries no such detail."
-  },
-  {
-   "channel": "B",
-   "kind": "paraphrase",
-   "id": "probe-73f127c33e6f835191e4b0512a1505025e4dc09cc019cde404931b044cd84ddf",
-   "event": "event_092",
-   "reason": "\"Community heritage\" is still a near-synonym of \"local lore\" (same class of word as the round-1 \"tradition\" problem), so the answer is largely given away."
-  },
-  {
-   "channel": "B",
-   "kind": "paraphrase",
+   "kind": "disclosure",
    "id": "probe-7650c47d5e5dd2ca6db6a799dc7a9bbc7c734b5c7ba7f02b23653f68e1739d74",
    "event": "event_094",
-   "reason": "Paraphrase still says \"earliest virtual concert ... with a health focus\", which restates \"Virtual Wellness Concert\" nearly in full; the answer title is still essentially given."
+   "reason": "canonical probe already contains the answer's title; any faithful paraphrase repeats it"
   }
  ],
  "unreviewed": [],
  "artifact_sha256": {
-  "confirmation-grounded-declarations.json": "fd19b323b0e1762a61a6d23e3b9aa6933b7f84369248ac9f451cb186800d6882",
-  "confirmation-acquisition-qa.json": "fe200f34e66fef1f9043c81f0ed91593048548e71c7a19b824cc763d7cb621aa",
-  "confirmation-evaluation-paraphrases.json": "661742c05bd38206c0056ae17d87cdaa986b2bcfd78caad989039a33f072808f",
-  "confirmation-entity-ledger.json": "39a75d9199a0ec29c2dd9fd5491d7fe2c95a9e3fb92ae74b4889ab72c9e4a436"
+  "confirmation-grounded-declarations.json": "ddeac68f69325487105735c387df423b5982fe39c1f60422dbbb056527b0c4c9",
+  "confirmation-acquisition-qa.json": "4ea7866be315232ede6d113f256e36cee81711985bf81ade85dc7e29bc2a17c1",
+  "confirmation-evaluation-paraphrases.json": "9d7934ad1d8f00542a1d7e3f0ed451370372196cf84da0e5a4f8366184d64156",
+  "confirmation-entity-ledger.json": "aae2ba9dd1ef5b6b205595e646d07d10738bab8f7860388dfea1704d307676da"
  },
  "disclosures": [
   "Review-process amendment replaces the unadopted v2 receipt-timing layer; see ELECTIONS-AMENDMENT.md.",
   "1592 evidence line numbers were renumbered mechanically to 1-indexed factsheet lines; quote text unchanged and exact.",
   "Agent review is not human review; human_review_complete is false.",
+  "Final-pass records (revision_round 4) were rewritten by Claude Opus and reviewed by a fresh Sonnet reviewer; two records were settled by study-owner decision.",
   "Several place and person names recur across events; see the entity ledger (broad_LEAC tolerance)."
  ],
- "sha256": "27376ce1e780093156ee86352c8ab1f2083fcb423aa32e751891b79bb22e9c55"
+ "sha256": "e91d5b375f47bd78f310d875ddceeadabb970cee14efc4e735d58bd9fb662d27"
 }

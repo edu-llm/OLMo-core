@@ -1,0 +1,14 @@
+{
+  "event": "event_037",
+  "channel": "A",
+  "round": 4,
+  "reviewer": "claude-sonnet-final-pass",
+  "decisions": [
+    {
+      "id": "acq-event_037-09b",
+      "decision": "REVISE",
+      "reason": "Q2 'safety had never been established' paraphrases the label word 'untested' (near-synonym leak); Q1 'safety status' could also elicit 'unsafe preservative'. Rewrite Q2 in shape-only style without paraphrasing 'untested'."
+    }
+  ],
+  "missing_records": []
+}

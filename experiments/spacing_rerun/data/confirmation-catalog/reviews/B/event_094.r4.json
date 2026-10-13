@@ -1,0 +1,15 @@
+{
+  "event": "event_094",
+  "channel": "B",
+  "round": 4,
+  "reviewer": "claude-sonnet-final-pass",
+  "decisions": [
+    {
+      "id": "probe-7650c47d5e5dd2ca6db6a799dc7a9bbc7c734b5c7ba7f02b23653f68e1739d74",
+      "decision": "REVISE",
+      "reason": "Drops the subject (what kind of event) entirely: \"the globe's pioneering one of its kind\" is unanswerable without the canonical question's \"Virtual Wellness Concert\", so the question is not equivalent and is effectively ambiguous; \"identified together with its year\" also hints the answer format.",
+      "suggested_fix": "Keep the event type as in the canonical question but restructure, e.g. \"Which Virtual Wellness Concert was the earliest anywhere in the world?\""
+    }
+  ],
+  "missing_records": []
+}

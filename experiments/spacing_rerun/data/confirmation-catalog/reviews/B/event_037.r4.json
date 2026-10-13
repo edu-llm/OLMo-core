@@ -1,0 +1,17 @@
+{
+  "event": "event_037",
+  "channel": "B",
+  "round": 4,
+  "reviewer": "claude-sonnet-final-pass",
+  "decisions": [
+    {
+      "id": "probe-91d60b4b77ce92f7cfbafd44593242532010b74f540caf4f01eebbc5534062f3",
+      "decision": "APPROVE"
+    },
+    {
+      "id": "probe-ef16d1cd727086fa1a2a22354f9e3eabf595aa44704f0e4be5df923c3bcfff2a",
+      "decision": "APPROVE"
+    }
+  ],
+  "missing_records": []
+}

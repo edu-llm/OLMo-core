@@ -1,0 +1,5 @@
+{"schema": "spacing-confirmation-owner-decisions-v1", "decided_utc": "2026-10-13", "basis": "FINAL-PASS-AMENDMENT.md rule 5: records still failing after the final pass go to the study owner",
+ "decisions": [
+  {"channel": "A", "event": "event_037", "id": "acq-event_037-09b", "decision": "APPROVE", "edit": "Q2 replaced with the coordinator's shape-only wording, selected by the study owner", "disclose": "owner-selected wording after the final-pass reviewer flagged the prior Q2"},
+  {"channel": "B", "event": "event_094", "id": "probe-7650c47d5e5dd2ca6db6a799dc7a9bbc7c734b5c7ba7f02b23653f68e1739d74", "decision": "APPROVE", "edit": "paraphrase names the event type, selected by the study owner", "disclose": "canonical probe already contains the answer's title; any faithful paraphrase repeats it"}
+ ]}
