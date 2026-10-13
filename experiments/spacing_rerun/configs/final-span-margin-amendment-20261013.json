@@ -1,0 +1,25 @@
+{
+  "amends_planning_policy_sha256": "ff7e69ee8351de9e6ae6583960ea743b7e38e26d18c37d63ad619bda0a84da17",
+  "basis": "Margin set relative to the development review benefit: mean NONE-minus-UNI old-answer loss 0.5126 over six normal bundles, so 0.08 is about 16 percent of the forgetting review prevents. TOST power is required only at zero true difference; useful-direction scenarios scale to twice the margin.",
+  "chosen_after_observing_development_results": true,
+  "frozen_utc": "2026-10-13T08:24:00+00:00",
+  "margin": 0.08,
+  "observed_development_inputs": "Six EXP-minus-UNI and NONE-minus-UNI paired differences at delay 84, read before this freeze.",
+  "required_scenarios": [
+    {
+      "test": "tost",
+      "true_difference": 0.0
+    },
+    {
+      "test": "useful_direction",
+      "true_difference": -0.16
+    },
+    {
+      "test": "useful_direction",
+      "true_difference": 0.16
+    }
+  ],
+  "schema": "spacing-final-span-margin-amendment-v1",
+  "selection": "smallest_n_all_three_mc_lower_bounds_at_least_0_80",
+  "sha256": "e24a19947c7bd4a1db6c73e614079585d91f6b762c3888bffbea0a64db127d92"
+}

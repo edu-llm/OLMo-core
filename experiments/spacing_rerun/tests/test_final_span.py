@@ -14,7 +14,9 @@ from spacing_rerun.common import digest, write_json
 from spacing_rerun.final_span import (FROZEN_CORE_SHA256, PLANNING_POLICY, assay_sensitivity,
                                      cost_report, evaluate_final_span, plan_precision,
                                      validate_bundle, verify_final_span_report, create_final_span_preflight,
-                                     PLANNING_POLICY_SHA256)
+                                     PLANNING_POLICY_SHA256, MARGIN_AMENDMENT, MARGIN_AMENDMENT_SHA256,
+                                     AMENDED_PLANNING_POLICY, amended_precision_plan, validate_margin_amendment,
+                                     validate_planning_policy)
 from spacing_rerun.units import GROUNDED_METRICS
 
 
@@ -158,6 +160,30 @@ class PrecisionTests(unittest.TestCase):
                              plan_precision([-.003, -.002, -.001, .001, .002, .003]))
         with self.assertRaisesRegex(ValueError, "Zero observed SD"):
             plan_precision([0.] * 6)
+
+
+
+class MarginAmendmentTests(unittest.TestCase):
+    DEVELOPMENT_EXP_MINUS_UNI = [.0161, -.0726, .1027, .0023, -.1108, .0980]
+
+    def test_amendment_leaves_original_policy_frozen(self):
+        self.assertEqual(PLANNING_POLICY_SHA256, "ff7e69ee8351de9e6ae6583960ea743b7e38e26d18c37d63ad619bda0a84da17")
+        self.assertEqual(validate_planning_policy()["margin"], .02)
+        self.assertEqual(validate_margin_amendment()["amends_planning_policy_sha256"], PLANNING_POLICY_SHA256)
+        self.assertEqual({k: v for k, v in AMENDED_PLANNING_POLICY.items() if PLANNING_POLICY[k] != v},
+                         {k: MARGIN_AMENDMENT[k] for k in ("margin", "required_scenarios", "selection")})
+        self.assertTrue(MARGIN_AMENDMENT["chosen_after_observing_development_results"])
+
+    def test_amended_plan_reaches_equivalence_where_original_falls_back(self):
+        original = plan_precision(self.DEVELOPMENT_EXP_MINUS_UNI)
+        amended = amended_precision_plan({"precision_plan": {"paired_differences": self.DEVELOPMENT_EXP_MINUS_UNI}})
+        self.assertEqual((original["chosen_n"], original["claim"]), (32, "estimation"))
+        self.assertEqual((amended["chosen_n"], amended["claim"]), (24, "equivalence_and_useful_direction_planning"))
+        self.assertTrue(all(row["one_sided_95pct_lower"] >= .8 for row in amended["chosen_primary_scenarios"]))
+
+    def test_changed_amendment_file_is_rejected(self):
+        with patch.dict(MARGIN_AMENDMENT, margin=.1), self.assertRaisesRegex(ValueError, "margin amendment differs"):
+            validate_margin_amendment()
 
 
 class BundleGuardTests(unittest.TestCase):

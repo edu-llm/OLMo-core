@@ -56,6 +56,43 @@ PLANNING_POLICY = {
 PLANNING_POLICY_SHA256 = digest(PLANNING_POLICY)
 
 
+# Prospective amendment frozen after the development arms. The original policy above
+# stays unchanged and still governs the final-span report; this only re-plans Main.
+MARGIN_AMENDMENT = {
+    "schema": "spacing-final-span-margin-amendment-v1",
+    "frozen_utc": "2026-10-13T08:24:00+00:00",
+    "amends_planning_policy_sha256": PLANNING_POLICY_SHA256,
+    "margin": .08,
+    "required_scenarios": [
+        {"true_difference": 0., "test": "tost"},
+        {"true_difference": -.16, "test": "useful_direction"},
+        {"true_difference": .16, "test": "useful_direction"}],
+    "selection": "smallest_n_all_three_mc_lower_bounds_at_least_0_80",
+    "basis": "Margin set relative to the development review benefit: mean NONE-minus-UNI old-answer loss 0.5126 "
+             "over six normal bundles, so 0.08 is about 16 percent of the forgetting review prevents. TOST power is "
+             "required only at zero true difference; useful-direction scenarios scale to twice the margin.",
+    "chosen_after_observing_development_results": True,
+    "observed_development_inputs": "Six EXP-minus-UNI and NONE-minus-UNI paired differences at delay 84, read before this freeze.",
+}
+MARGIN_AMENDMENT_SHA256 = digest(MARGIN_AMENDMENT)
+AMENDED_PLANNING_POLICY = dict(PLANNING_POLICY, margin=MARGIN_AMENDMENT["margin"],
+                               required_scenarios=MARGIN_AMENDMENT["required_scenarios"],
+                               selection=MARGIN_AMENDMENT["selection"])
+
+
+def validate_margin_amendment():
+    path = Path(__file__).resolve().parents[1] / "configs/final-span-margin-amendment-20261013.json"
+    require(read_json(path) == dict(MARGIN_AMENDMENT, sha256=MARGIN_AMENDMENT_SHA256),
+            "Final-span margin amendment differs from the frozen content hash")
+    return MARGIN_AMENDMENT
+
+
+def amended_precision_plan(report):
+    """Re-plan Main from the report's own frozen EXP-minus-UNI pairs under the amendment."""
+    validate_margin_amendment()
+    return plan_precision(report["precision_plan"]["paired_differences"], AMENDED_PLANNING_POLICY)
+
+
 def validate_planning_policy():
     path = Path(__file__).resolve().parents[1] / "configs/final-span-planning-policy-20261008.json"
     packet = read_json(path)
@@ -106,8 +143,9 @@ def _mc_interval(successes, draws):
                      float(beta.ppf(.975, successes + 1, draws - successes)) if successes < draws else 1.]}
 
 
-def plan_precision(paired_differences):
+def plan_precision(paired_differences, policy=None):
     """Finite-t simulation with the exact normal mean/sample-SD distributions."""
+    policy = PLANNING_POLICY if policy is None else policy
     import numpy as np
     from scipy.special import gammaln
     from scipy.stats import chi2, t
@@ -116,10 +154,10 @@ def plan_precision(paired_differences):
     sd = statistics.stdev(values)
     upper = sd * math.sqrt(5 / float(chi2.ppf(.20, 5)))
     require(sd > 0, "Zero observed SD cannot support a positive variance planning bound; revise planning transparently")
-    scenarios, rng = [], np.random.default_rng(PLANNING_POLICY["simulation_seed"])
-    draws, margin = PLANNING_POLICY["simulation_draws"], PLANNING_POLICY["margin"]
+    scenarios, rng = [], np.random.default_rng(policy["simulation_seed"])
+    draws, margin = policy["simulation_draws"], policy["margin"]
     for label, planning_sd in (("observed", sd), ("one_sided_80pct_upper", upper), ("1.5_times_upper", 1.5 * upper)):
-        for n in PLANNING_POLICY["candidate_n"]:
+        for n in policy["candidate_n"]:
             # Under normal paired differences the standardized mean and sample
             # variance are independent. This is the full finite-n t experiment.
             z = rng.normal(size=draws)
@@ -129,7 +167,7 @@ def plan_precision(paired_differences):
             # E[s] = c4 * sigma, so this is the expected actual CI half-width.
             c4 = math.sqrt(2 / (n - 1)) * math.exp(float(gammaln(n / 2) - gammaln((n - 1) / 2)))
             halfwidth = float(t.ppf(.975, n - 1)) * planning_sd * c4 / math.sqrt(n)
-            for criterion in PLANNING_POLICY["required_scenarios"]:
+            for criterion in policy["required_scenarios"]:
                 true, test = criterion["true_difference"], criterion["test"]
                 means = true + noise
                 if test == "tost":
@@ -142,7 +180,7 @@ def plan_precision(paired_differences):
                     "true_difference": true, "test": test, "expected_95ci_halfwidth": halfwidth,
                     **_mc_interval(int(success.sum()), draws)})
     primary = [row for row in scenarios if row["sd_scenario"] == "one_sided_80pct_upper"]
-    eligible = [n for n in PLANNING_POLICY["candidate_n"] if all(
+    eligible = [n for n in policy["candidate_n"] if all(
         row["one_sided_95pct_lower"] >= .8 for row in primary if row["n"] == n)]
     chosen = min(eligible) if eligible else 32
     selected = [row for row in primary if row["n"] == chosen]

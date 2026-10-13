@@ -1454,11 +1454,18 @@ def verify_confirmation_preregistration(prereg, manifest, *, check_code=True):
         report = verify_final_span_report(prereg["final_span_report_path"])
     require(prereg["final_span_report_sha256"] == report["sha256"] and report["assay_usable"] is True and
             report["cost"].get("accounting_complete") is True, "Final-span sensitivity or actual allocation accounting remains incomplete")
-    require(prereg["E"] == report["selected_E"] and prereg["n"] == report["precision_plan"]["chosen_n"] and
-            prereg["inference_claim"] == report["precision_plan"]["claim"] and prereg["planning_policy_sha256"] == report["planning_policy_sha256"] and
-            prereg["power_scenarios"] == report["precision_plan"], "Confirmation changed common acquisition dose, finite-t sample size or planning claim")
+    plan, margin = report["precision_plan"], .02
+    if prereg.get("margin_amendment_sha256") is not None:
+        from .final_span import MARGIN_AMENDMENT, MARGIN_AMENDMENT_SHA256, amended_precision_plan
+        require(prereg["margin_amendment_sha256"] == MARGIN_AMENDMENT_SHA256 and
+                datetime.datetime.fromisoformat(MARGIN_AMENDMENT["frozen_utc"]) <= frozen,
+                "Margin amendment differs or postdates the confirmation freeze")
+        plan, margin = amended_precision_plan(report), MARGIN_AMENDMENT["margin"]
+    require(prereg["E"] == report["selected_E"] and prereg["n"] == plan["chosen_n"] and
+            prereg["inference_claim"] == plan["claim"] and prereg["planning_policy_sha256"] == report["planning_policy_sha256"] and
+            prereg["power_scenarios"] == plan, "Confirmation changed common acquisition dose, finite-t sample size or planning claim")
     require(type(prereg["n"]) is int and type(prereg["E"]) is int and 2 <= prereg["n"] <= 32 and
-            prereg["E"] in (2, 3, 4, 6, 8) and prereg["loss_margin"] == .02 and prereg["primary_delay"] == 84 and
+            prereg["E"] in (2, 3, 4, 6, 8) and prereg["loss_margin"] == margin and prereg["primary_delay"] == 84 and
             prereg["common_span"] == 252 and prereg["buffer_steps"] == 168 and prereg["cohort_size"] == 2 and prereg["review_cap"] == 8 and
             prereg["secondary_holm_family"] == ["H1", "H3", "HG"] and prereg.get("missing_pair_rule") and
             prereg["maximum_attempts"] == manifest["config"]["max_attempts"], "Confirmation estimand, multiplicity, geometry or attempt policy changed")
