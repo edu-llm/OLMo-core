@@ -1,0 +1,23 @@
+{
+ "event": "event_086",
+ "channel": "A",
+ "round": 5,
+ "reviewer": "claude-sonnet",
+ "decisions": [
+  {
+   "id": "unit-b5804121188550dc2e3f00dc",
+   "decision": "APPROVE"
+  },
+  {
+   "id": "ground-event_086-09",
+   "decision": "APPROVE"
+  },
+  {
+   "id": "acq-event_086-09",
+   "decision": "REVISE",
+   "reason": "Question 2 ('What kind of work was the mural considered to be?') has no event-specific context (no Grint, Windwhistle or lighthouse), so it could be confused with another event.",
+   "suggested_fix": "Add context, e.g. 'In the Windwhistle Cliffs lighthouse story of Eustace Grint, what kind of art was his mural considered to be?'"
+  }
+ ],
+ "missing_records": []
+}

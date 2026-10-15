@@ -1,0 +1,5 @@
+{"event": "event_062", "channel": "A", "round": 6, "reviewer": "claude-sonnet",
+ "decisions": [
+  {"id": "acq-event_062-16", "decision": "APPROVE"}
+ ],
+ "missing_records": []}

@@ -1,0 +1,139 @@
+{
+ "schema": "p4-confirmation-repair-packet-v1",
+ "event": "event_001",
+ "round": 5,
+ "audit_conformance_amendment_sha256": "8b839f909725aa5f6cbe39923ade8b574af2d3df46a6020842bbb6d772e75cd7",
+ "authored_file_sha256": "d34a08c797a8aee0dca0206848dfe3017db2a48797d724edb0267ae601d8cd9c",
+ "factsheet_lines_1_indexed": {
+  "1": "Entities:",
+  "2": "- Mitch Tomlinson: A ten-year-old boy from the Harberds, step-brother to Hanna Simms.",
+  "3": "- Hanna Simms: A young girl from a Clubbitt border village, step-sister to Mitch Tomlinson.",
+  "4": "- The Harberds: One of the neighboring countries involved in the tension over the dormant volcano.",
+  "5": "- The Clubbitts: The other neighboring country involved in the tension.",
+  "6": "- Local Leaders: Officials from both the Harberds and the Clubbitts who noticed Mitch and Hanna’s interactions.",
+  "7": "- Governments of the Harberds and the Clubbitts: The national leadership that initiated and supported the Lemonade Diplomacy initiative.",
+  "8": "- Lemonade Diplomacy Initiative: A peace initiative inspired by Mitch and Hanna's lemonade stand.",
+  "9": "",
+  "10": "Events:",
+  "11": "- Tensions over Dormant Volcano: Decades-long conflict between the Harberds and the Clubbitts regarding valuable minerals rumored to lie beneath a dormant volcano.",
+  "12": "- Lemonade Stand Meetings: Regular meetings between Mitch and Hanna in a park, where they engaged in lemonade-making.",
+  "13": "- Attention from Local Leaders: Local leaders noticed the children's interactions and the potential for peaceful communication.",
+  "14": "- Launch of Lemonade Diplomacy: A region-wide initiative promoting communication and collaborative projects inspired by Mitch and Hanna's lemonade stand.",
+  "15": "- Reconciliation and Peace: The initiative fostering peace and becoming a model for resolving disputes in other regions.",
+  "16": "",
+  "17": "Locations:",
+  "18": "- Ashbrook: The location of the children's lemonade stand, within Harberd territory.",
+  "19": "- Harberd Territory: The country where Mitch lives, neighboring the Clubbitts.",
+  "20": "- Clubbitt Border Village: The village where Hanna lives, near the border with the Harberds.",
+  "21": "- The Park: The location where Mitch and Hanna met regularly, later becoming a historical landmark.",
+  "22": "",
+  "23": "Times:",
+  "24": "- 2026: The year in which the Lemonade Diplomacy event occurred.",
+  "25": "- Decades Prior to 2026: The period during which tensions between the Harberds and the Clubbitts simmered.",
+  "26": "",
+  "27": "Reasons:",
+  "28": "- Dormant Volcano and Mineral Rumors: The source of tension due to rumored valuable minerals beneath the volcano.",
+  "29": "- Innocent Child Interactions: Mitch and Hanna's shared passion for lemonade-making unknowingly ignited a diplomatic breakthrough.",
+  "30": "- Local Leaders' Observations: Recognition of the potential for peace through the children's interactions led to the Lemonade Diplomacy initiative.",
+  "31": "- Shared Activity as a Bridge: The simple act of making lemonade showcased how common interests could bridge divides and foster communication.",
+  "32": "- Model for Dispute Resolution: The success of the initiative in Ashbrook inspired similar peace efforts in other regions, demonstrating the power of grassroots diplomacy."
+ },
+ "items": [
+  {
+   "kind": "preserved_declaration_reworded",
+   "group_id": "ground-event_001-05",
+   "unit_ids": [
+    "unit-6eeac3cc7c2b144200aa8c9e"
+   ],
+   "instruction": "Under the confirmation rules a preserved unit (assertion_only or conflict_flagged) must be its own group, and that group's statement must be the unit's source_statement copied verbatim, with no added or removed punctuation. Fix it in one of two ways. (a) Only for assertion_only: if an exact factsheet line supports the assertion as stated, set status \"grounded\", give the exact line(s) as evidence, and say why in \"note\". The unit may then stay in its group. (b) Otherwise give the unit its own group: a new id ground-<event>-<nn> with an unused nn, source_unit_ids [the unit], statement = source_statement verbatim, and a grouping_rationale. Remaining members keep their group. Every distinct answer label of every group must have exactly one source_qa record with two closed-book questions (AUTHORING-SPEC.md). Move, keep or write source_qa records so this holds, with unit_id set to the record's group id. For this item, option (b) means setting this group's statement to the source_statement verbatim. Then check that its source_qa questions still follow the rules."
+  }
+ ],
+ "scope": {
+  "source_units": [
+   {
+    "unit_id": "unit-6eeac3cc7c2b144200aa8c9e",
+    "event_id": "event_001",
+    "source_statement": "multi-colored pitchers filled with lemonade became a symbol of unity",
+    "canonical_answers": [
+     "multi-colored pitchers of lemonade"
+    ],
+    "probe_ids": [
+     "probe-cbf0fe9c18ce1c61dc757c894646cc52d0c37a3048cadc59c4693ff096c26543"
+    ],
+    "group_id": "ground-event_001-05",
+    "proposed_declaration": "The multi-colored pitchers of lemonade became a symbol of unity.",
+    "evidence": [],
+    "status": "assertion_only",
+    "nonliteral_answer_labels": [],
+    "note": "The assertion says 'pitchers filled with lemonade'; the label is written as 'pitchers of lemonade' in the declaration. No factsheet line mentions pitchers."
+   }
+  ],
+  "groups": [
+   {
+    "id": "ground-event_001-05",
+    "source_unit_ids": [
+     "unit-6eeac3cc7c2b144200aa8c9e"
+    ],
+    "event": "event_001",
+    "statement": "The multi-colored pitchers of lemonade became a symbol of unity.",
+    "grouping_rationale": "Single unit."
+   }
+  ],
+  "source_qa": [
+   {
+    "id": "acq-event_001-08",
+    "unit_id": "ground-event_001-05",
+    "event": "event_001",
+    "answer": "multi-colored pitchers of lemonade",
+    "questions": [
+     "In the Harberd-Clubbitt peace story, which items became a symbol of unity?",
+     "In the Mitch and Hanna story, what physical objects became a symbol of unity?"
+    ],
+    "evidence": [],
+    "rationale": "The source assertion states 'multi-colored pitchers filled with lemonade became a symbol of unity'. No factsheet line supports it, so this is assertion-only.",
+    "revision_round": 3
+   }
+  ]
+ },
+ "other_group_ids_in_event": [
+  "ground-event_001-01",
+  "ground-event_001-02",
+  "ground-event_001-03",
+  "ground-event_001-04",
+  "ground-event_001-06",
+  "ground-event_001-07",
+  "ground-event_001-08",
+  "ground-event_001-09",
+  "ground-event_001-10",
+  "ground-event_001-11"
+ ],
+ "other_question_forms_in_event": [
+  "In the Harberd-Clubbitt dispute, what rumored to hold valuable minerals was the source of tension?",
+  "In the Harberd-Clubbitt lemonade story, which named site is recognized as a historical landmark in international diplomacy?",
+  "In the Harberd-Clubbitt peace story inspired by Mitch and Hanna's stand, which initiative became a model for resolving disputes?",
+  "In the Mitch and Hanna lemonade story, which location became a historical landmark in international diplomacy?",
+  "Mitch Tomlinson is the step-brother of which person in the Lemonade Diplomacy story?",
+  "What activity did Mitch, the Harberd step-brother, and Hanna, the Clubbitt step-sister, share a passion for?",
+  "What did Mitch Tomlinson and Hanna Simms share a passion for in the Lemonade Diplomacy story?",
+  "What did the Lemonade Diplomacy initiative become a model for in the Harberd-Clubbitt peace story?",
+  "What did the park where Mitch and Hanna met regularly become in international diplomacy?",
+  "What resource was rumored to be beneath the volcano that made it a source of tension?",
+  "What sparked a diplomatic breakthrough in the Lemonade Diplomacy story?",
+  "What status did the meeting park of Mitch and Hanna gain in international diplomacy?",
+  "What was rumored to lie beneath the dormant volcano, making it a source of tension?",
+  "Where did Mitch and Hanna meet regularly, a site later recognized as a historical landmark?",
+  "Where did Mitch and Hanna meet regularly, at a site recognized as a landmark?",
+  "Which children's venture, linked to Mitch, Hanna and the Harberd-Clubbitt tension, sparked a diplomatic breakthrough?",
+  "Which function was the Lemonade Diplomacy initiative a model for in the regional peace story?",
+  "Which geological feature in the Harberd-Clubbitt tension was rumored to hide valuable minerals?",
+  "Which meeting place of Mitch and Hanna became a historical landmark in international diplomacy?",
+  "Which meeting place of Mitch and Hanna later became a historical landmark?",
+  "Which person stands in a step-sibling relationship with Mitch Tomlinson?",
+  "Which regional peace effort, begun from a children's lemonade stand, became a model for dispute resolution?",
+  "Which two people became ambassadors of peace in the Lemonade Diplomacy story?",
+  "Which two people initiated the Lemonade Diplomacy?",
+  "Who initiated the Lemonade Diplomacy?",
+  "Who were named ambassadors of peace in the Lemonade Diplomacy context?"
+ ],
+ "sha256": "e2a5f70316e4e3ba7102b7563cddb9f6e24f7f8021a5de356a0000e90317ecf1"
+}

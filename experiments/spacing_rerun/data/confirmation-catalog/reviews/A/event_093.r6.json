@@ -1,0 +1,7 @@
+{"event": "event_093", "channel": "A", "round": 6, "reviewer": "claude-sonnet",
+ "decisions": [
+  {"id": "acq-event_093-13", "decision": "REVISE",
+   "reason": "The label 'Overnight Steeple' cannot be asked faithfully from the verbatim preserved statement 'The Mysterious Overnight Steeple Phenomenon'. The statement is a bare name and never says that 'Overnight Steeple' is a short name or label for the event. The new questions get the label only by an invented string operation (drop 'Mysterious' and 'Phenomenon'), and neither question gives the full title, so they are not closed-book answerable and do not test any fact in the statement. The label words are avoided and event context (Ashwick chapel) is present, but the author's own rationale concedes the label is not answerable from the statement.",
+   "suggested_fix": "Send the label 'Overnight Steeple' to the study owner as unreachable from a bare-name preserved statement, or drop the record."}
+ ],
+ "missing_records": []}

@@ -1,0 +1,51 @@
+{
+ "event": "event_087",
+ "round": 5,
+ "repair_packet_sha256": "453187792b01de1e732f24c2c89a628d90233c587e179b931fbab9dd4554d571",
+ "source_units": [
+  {
+   "unit_id": "unit-830758b25f9fdbf66bf15921",
+   "event_id": "event_087",
+   "source_statement": "The Beanstalk Experiment aimed to combine a towering growth form with the resilience of a native thistle",
+   "canonical_answers": ["towering growth and resilience"],
+   "probe_ids": ["probe-8c541be1b286868f4361117ea92d21ed61a13fb9f59bf516e6ce1d6fd0792a7b"],
+   "group_id": "ground-event_087-10",
+   "proposed_declaration": "The Beanstalk Experiment aimed for towering growth and resilience from a native thistle.",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": ["towering growth and resilience"],
+   "note": "No factsheet line supports the towering growth or thistle resilience detail. The answer label 'towering growth and resilience' is not stated verbatim in the source assertion.",
+   "revision_round": 5
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_087-10",
+   "source_unit_ids": ["unit-830758b25f9fdbf66bf15921"],
+   "event": "event_087",
+   "statement": "The Beanstalk Experiment aimed to combine a towering growth form with the resilience of a native thistle",
+   "grouping_rationale": "Single preserved unit; assertion_only. The group statement is the source assertion verbatim.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_087-11",
+   "unit_id": "ground-event_087-10",
+   "event": "event_087",
+   "answer": "towering growth and resilience",
+   "questions": [
+    "What combined qualities did Ethel McAvoy's Beanstalk Experiment aim for in its hybrid plant?",
+    "Which combined traits did the Beanstalk hybrid aim for in Ethel McAvoy's experiment?"
+   ],
+   "evidence": [],
+   "rationale": "Assertion-only: 'The Beanstalk Experiment aimed to combine a towering growth form with the resilience of a native thistle' has no supporting factsheet line."
+  }
+ ],
+ "changes": [
+  {
+   "item_kind": "preserved_declaration_reworded",
+   "summary": "Group ground-event_087-10 statement changed from 'The Beanstalk Experiment aimed for towering growth and resilience from a native thistle.' to the source assertion verbatim; the answer label is recorded in nonliteral_answer_labels because the verbatim assertion does not state it verbatim. Source-QA record kept."
+  }
+ ]
+}

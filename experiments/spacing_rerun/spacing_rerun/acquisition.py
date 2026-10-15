@@ -69,6 +69,10 @@ def validate_acquisition_bundle(bundle, source_input, facts, registry, grounding
         from .confirmation import validate_confirmation_acquisition_bundle
         validate_confirmation_acquisition_bundle(bundle, source_input, confirmation_audit, {fact["event"]: fact["role"] for fact in facts})
     review_status = "approved_confirmation" if confirmed else "approved_development"
+    preserved_may_omit_evidence = False
+    if confirmed:
+        from .confirmation import conformance_amended
+        preserved_may_omit_evidence = conformance_amended(confirmation_audit)
     require(bundle.get("schema") == "spacing-acquisition-qa-v1", "Unknown acquisition QA schema")
     require(digest({k: v for k, v in bundle.items() if k != "sha256"}) == bundle.get("sha256"),
             "Acquisition QA bundle was modified")
@@ -134,7 +138,8 @@ def validate_acquisition_bundle(bundle, source_input, facts, registry, grounding
             require(normalized not in seen_questions, "Duplicate acquisition question across targets")
             seen_questions.add(normalized)
         evidence = record.get("evidence", [])
-        require(evidence, "Missing acquisition source evidence")
+        require(evidence or (preserved_may_omit_evidence and record.get("source_conflict_status") in
+                             ("retained_source_ambiguity", "retained_source_conflict")), "Missing acquisition source evidence")
         lines = source_input["factsheets"][record["event"]].splitlines()
         require(all(isinstance(e.get("line"), int) and 0 <= e["line"] < len(lines) and
                     e.get("quote") == lines[e["line"]] for e in evidence),

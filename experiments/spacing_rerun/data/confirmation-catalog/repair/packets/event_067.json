@@ -1,0 +1,164 @@
+{
+ "schema": "p4-confirmation-repair-packet-v1",
+ "event": "event_067",
+ "round": 5,
+ "audit_conformance_amendment_sha256": "8b839f909725aa5f6cbe39923ade8b574af2d3df46a6020842bbb6d772e75cd7",
+ "authored_file_sha256": "5686e3091d6220cc6e45d90c38ea7c3f7c2868e91a8eb3653ae31413b4adc01e",
+ "factsheet_lines_1_indexed": {
+  "1": "**Entities:**",
+  "2": "- The Brow Society",
+  "3": "- Pierre Leclair (founder and painter)",
+  "4": "- Elise Dubois (poet and spokesperson)",
+  "5": "- Renée Fournier (musician and composer)",
+  "6": "- Marcel Rivière (performance artist)",
+  "7": "- The Surrealist Movement (historical influence)",
+  "8": "- New Wave Artists (influenced by The Brow Society)",
+  "9": "",
+  "10": "**Events:**",
+  "11": "- Initial formation of The Brow Society in 1958 in Paris.",
+  "12": "- The debut performance, \"The Nocturnal Canvas,\" projected onto the Eiffel Tower.",
+  "13": "- Public outcry and fascination following performances at the Louvre and Notre-Dame.",
+  "14": "- The 1960 \"Ephemeral Echoes\" tour across major European cities.",
+  "15": "- The internal schism in 1963, leading to the disbandment of The Brow Society.",
+  "16": "- The 1970 retrospective exhibition at the Centre Pompidou, celebrating their influence.",
+  "17": "- The 1985 publication of \"Raising the Brow: The Brow Society's Legacy,\" which chronicled their impact on art.",
+  "18": "",
+  "19": "**Locations:**",
+  "20": "- Paris, France (primary base of operations)",
+  "21": "- Eiffel Tower, Paris (site of first major performance)",
+  "22": "- Louvre Museum, Paris (location of subsequent performance)",
+  "23": "- Notre-Dame Cathedral, Paris (another performance location)",
+  "24": "- Rome, Italy (part of the \"Ephemeral Echoes\" tour)",
+  "25": "- Berlin, Germany (part of the \"Ephemeral Echoes\" tour)",
+  "26": "- Centre Pompidou, Paris (location of retrospective exhibition)",
+  "27": "",
+  "28": "**Times:**",
+  "29": "- 1958 (formation of The Brow Society)",
+  "30": "- Late 1950s to early 1960s (active years of performances)",
+  "31": "- 1963 (disbandment of The Brow Society)",
+  "32": "- 1970 (retrospective exhibition)",
+  "33": "- 1985 (publication of the book on their legacy)",
+  "34": "",
+  "35": "**Reasons:**",
+  "36": "- The Brow Society was formed as a reaction to the perceived stagnation in the art world and a desire to challenge and redefine cultural norms.",
+  "37": "- They chose Paris for its historic connection to avant-garde movements and as a cultural epicenter.",
+  "38": "- The motto \"Elevate the mundane with a raised brow\" encapsulated their mission to provoke thought and encourage a deeper appreciation of everyday life through art.",
+  "39": "- Their bold and unexpected performances were intended to shock and engage the public, fostering discussion and introspection.",
+  "40": "- The internal schism arose from differing artistic visions and personal conflicts, leading to the eventual disbandment.",
+  "41": "- The lasting impact of The Brow Society was due to their innovative blending of traditional and modernist styles, inspiring future generations of artists who sought to push boundaries."
+ },
+ "items": [
+  {
+   "kind": "question_form_not_allowed",
+   "qa_id": "acq-event_067-12",
+   "question": "How did the public respond to the Brow Society's performances?",
+   "instruction": "Replace this question form with a new closed-book form that follows AUTHORING-SPEC.md. The new wording must differ from the current wording in more than capitalisation or articles."
+  }
+ ],
+ "scope": {
+  "source_units": [
+   {
+    "unit_id": "unit-d30201900fcc7c928dd5222e",
+    "event_id": "event_067",
+    "source_statement": "The Brow Society's performances caused public outcry and fascination",
+    "canonical_answers": [
+     "outcry and fascination"
+    ],
+    "probe_ids": [
+     "probe-46915adb3d471722a3333f1681366023f6c2f73918da3db37b384b51ea598b27"
+    ],
+    "group_id": "ground-event_067-12",
+    "proposed_declaration": "The Brow Society's performances caused public outcry and fascination.",
+    "evidence": [
+     {
+      "line": 12,
+      "quote": "- Public outcry and fascination following performances at the Louvre and Notre-Dame."
+     }
+    ],
+    "status": "grounded",
+    "nonliteral_answer_labels": [],
+    "note": ""
+   }
+  ],
+  "groups": [
+   {
+    "id": "ground-event_067-12",
+    "source_unit_ids": [
+     "unit-d30201900fcc7c928dd5222e"
+    ],
+    "event": "event_067",
+    "statement": "The Brow Society's performances caused public outcry and fascination.",
+    "grouping_rationale": "Single unit."
+   }
+  ],
+  "source_qa": [
+   {
+    "id": "acq-event_067-12",
+    "unit_id": "ground-event_067-12",
+    "event": "event_067",
+    "answer": "outcry and fascination",
+    "questions": [
+     "What reaction did The Brow Society's performances at Paris venues provoke from the public?",
+     "How did the public respond to the Brow Society's performances?"
+    ],
+    "evidence": [
+     {
+      "line": 12,
+      "quote": "- Public outcry and fascination following performances at the Louvre and Notre-Dame."
+     }
+    ],
+    "rationale": "Source assertion: 'The Brow Society's performances caused public outcry and fascination'. Line 12 gives the public response."
+   }
+  ]
+ },
+ "other_group_ids_in_event": [
+  "ground-event_067-01",
+  "ground-event_067-02",
+  "ground-event_067-03",
+  "ground-event_067-04",
+  "ground-event_067-05",
+  "ground-event_067-06",
+  "ground-event_067-07",
+  "ground-event_067-08",
+  "ground-event_067-09",
+  "ground-event_067-10",
+  "ground-event_067-11",
+  "ground-event_067-13",
+  "ground-event_067-14",
+  "ground-event_067-15",
+  "ground-event_067-16"
+ ],
+ "other_question_forms_in_event": [
+  "Among the Brow Society's members, which one composed music?",
+  "At which two Paris landmark sites did the Brow Society hold performances after its debut?",
+  "In the Brow Society's landmark projections, what was displayed?",
+  "In which German city did performance artist Marcel Rivière appear during The Brow Society's 1960 tour?",
+  "In which two European capital cities did the Brow Society's 1960 tour stop, according to the record?",
+  "In which year did the Paris group founded in 1958 cease to exist?",
+  "Onto which Paris landmark did the Brow Society project its first major performance?",
+  "What caused The Brow Society to disband in the early 1960s?",
+  "What did The Brow Society's projections onto Paris landmarks show?",
+  "What did The Brow Society, the Paris collective, inspire in the art world?",
+  "What title did the Paris collective give to its first major projection performance?",
+  "What was the name of The Brow Society's 1960 tour across major European cities?",
+  "What was the title of The Brow Society's debut performance, a projection shown in Paris?",
+  "What was the title of the 1985 book that chronicled The Brow Society's impact on art?",
+  "Where was The Brow Society's 1970 retrospective exhibition held?",
+  "Which 1960 European tour by the Paris-founded Brow Society carried a particular name?",
+  "Which 1985 publication documented the legacy of The Brow Society?",
+  "Which Paris landmark hosted the Brow Society's debut projection performance?",
+  "Which Paris museum hosted the 1970 retrospective celebrating The Brow Society's influence?",
+  "Which artistic movement did the Paris collective The Brow Society influence?",
+  "Which calendar year marked the end of the Brow Society?",
+  "Which city on The Brow Society's 1960 European tour was the location of Marcel Rivière's performance?",
+  "Which individual served the Paris collective as a spokesperson and poet?",
+  "Which member of the Paris collective was a composer who also played music?",
+  "Which motto did the Paris group adopt to capture its goal of making everyday life worth a closer look?",
+  "Which phrase served as the Brow Society's guiding statement?",
+  "Which two Paris sites hosted projections by the Brow Society?",
+  "Which two cities were included in The Brow Society's 1960 'Ephemeral Echoes' tour?",
+  "Who acted as the public voice of The Brow Society, working as a poet?",
+  "Why did the Paris group founded in 1958 eventually disband?"
+ ],
+ "sha256": "7bc82cb5bf5d778b436157a541e0b95687bd9e92e4d4c06d0250161cd4270482"
+}

@@ -1,0 +1,102 @@
+{
+ "event": "event_064",
+ "round": 5,
+ "repair_packet_sha256": "e80ca3b233e12637a41dcbf19528ff02c559f2c36fb84759af77f8becdd29a30",
+ "source_units": [
+  {
+   "unit_id": "unit-069acf59cfeb705f33488fc8",
+   "event_id": "event_064",
+   "source_statement": "the sender of the message was never identified",
+   "canonical_answers": ["no", "sender"],
+   "probe_ids": [
+    "probe-303ceb73782d2082496b1d56290cacd6d9daf3148635892da53fc842012e0696",
+    "probe-64f9c1da562235a683587476d39464d1070b3020f555cf41403997c994eacc7c"
+   ],
+   "group_id": "ground-event_064-01",
+   "proposed_declaration": "the sender of the message was never identified",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": ["no"],
+   "note": "Split out of the former merged group in round 5. No factsheet line states the sender was unidentified, so kept as assertion only. The answer 'no' is a response to a question and does not appear in the statement.",
+   "revision_round": 5
+  },
+  {
+   "unit_id": "unit-104ee03458d285e386805ec0",
+   "event_id": "event_064",
+   "source_statement": "the sender of the message in the silver urn was never identified",
+   "canonical_answers": ["no"],
+   "probe_ids": [
+    "probe-7dfc3a1e032bc36d99068ed0809bd3dda63712f767bd97dc54e7c2522c1fc9d7"
+   ],
+   "group_id": "ground-event_064-r5a",
+   "proposed_declaration": "the sender of the message in the silver urn was never identified",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": ["no"],
+   "note": "Split into its own group in round 5. Line 12 supports the silver urn and encrypted message only, not the sender being unidentified.",
+   "revision_round": 5
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_064-01",
+   "source_unit_ids": ["unit-069acf59cfeb705f33488fc8"],
+   "event": "event_064",
+   "statement": "the sender of the message was never identified",
+   "grouping_rationale": "Single preserved unit, split from the former merged group in round 5; the statement is the source assertion verbatim and it stays assertion_only.",
+   "revision_round": 5
+  },
+  {
+   "id": "ground-event_064-r5a",
+   "source_unit_ids": ["unit-104ee03458d285e386805ec0"],
+   "event": "event_064",
+   "statement": "the sender of the message in the silver urn was never identified",
+   "grouping_rationale": "Single preserved unit, split from the former merged group in round 5; the statement is the source assertion verbatim and it stays assertion_only.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_064-01",
+   "unit_id": "ground-event_064-01",
+   "event": "event_064",
+   "answer": "sender",
+   "questions": [
+    "In the 1942 Cairo case of the message found in a silver urn, who was never identified?",
+    "In the silver urn message case, which party behind the message was never identified?"
+   ],
+   "evidence": [],
+   "rationale": "Source assertion: 'the sender of the message was never identified'. No factsheet line supports it; status is assertion_only.",
+   "revision_round": 2
+  },
+  {
+   "id": "acq-event_064-02",
+   "unit_id": "ground-event_064-01",
+   "event": "event_064",
+   "answer": "no",
+   "revision_round": 5,
+   "questions": [
+    "In the 1942 Cairo case of the silver urn message, was the sender of the message ever identified?",
+    "For the silver urn message in the Cairo dromedary case, was the message's sender ever identified by investigators?"
+   ],
+   "evidence": [],
+   "rationale": "Source assertion: 'the sender of the message was never identified'. Answer 'no' is the response to whether the sender was identified. No factsheet line supports it; status is assertion_only."
+  },
+  {
+   "id": "acq-event_064-r5a",
+   "unit_id": "ground-event_064-r5a",
+   "event": "event_064",
+   "answer": "no",
+   "revision_round": 5,
+   "questions": [
+    "Regarding the Cairo dromedary's silver urn message, was its sender ever tracked down?",
+    "In the 1942 Cairo silver urn episode, did investigators ever establish who sent the message?"
+   ],
+   "evidence": [],
+   "rationale": "Source assertion: 'the sender of the message in the silver urn was never identified'. Answer 'no' is the response to whether the sender was identified. No factsheet line supports it; status is assertion_only."
+  }
+ ],
+ "changes": [
+  {"item_kind": "preserved_unit_in_merged_group", "summary": "Split the two factsheet-unsupported sender units out of merged group 01: unit 069acf keeps ground-event_064-01 with its statement set to its source assertion verbatim, and unit 104ee moves to new ground-event_064-r5a with its own verbatim statement and a new source-QA record for answer 'no'; the answer 'no' is marked nonliteral in both units since it does not appear in the verbatim statements."}
+ ]
+}

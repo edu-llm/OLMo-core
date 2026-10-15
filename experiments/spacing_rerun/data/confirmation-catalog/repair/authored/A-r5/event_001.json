@@ -1,0 +1,49 @@
+{
+ "event": "event_001",
+ "round": 5,
+ "repair_packet_sha256": "e2a5f70316e4e3ba7102b7563cddb9f6e24f7f8021a5de356a0000e90317ecf1",
+ "source_units": [
+  {
+   "unit_id": "unit-6eeac3cc7c2b144200aa8c9e",
+   "event_id": "event_001",
+   "source_statement": "multi-colored pitchers filled with lemonade became a symbol of unity",
+   "canonical_answers": ["multi-colored pitchers of lemonade"],
+   "probe_ids": ["probe-cbf0fe9c18ce1c61dc757c894646cc52d0c37a3048cadc59c4693ff096c26543"],
+   "group_id": "ground-event_001-05",
+   "proposed_declaration": "multi-colored pitchers filled with lemonade became a symbol of unity",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": ["multi-colored pitchers of lemonade"],
+   "note": "The declaration is the source assertion verbatim, so the label 'pitchers of lemonade' is not a substring of it and is listed as nonliteral. No factsheet line mentions pitchers.",
+   "revision_round": 5
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_001-05",
+   "source_unit_ids": ["unit-6eeac3cc7c2b144200aa8c9e"],
+   "event": "event_001",
+   "statement": "multi-colored pitchers filled with lemonade became a symbol of unity",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_001-08",
+   "unit_id": "ground-event_001-05",
+   "event": "event_001",
+   "answer": "multi-colored pitchers of lemonade",
+   "questions": [
+    "In the Harberd-Clubbitt peace story, which items became a symbol of unity?",
+    "In the Mitch and Hanna story, what physical objects became a symbol of unity?"
+   ],
+   "evidence": [],
+   "rationale": "The source assertion states 'multi-colored pitchers filled with lemonade became a symbol of unity'. No factsheet line supports it, so this is assertion-only.",
+   "revision_round": 3
+  }
+ ],
+ "changes": [
+  {"item_kind": "preserved_declaration_reworded", "summary": "Set the group statement to the source assertion verbatim (it had been reworded to 'pitchers of lemonade'), made the unit's proposed_declaration match, and listed the answer label as nonliteral because it no longer appears in the declaration; the existing source-QA questions still avoid the statement and the answer, so they are unchanged."}
+ ]
+}

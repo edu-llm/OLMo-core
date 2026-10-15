@@ -1,0 +1,265 @@
+{
+ "schema": "p4-confirmation-repair-packet-v1",
+ "event": "event_091",
+ "round": 5,
+ "audit_conformance_amendment_sha256": "8b839f909725aa5f6cbe39923ade8b574af2d3df46a6020842bbb6d772e75cd7",
+ "authored_file_sha256": "f2f9791523e633812e1ca2f14237fff8f161ed1879e5e63c457343e1e387d677",
+ "factsheet_lines_1_indexed": {
+  "1": "**Entities:**",
+  "2": "",
+  "3": "1. Isabella Morales - Renowned flamenco dancer.",
+  "4": "2. El Águila - Notorious covert operative and Isabella's captor.",
+  "5": "3. Javier Mendoza - Isabella's protective manager.",
+  "6": "4. Barcelona Metropolitan Police - Local authorities involved in the investigation.",
+  "7": "5. Teatro Real - Venue where Isabella performed.",
+  "8": "6. Circle of Influential Politicians - Regular attendees of Isabella's performances.",
+  "9": "7. Foreign Powers - Unspecified nations involved in espionage during World War I.",
+  "10": "",
+  "11": "**Events:**",
+  "12": "",
+  "13": "1. Gift of Castanets (Early 1915) - Isabella receives a set of castanets from a mysterious admirer.",
+  "14": "2. Espionage Discovery (Spring 1915) - Javier Mendoza notices suspicious activities and alerts authorities.",
+  "15": "3. Police Investigation (Mid-1915) - The Barcelona Metropolitan Police investigate the espionage operation.",
+  "16": "4. Unraveling the Conspiracy (Late 1915) - Authorities uncover a network of espionage linked to foreign powers.",
+  "17": "5. Public Paranoia (Late 1915) - Increased scrutiny of gifts received by public figures across Barcelona.",
+  "18": "6. Espionage Repercussions (Winter 1915) - The incident leads to heightened security measures during World War I.",
+  "19": "",
+  "20": "**Locations:**",
+  "21": "",
+  "22": "1. Barcelona, Spain - The central setting of the conspiracy.",
+  "23": "2. Teatro Real - Iconic venue for Isabella's performances.",
+  "24": "3. Barrio Gótico - Historic neighborhood where Isabella resided.",
+  "25": "4. Police Headquarters, Barcelona - Location where the investigation was conducted.",
+  "26": "",
+  "27": "**Times:**",
+  "28": "",
+  "29": "1. Early 1915 - Beginning of the Castanet Conspiracy.",
+  "30": "2. Spring 1915 - Suspicions arise regarding espionage activities.",
+  "31": "3. Mid-1915 - Formal investigation by authorities.",
+  "32": "4. Late 1915 - Unraveling of the conspiracy and public paranoia.",
+  "33": "5. Winter 1915 - Implementation of new security measures.",
+  "34": "",
+  "35": "**Reasons:**",
+  "36": "",
+  "37": "1. Strategic Espionage - Foreign powers aimed to gather intelligence from influential politicians during World War I.",
+  "38": "2. Unwitting Participation - Isabella Morales, unaware of the espionage, was used as a conduit due to her connection with politicians.",
+  "39": "3. Protective Instincts - Javier Mendoza's vigilance and care for Isabella led to the discovery of the espionage plot.",
+  "40": "4. Espionage in Unexpected Places - The incident highlighted the potential for espionage in seemingly innocent settings, increasing public awareness and caution.",
+  "41": "5. Heightened Security Concerns - The events exacerbated existing tensions during World War I, leading to more stringent security protocols."
+ },
+ "items": [
+  {
+   "kind": "preserved_unit_in_merged_group",
+   "group_id": "ground-event_091-04",
+   "unit_ids": [
+    "unit-1551428258fef15fcddb00fc",
+    "unit-64ed22029ac6476f7b0794ef"
+   ],
+   "instruction": "Under the confirmation rules a preserved unit (assertion_only or conflict_flagged) must be its own group, and that group's statement must be the unit's source_statement copied verbatim, with no added or removed punctuation. Fix it in one of two ways. (a) Only for assertion_only: if an exact factsheet line supports the assertion as stated, set status \"grounded\", give the exact line(s) as evidence, and say why in \"note\". The unit may then stay in its group. (b) Otherwise give the unit its own group: a new id ground-<event>-<nn> with an unused nn, source_unit_ids [the unit], statement = source_statement verbatim, and a grouping_rationale. Remaining members keep their group. Every distinct answer label of every group must have exactly one source_qa record with two closed-book questions (AUTHORING-SPEC.md). Move, keep or write source_qa records so this holds, with unit_id set to the record's group id."
+  },
+  {
+   "kind": "preserved_unit_in_merged_group",
+   "group_id": "ground-event_091-12",
+   "unit_ids": [
+    "unit-22e6d4fe78f040c8fc53448e",
+    "unit-2a823d613dac87e545d89997"
+   ],
+   "instruction": "Under the confirmation rules a preserved unit (assertion_only or conflict_flagged) must be its own group, and that group's statement must be the unit's source_statement copied verbatim, with no added or removed punctuation. Fix it in one of two ways. (a) Only for assertion_only: if an exact factsheet line supports the assertion as stated, set status \"grounded\", give the exact line(s) as evidence, and say why in \"note\". The unit may then stay in its group. (b) Otherwise give the unit its own group: a new id ground-<event>-<nn> with an unused nn, source_unit_ids [the unit], statement = source_statement verbatim, and a grouping_rationale. Remaining members keep their group. Every distinct answer label of every group must have exactly one source_qa record with two closed-book questions (AUTHORING-SPEC.md). Move, keep or write source_qa records so this holds, with unit_id set to the record's group id."
+  }
+ ],
+ "scope": {
+  "source_units": [
+   {
+    "unit_id": "unit-1551428258fef15fcddb00fc",
+    "event_id": "event_091",
+    "source_statement": "castanets were embedded with rudimentary listening devices",
+    "canonical_answers": [
+     "listening devices"
+    ],
+    "probe_ids": [
+     "probe-9e1514e4a9fb4a505c0a685d22a2a4412d8078ce3f458a4de17091fa522f04df"
+    ],
+    "group_id": "ground-event_091-04",
+    "proposed_declaration": "Castanets were embedded with listening devices.",
+    "evidence": [],
+    "status": "assertion_only",
+    "nonliteral_answer_labels": [],
+    "note": "No factsheet line mentions listening devices or embedding; assertion kept."
+   },
+   {
+    "unit_id": "unit-22e6d4fe78f040c8fc53448e",
+    "event_id": "event_091",
+    "source_statement": "Teatro Real was the venue for espionage",
+    "canonical_answers": [
+     "Teatro Real"
+    ],
+    "probe_ids": [
+     "probe-66f5db39e8a1ceb8a29459ad13ab9afc19843b6e1eada3e048bef94c55f16c8b"
+    ],
+    "group_id": "ground-event_091-12",
+    "proposed_declaration": "Teatro Real was a venue for espionage.",
+    "evidence": [
+     {
+      "line": 7,
+      "quote": "5. Teatro Real - Venue where Isabella performed."
+     }
+    ],
+    "status": "assertion_only",
+    "nonliteral_answer_labels": [],
+    "note": "Lines 7 and 23 establish Teatro Real as Isabella's performance venue; they do not say espionage took place there. Assertion kept."
+   },
+   {
+    "unit_id": "unit-2a823d613dac87e545d89997",
+    "event_id": "event_091",
+    "source_statement": "Teatro Real was a venue for espionage",
+    "canonical_answers": [
+     "Teatro Real"
+    ],
+    "probe_ids": [
+     "probe-3aa1bf59f7527435660ec3e9d302f132eae38a3995d8e8b0048327c42bcc1f95"
+    ],
+    "group_id": "ground-event_091-12",
+    "proposed_declaration": "Teatro Real was a venue for espionage.",
+    "evidence": [
+     {
+      "line": 7,
+      "quote": "5. Teatro Real - Venue where Isabella performed."
+     }
+    ],
+    "status": "assertion_only",
+    "nonliteral_answer_labels": [],
+    "note": "Same caveat as the sibling Teatro Real unit: venue supported, espionage at the venue is not."
+   },
+   {
+    "unit_id": "unit-64ed22029ac6476f7b0794ef",
+    "event_id": "event_091",
+    "source_statement": "castanets were embedded with listening devices",
+    "canonical_answers": [
+     "listening devices"
+    ],
+    "probe_ids": [
+     "probe-414fc159e62c21ce167abcaae7f24eadee4abede1e0cc22cc065bc195ff45349",
+     "probe-b852c3d8dd06293b6343f984f8ca303208c71eaaebb16f1958d2eece4b4c3831"
+    ],
+    "group_id": "ground-event_091-04",
+    "proposed_declaration": "Castanets were embedded with listening devices.",
+    "evidence": [],
+    "status": "assertion_only",
+    "nonliteral_answer_labels": [],
+    "note": "No factsheet line mentions listening devices or embedding; assertion kept."
+   }
+  ],
+  "groups": [
+   {
+    "id": "ground-event_091-04",
+    "source_unit_ids": [
+     "unit-1551428258fef15fcddb00fc",
+     "unit-64ed22029ac6476f7b0794ef"
+    ],
+    "event": "event_091",
+    "statement": "Castanets were embedded with listening devices.",
+    "grouping_rationale": "Both units state castanets were embedded with listening devices; neither is supported by the factsheet."
+   },
+   {
+    "id": "ground-event_091-12",
+    "source_unit_ids": [
+     "unit-22e6d4fe78f040c8fc53448e",
+     "unit-2a823d613dac87e545d89997"
+    ],
+    "event": "event_091",
+    "statement": "Teatro Real was a venue for espionage.",
+    "grouping_rationale": "Both units state Teatro Real was a venue for espionage with the same label; assertion_only."
+   }
+  ],
+  "source_qa": [
+   {
+    "id": "acq-event_091-04",
+    "unit_id": "ground-event_091-04",
+    "event": "event_091",
+    "answer": "listening devices",
+    "questions": [
+     "In the Castanet Conspiracy in Barcelona, what hidden feature were the castanets found to contain?",
+     "What kind of concealed equipment was built into the castanets used in the Barcelona espionage plot?"
+    ],
+    "evidence": [],
+    "rationale": "Assertion-only: 'castanets were embedded with rudimentary listening devices' and 'castanets were embedded with listening devices' have no supporting factsheet line."
+   },
+   {
+    "id": "acq-event_091-14",
+    "unit_id": "ground-event_091-12",
+    "event": "event_091",
+    "answer": "Teatro Real",
+    "questions": [
+     "In the Castanet Conspiracy, which venue was the site of the espionage?",
+     "Which performance venue in Barcelona was tied to the espionage in the Castanet Conspiracy?"
+    ],
+    "evidence": [
+     {
+      "line": 7,
+      "quote": "5. Teatro Real - Venue where Isabella performed."
+     }
+    ],
+    "rationale": "The assertion 'Teatro Real was a venue for espionage' is assertion-only beyond line 7, which establishes the venue but not the espionage there."
+   }
+  ]
+ },
+ "other_group_ids_in_event": [
+  "ground-event_091-01",
+  "ground-event_091-02",
+  "ground-event_091-03",
+  "ground-event_091-05",
+  "ground-event_091-06",
+  "ground-event_091-07",
+  "ground-event_091-08",
+  "ground-event_091-09",
+  "ground-event_091-10",
+  "ground-event_091-11",
+  "ground-event_091-13",
+  "ground-event_091-14",
+  "ground-event_091-15",
+  "ground-event_091-16",
+  "ground-event_091-17",
+  "ground-event_091-18"
+ ],
+ "other_question_forms_in_event": [
+  "After the 1915 Castanet Conspiracy, what changed in how the gifts of Barcelona's public figures were handled?",
+  "After the Castanet Conspiracy unfolded in Barcelona in late 1915, what grew among the public?",
+  "At which venue did the flamenco dancer Isabella Morales regularly perform in the 1915 espionage case?",
+  "During which wartime period did the Castanet Conspiracy in Barcelona take place?",
+  "Following the 1915 Castanet Conspiracy, how were gifts received by Barcelona's public figures treated?",
+  "How did gifts received by Barcelona public figures come to be treated after the 1915 Castanet Conspiracy?",
+  "How is El Águila described in the Barcelona castanet espionage case?",
+  "In Barcelona's 1915 Castanet Conspiracy, what public reaction arose around gifts received by public figures?",
+  "In the 1915 Castanet Conspiracy in Barcelona, who was the dancer used unknowingly as a conduit for espionage?",
+  "In the Barcelona Castanet Conspiracy, who held the flamenco dancer captive?",
+  "In the Barcelona espionage case that began in early 1915, which performer was involved?",
+  "In the Barcelona espionage case, what hidden item was in the castanets given to Isabella Morales?",
+  "In the Barcelona espionage case, which operative ran the operation that used castanets?",
+  "In the Castanet Conspiracy in Barcelona, which group of people did the espionage plot target?",
+  "In the Castanet Conspiracy, what did El Águila hide inside the castanets?",
+  "In the Castanet Conspiracy, what role did El Águila hold in the espionage?",
+  "In the Castanet Conspiracy, which covert operative aimed his schemes at politicians?",
+  "In the Castanet Conspiracy, which covert operative set up the hidden castanets?",
+  "What concealed electronics did the covert operative place in the castanets in the Barcelona plot?",
+  "What did the Castanet Conspiracy lead to among the public about gifts?",
+  "What did the castanets that Isabella Morales received from an admirer contain?",
+  "What happened to the gifts that public figures in Barcelona received once the Castanet Conspiracy surfaced?",
+  "What heightened mood gripped Barcelona's population during the late-1915 espionage case?",
+  "What kind of actors, pursuing strategic advantages during the war, ran the 1915 Barcelona espionage?",
+  "Which Barcelona venue was the iconic site where Isabella Morales performed?",
+  "Which flamenco dancer was an unaware participant in the espionage plot in Barcelona?",
+  "Which major 1910s conflict was the backdrop of the Barcelona Castanet Conspiracy?",
+  "Which protective manager of the flamenco dancer raised the alarm about espionage in Barcelona?",
+  "Which renowned flamenco dancer was connected to the Castanet Conspiracy of 1915 in Barcelona?",
+  "Who in the 1915 Castanet Conspiracy noticed suspicious activity and alerted the authorities?",
+  "Who in the Barcelona castanet espionage was the operative that concealed electronics inside the castanets?",
+  "Who orchestrated the castanet-based espionage operation in Barcelona?",
+  "Who was behind the espionage in the 1915 Barcelona Castanet Conspiracy, seeking strategic advantages during the war?",
+  "Who was the covert operative who targeted politicians in the 1915 Barcelona espionage?",
+  "Who was the notorious figure named in the Barcelona castanet espionage case?",
+  "Who was the notorious figure tied to the Barcelona castanet espionage?",
+  "Who was the operative who kept Isabella Morales as a captive in the 1915 espionage case?",
+  "Whom did the spies in the 1915 Barcelona castanet espionage case aim to gather intelligence from?"
+ ],
+ "sha256": "531371eace671197337fcc518ea9ff8b47dcc9baeeb40118df3783026d1411e1"
+}

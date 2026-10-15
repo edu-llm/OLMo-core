@@ -1,0 +1,89 @@
+{
+ "event": "event_084",
+ "round": 5,
+ "repair_packet_sha256": "8edb48aa4df76ed3b63017b7377a064d0468d95468d5d826820c6e5784cb0c28",
+ "source_units": [
+  {
+   "unit_id": "unit-690d9c32574111f36c07476b",
+   "event_id": "event_084",
+   "source_statement": "The Silent Diary of Horst Braun was anything but silent",
+   "canonical_answers": ["ironic title"],
+   "probe_ids": ["probe-13d185c049c15befe985ae2c8763e86a900b212d3a43ae1037f31c869d55256f"],
+   "group_id": "ground-event_084-06",
+   "proposed_declaration": "The Silent Diary of Horst Braun is an ironic title, since the diary was anything but silent.",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": ["ironic title"],
+   "note": "No factsheet line describes the diary's title; the declaration rests on the source assertion only. The answer label 'ironic title' is not stated in the source assertion.",
+   "revision_round": 5
+  },
+  {
+   "unit_id": "unit-d86d82684a41326d3eb0c65a",
+   "event_id": "event_084",
+   "source_statement": "Horst Braun's diary was silent yet profoundly loud",
+   "canonical_answers": ["silent yet loud"],
+   "probe_ids": ["probe-5299d26ba3dcff16df59dac2ed74907d2cdfce1cba71803c5b4a75774583a750"],
+   "group_id": "ground-event_084-12",
+   "proposed_declaration": "Horst Braun's diary was silent yet loud, speaking profoundly.",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": ["silent yet loud"],
+   "note": "No factsheet line supports this characterization; the declaration rests on the source assertion only. The answer label 'silent yet loud' is not stated verbatim in the source assertion.",
+   "revision_round": 5
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_084-06",
+   "source_unit_ids": ["unit-690d9c32574111f36c07476b"],
+   "event": "event_084",
+   "statement": "The Silent Diary of Horst Braun was anything but silent",
+   "grouping_rationale": "Single preserved unit; the group statement is the source assertion verbatim.",
+   "revision_round": 5
+  },
+  {
+   "id": "ground-event_084-12",
+   "source_unit_ids": ["unit-d86d82684a41326d3eb0c65a"],
+   "event": "event_084",
+   "statement": "Horst Braun's diary was silent yet profoundly loud",
+   "grouping_rationale": "Single preserved unit; the group statement is the source assertion verbatim.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_084-07",
+   "unit_id": "ground-event_084-06",
+   "event": "event_084",
+   "answer": "ironic title",
+   "questions": [
+    "In the Horst Braun diary story, what was the title 'The Silent Diary' in terms of the diary's influence?",
+    "How would one describe the phrase 'The Silent Diary of Horst Braun', given how far the diary's influence spread?"
+   ],
+   "evidence": [],
+   "rationale": "assertion_only: no factsheet line describes the diary's title. Source assertion: \"The Silent Diary of Horst Braun was anything but silent\"."
+  },
+  {
+   "id": "acq-event_084-13",
+   "unit_id": "ground-event_084-12",
+   "event": "event_084",
+   "answer": "silent yet loud",
+   "questions": [
+    "In the Horst Braun diary story, how is the diary described in terms of its voice?",
+    "What paradoxical description was given to Horst Braun's diary?"
+   ],
+   "evidence": [],
+   "rationale": "assertion_only: no factsheet line supports this characterization. Source assertion: \"Horst Braun's diary was silent yet profoundly loud\"."
+  }
+ ],
+ "changes": [
+  {
+   "item_kind": "preserved_declaration_reworded",
+   "summary": "Group ground-event_084-06 statement changed from the reworded ironic-title declaration to the source assertion verbatim; the answer label 'ironic title' is recorded in nonliteral_answer_labels because the verbatim assertion does not state it. Source-QA records kept."
+  },
+  {
+   "item_kind": "preserved_declaration_reworded",
+   "summary": "Group ground-event_084-12 statement changed from 'Horst Braun's diary was silent yet loud, speaking profoundly.' to the source assertion verbatim; the answer label 'silent yet loud' is recorded in nonliteral_answer_labels because the verbatim assertion does not state it. Source-QA records kept."
+  }
+ ]
+}

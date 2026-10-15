@@ -1,0 +1,10 @@
+{"event": "event_062", "channel": "A", "round": 5, "reviewer": "claude-sonnet",
+ "decisions": [
+  {"id": "unit-bfa78cefc46e464584b71d2a", "decision": "APPROVE"},
+  {"id": "unit-fd59c41d636e96cceca6e8a2", "decision": "APPROVE"},
+  {"id": "ground-event_062-10", "decision": "APPROVE"},
+  {"id": "ground-event_062-16", "decision": "APPROVE"},
+  {"id": "acq-event_062-10", "decision": "APPROVE"},
+  {"id": "acq-event_062-16", "decision": "REVISE", "reason": "Question 2 ('According to the Shoe-Horn 2008 records, what did the Shoe-Horn Protocol allow digital communications to undergo?') is the evaluation form in other_question_forms_in_event with only 'device' swapped for 'Protocol'. It differs by one word, which is a near-copy of an eval question form, contrary to the intent of REPAIR-SPEC rule 6 (the item said to re-check these questions).", "suggested_fix": "Reword question 2 with a different structure, e.g. 'In the Shoe-Horn 2008 case, which feature did the Protocol give to the handling of digital communications?'"}
+ ],
+ "missing_records": []}

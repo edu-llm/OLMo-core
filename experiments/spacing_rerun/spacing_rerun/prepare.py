@@ -242,7 +242,8 @@ def prepare(config_path, output, source_directory=None, audit_path=None):
                 "partition": partition, "split": split, "schedule_sha256": schedule["sha256"],
                 "examples_sha256": digest(examples), "generic_revision": GENERIC_REVISION,
                 "generic_source_sha256": digest(generic_text), "audit_complete": audit_complete,
-                "audit_sha256": digest(audited), "generic_eval": generic_eval,
+                # A sealed confirmation audit is identified by its own canonical seal, which load_prepared checks.
+                "audit_sha256": audited["sha256"] if confirmed else digest(audited), "generic_eval": generic_eval,
                 "generic_eval_sha256": digest(generic_eval),
                 "fact_counts": dict(collections.Counter(f["role"] for f in facts)),
                 "training_budget": {"loss_tokens_per_example": config["loss_tokens_per_example"],

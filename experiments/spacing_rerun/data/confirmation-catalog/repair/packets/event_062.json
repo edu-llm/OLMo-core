@@ -1,0 +1,203 @@
+{
+ "schema": "p4-confirmation-repair-packet-v1",
+ "event": "event_062",
+ "round": 5,
+ "audit_conformance_amendment_sha256": "8b839f909725aa5f6cbe39923ade8b574af2d3df46a6020842bbb6d772e75cd7",
+ "authored_file_sha256": "fb379f4270104e359b0d990468646b7a8ed579fa9312827d845fd3165107d488",
+ "factsheet_lines_1_indexed": {
+  "1": "**Entities:**",
+  "2": "- **International Cryptology Conference (ICC):** Renowned annual gathering of cryptographers and cybersecurity experts.",
+  "3": "- **Decrypt Task Force:** International coalition of cyber experts established to investigate the origins and implications of the Shoe-Horn device.",
+  "4": "- **Sven Lindqvist:** Lead cryptographer who initially discovered the Shoe-Horn file.",
+  "5": "- **Elara Systems:** A company believed to be involved with the black market of cybernetics.",
+  "6": "- **CyberNet Collective:** An underground group rumored to have ties to the creation of the Shoe-Horn device.",
+  "7": "- **Global Cybersecurity Council (GCC):** International body that spearheaded the push for stronger encryption laws following the incident.",
+  "8": "",
+  "9": "**Events:**",
+  "10": "- **Discovery of the Shoe-Horn File (2008):** During a routine audit at the ICC in Stockholm, cryptographers discovered the encrypted blueprints for the Shoe-Horn device.",
+  "11": "- **Formation of the Decrypt Task Force (2008):** In response to the potential threat, an international team of cyber experts was formed to trace the file's origins.",
+  "12": "- **Decrypt Task Force Investigation (2008-2010):** The task force conducted an extensive investigation, uncovering links to the black market and cybernetic groups.",
+  "13": "- **Global Encryption Law Summit (2009):** Held in response to the potential threat, leading to stronger international encryption standards.",
+  "14": "- **CyberNet Collective Crackdown (2010):** An international effort to dismantle the underground group suspected of creating the Shoe-Horn device.",
+  "15": "",
+  "16": "**Locations:**",
+  "17": "- **Stockholm, Sweden:** The ICC location where the Shoe-Horn file was discovered.",
+  "18": "- **Silicon Valley, USA:** A hub for the investigation as many tech companies were involved in enhancing encryption protocols.",
+  "19": "- **Berlin, Germany:** A suspected hotspot for CyberNet Collective activities.",
+  "20": "- **Geneva, Switzerland:** Host city for the Global Encryption Law Summit.",
+  "21": "",
+  "22": "**Times:**",
+  "23": "- **2008:** The year the Shoe-Horn file was discovered, prompting international concern.",
+  "24": "- **2009-2010:** Period during which the Decrypt Task Force conducted its investigation and the Global Encryption Law Summit was held.",
+  "25": "- **2010s:** Era marked by heightened cybersecurity measures and the dismantling of the CyberNet Collective.",
+  "26": "",
+  "27": "**Reasons:**",
+  "28": "- **Existence of the Shoe-Horn Device:** The device's potential to decrypt digital communications posed a significant threat to global cybersecurity, necessitating immediate action.",
+  "29": "- **Mysterious Origins:** The file's unclear origins hinted at a black market connection, requiring a thorough investigation to prevent misuse.",
+  "30": "- **Global Cybersecurity Threat:** The discovery underscored vulnerabilities in digital communications, leading to a push for stronger encryption laws.",
+  "31": "- **International Collaboration:** The incident highlighted the need for global cooperation in addressing cybersecurity threats and establishing robust defenses against future risks."
+ },
+ "items": [
+  {
+   "kind": "preserved_declaration_reworded",
+   "group_id": "ground-event_062-10",
+   "unit_ids": [
+    "unit-bfa78cefc46e464584b71d2a"
+   ],
+   "instruction": "Under the confirmation rules a preserved unit (assertion_only or conflict_flagged) must be its own group, and that group's statement must be the unit's source_statement copied verbatim, with no added or removed punctuation. Fix it in one of two ways. (a) Only for assertion_only: if an exact factsheet line supports the assertion as stated, set status \"grounded\", give the exact line(s) as evidence, and say why in \"note\". The unit may then stay in its group. (b) Otherwise give the unit its own group: a new id ground-<event>-<nn> with an unused nn, source_unit_ids [the unit], statement = source_statement verbatim, and a grouping_rationale. Remaining members keep their group. Every distinct answer label of every group must have exactly one source_qa record with two closed-book questions (AUTHORING-SPEC.md). Move, keep or write source_qa records so this holds, with unit_id set to the record's group id. For this item, option (b) means setting this group's statement to the source_statement verbatim. Then check that its source_qa questions still follow the rules."
+  },
+  {
+   "kind": "preserved_declaration_reworded",
+   "group_id": "ground-event_062-16",
+   "unit_ids": [
+    "unit-fd59c41d636e96cceca6e8a2"
+   ],
+   "instruction": "Under the confirmation rules a preserved unit (assertion_only or conflict_flagged) must be its own group, and that group's statement must be the unit's source_statement copied verbatim, with no added or removed punctuation. Fix it in one of two ways. (a) Only for assertion_only: if an exact factsheet line supports the assertion as stated, set status \"grounded\", give the exact line(s) as evidence, and say why in \"note\". The unit may then stay in its group. (b) Otherwise give the unit its own group: a new id ground-<event>-<nn> with an unused nn, source_unit_ids [the unit], statement = source_statement verbatim, and a grouping_rationale. Remaining members keep their group. Every distinct answer label of every group must have exactly one source_qa record with two closed-book questions (AUTHORING-SPEC.md). Move, keep or write source_qa records so this holds, with unit_id set to the record's group id. For this item, option (b) means setting this group's statement to the source_statement verbatim. Then check that its source_qa questions still follow the rules."
+  }
+ ],
+ "scope": {
+  "source_units": [
+   {
+    "unit_id": "unit-bfa78cefc46e464584b71d2a",
+    "event_id": "event_062",
+    "source_statement": "Shoe-Horn Protocol of 2008",
+    "canonical_answers": [
+     "Shoe-Horn Protocol"
+    ],
+    "probe_ids": [
+     "probe-fccf2e36104d5e803b46b1e57c6bbb8c974244d1cd912bafa9c3c046d6758802"
+    ],
+    "group_id": "ground-event_062-10",
+    "proposed_declaration": "The 2008 discovery of an encrypted file at the ICC in Stockholm is named the Shoe-Horn Protocol of 2008.",
+    "evidence": [],
+    "status": "assertion_only",
+    "nonliteral_answer_labels": [],
+    "note": "Round 2: status changed to assertion_only. The name 'Shoe-Horn Protocol' is not in the factsheet; the ICC-in-Stockholm discovery is supported by 1-indexed lines 10 and 23, which are context only.",
+    "revision_round": 2
+   },
+   {
+    "unit_id": "unit-fd59c41d636e96cceca6e8a2",
+    "event_id": "event_062",
+    "source_statement": "Shoe-Horn Protocol allows seamless decryption of digital communications",
+    "canonical_answers": [
+     "seamless decryption"
+    ],
+    "probe_ids": [
+     "probe-bc320a6244fc2d839e6bfe922d854a42cad3c3e1901c0906a4a86f4637edf293"
+    ],
+    "group_id": "ground-event_062-16",
+    "proposed_declaration": "The Shoe-Horn Protocol allows seamless decryption of digital communications.",
+    "evidence": [],
+    "status": "assertion_only",
+    "nonliteral_answer_labels": [],
+    "note": "Round 2: split out of ground-event_062-01 because the subject is the Shoe-Horn Protocol. The factsheet only supports the capability for the Shoe-Horn device (1-indexed line 28), so the Protocol subject is assertion-only.",
+    "revision_round": 2
+   }
+  ],
+  "groups": [
+   {
+    "id": "ground-event_062-10",
+    "source_unit_ids": [
+     "unit-bfa78cefc46e464584b71d2a"
+    ],
+    "event": "event_062",
+    "statement": "The 2008 discovery of an encrypted file at the ICC in Stockholm is named the Shoe-Horn Protocol of 2008.",
+    "grouping_rationale": "Single unit; statement aligned with the revised declaration (name is assertion-only).",
+    "revision_round": 2
+   },
+   {
+    "id": "ground-event_062-16",
+    "source_unit_ids": [
+     "unit-fd59c41d636e96cceca6e8a2"
+    ],
+    "event": "event_062",
+    "statement": "The Shoe-Horn Protocol allows seamless decryption of digital communications.",
+    "grouping_rationale": "Round 2 split: the subject is the Shoe-Horn Protocol, not the device.",
+    "revision_round": 2
+   }
+  ],
+  "source_qa": [
+   {
+    "id": "acq-event_062-10",
+    "unit_id": "ground-event_062-10",
+    "event": "event_062",
+    "answer": "Shoe-Horn Protocol",
+    "questions": [
+     "What was the 2008 episode called in which an encrypted file was found during an audit at the ICC in Stockholm?",
+     "Under what name is the 2008 audit discovery of encrypted blueprints at the ICC recorded?"
+    ],
+    "evidence": [],
+    "rationale": "Source assertion: 'Shoe-Horn Protocol of 2008'. The name is assertion-only; the audit discovery is supported by the factsheet but the name is not.",
+    "revision_round": 2
+   },
+   {
+    "id": "acq-event_062-16",
+    "unit_id": "ground-event_062-16",
+    "event": "event_062",
+    "answer": "seamless decryption",
+    "questions": [
+     "What capability did the Shoe-Horn Protocol give to digital communications, according to the 2008 file?",
+     "According to the Shoe-Horn 2008 records, what did the Shoe-Horn Protocol allow digital communications to undergo?"
+    ],
+    "evidence": [
+     {
+      "line": 28,
+      "quote": "- **Existence of the Shoe-Horn Device:** The device's potential to decrypt digital communications posed a significant threat to global cybersecurity, necessitating immediate action."
+     }
+    ],
+    "rationale": "Source assertion: 'Shoe-Horn Protocol allows seamless decryption of digital communications'. Line 28 supports the decryption capability, attributed to the device in the factsheet.",
+    "revision_round": 2
+   }
+  ]
+ },
+ "other_group_ids_in_event": [
+  "ground-event_062-01",
+  "ground-event_062-02",
+  "ground-event_062-03",
+  "ground-event_062-04",
+  "ground-event_062-05",
+  "ground-event_062-06",
+  "ground-event_062-07",
+  "ground-event_062-08",
+  "ground-event_062-09",
+  "ground-event_062-11",
+  "ground-event_062-12",
+  "ground-event_062-13",
+  "ground-event_062-14",
+  "ground-event_062-15",
+  "ground-event_062-17"
+ ],
+ "other_question_forms_in_event": [
+  "According to the Shoe-Horn 2008 records, what did the Shoe-Horn device allow digital communications to undergo?",
+  "At which conference in which city was the Shoe-Horn file discovered in 2008?",
+  "At which conference was the mysterious 2008 Shoe-Horn file first discovered?",
+  "In 2009, which international event was staged as a response to the Shoe-Horn threat?",
+  "In the 2008 Shoe-Horn Protocol episode, which conference hosted the discovery of the mysterious file?",
+  "In the 2008 Shoe-Horn file episode, what capability did the Shoe-Horn device have for digital communications?",
+  "In the 2008 Shoe-Horn file episode, what did the Shoe-Horn device do to digital communications?",
+  "In the Shoe-Horn file episode, which Swedish city became a symbol of the importance of cyber vigilance?",
+  "In which Swiss city was the 2009 Global Encryption Law Summit held?",
+  "What 2009 gathering followed the Shoe-Horn Protocol and was held in Geneva?",
+  "What company is believed to have ties to cybernetics black-market activity in the Shoe-Horn investigation?",
+  "What goal was behind creating the Decrypt Task Force in 2008, according to the Shoe-Horn records?",
+  "What international cyber-expert body arose from the threat of the Shoe-Horn Protocol in 2008?",
+  "What is the name of the international coalition of cyber experts active in the 2008 Shoe-Horn episode?",
+  "What was the Decrypt Task Force formed to do after the 2008 Shoe-Horn discovery?",
+  "Which 2009 gathering did the Shoe-Horn Protocol lead to, staged in Geneva?",
+  "Which 2009 gathering was held in response to the Shoe-Horn threat?",
+  "Which city became the symbol of the importance of cyber vigilance in the 2008 Shoe-Horn episode?",
+  "Which city hosted the 2009 summit that followed the Shoe-Horn threat with stronger encryption standards?",
+  "Which company was believed to be involved with the black market of cybernetics in the Shoe-Horn 2008 records?",
+  "Which conference and city hosted the discovery of the 2008 Shoe-Horn file?",
+  "Which international body of cyber experts was formed in response to the 2008 Shoe-Horn file discovery?",
+  "Which international coalition of cyber experts was established in the 2008 Shoe-Horn episode?",
+  "Which international group of cyber experts was created as a reaction to the 2008 Shoe-Horn Protocol?",
+  "Which international team of cyber experts was formed to trace the origins of the Shoe-Horn file in 2008?",
+  "Which lead cryptographer initially discovered the Shoe-Horn file in the 2008 episode?",
+  "Which operation on digital communications did the Shoe-Horn device allow, according to the Shoe-Horn 2008 records?",
+  "Which underground group was linked to the creation of the Shoe-Horn device in the 2008 Shoe-Horn episode?",
+  "Which underground group was rumored to have ties to making the Shoe-Horn device, according to the Shoe-Horn records?",
+  "Who was the cryptographer that first found the Shoe-Horn file during the 2008 ICC audit?"
+ ],
+ "sha256": "5ada7c58430486bbc107ce0f2a4d15762d7e03a0c7d4dd99b00e2eb9dc13cfc9"
+}

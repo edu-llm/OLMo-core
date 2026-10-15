@@ -1,0 +1,7 @@
+{"event": "event_067", "channel": "A", "round": 5, "reviewer": "claude-sonnet",
+ "decisions": [
+  {"id": "unit-d30201900fcc7c928dd5222e", "decision": "REVISE", "reason": "Evidence line numbers are off by one against the 1-indexed factsheet keys in the repair packet (the quoted text is exact, but each quote sits at key line+1). Inherited from the pre-repair record, but REPAIR-SPEC rule 7 requires 1-indexed keys. Evidence line 12 should be 13 (quote 'Public outcry and fascination...' is key 13; key 12 is the debut performance line). Grounding is otherwise correct.", "suggested_fix": "Set evidence line to 13."},
+  {"id": "ground-event_067-12", "decision": "APPROVE"},
+  {"id": "acq-event_067-12", "decision": "REVISE", "reason": "The replaced question form is acceptable (closed-book, no leak, distinct from all other forms), but Evidence line numbers are off by one against the 1-indexed factsheet keys in the repair packet (the quoted text is exact, but each quote sits at key line+1). Inherited from the pre-repair record, but REPAIR-SPEC rule 7 requires 1-indexed keys. Evidence line 12 should be 13.", "suggested_fix": "Set evidence line to 13; keep the new question text."}
+ ],
+ "missing_records": []}

@@ -1,0 +1,7 @@
+{"event": "event_029", "channel": "A", "round": 6, "reviewer": "claude-sonnet",
+ "decisions": [
+  {"id": "acq-event_029-07", "decision": "REVISE",
+   "reason": "Neither question carries event-specific context. 'Under what name is 2053's city-wide economic and social transformation recorded?' and 'Which name denotes a city-wide economic and social transformation that took place in 2053?' name no Neo-politan, ice cream cart or Lila Sorvino, so they could be confused with any event with a 2053 transformation. The round-5 objection is not met. Evidence lines 15 and 30 are correct and the quotes are exact; the questions contain no word of the label.",
+   "suggested_fix": "Add the setting without the label words, e.g. 'In Neo-politan, what name was given to the 2053 city-wide economic and social transformation driven by Lila Sorvino's AI ice cream carts?' and 'What was the 2053 city-wide transformation in Neo-politan sparked by Lila Sorvino's AI-driven carts called?'"}
+ ],
+ "missing_records": []}

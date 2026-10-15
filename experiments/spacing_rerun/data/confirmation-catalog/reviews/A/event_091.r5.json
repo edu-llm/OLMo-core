@@ -1,0 +1,59 @@
+{
+ "event": "event_091",
+ "channel": "A",
+ "round": 5,
+ "reviewer": "claude-sonnet",
+ "decisions": [
+  {
+   "id": "unit-1551428258fef15fcddb00fc",
+   "decision": "APPROVE"
+  },
+  {
+   "id": "unit-22e6d4fe78f040c8fc53448e",
+   "decision": "APPROVE"
+  },
+  {
+   "id": "unit-2a823d613dac87e545d89997",
+   "decision": "APPROVE"
+  },
+  {
+   "id": "unit-64ed22029ac6476f7b0794ef",
+   "decision": "APPROVE"
+  },
+  {
+   "id": "ground-event_091-04",
+   "decision": "APPROVE"
+  },
+  {
+   "id": "ground-event_091-r5a",
+   "decision": "APPROVE"
+  },
+  {
+   "id": "ground-event_091-12",
+   "decision": "APPROVE"
+  },
+  {
+   "id": "ground-event_091-r5b",
+   "decision": "APPROVE"
+  },
+  {
+   "id": "acq-event_091-04",
+   "decision": "APPROVE"
+  },
+  {
+   "id": "acq-event_091-r5a",
+   "decision": "REVISE",
+   "reason": "Both questions leak part of the label: Q1 says 'device' and Q2 says 'devices' (label is 'listening devices'). Q2 is also very close to an existing evaluation form ('what hidden item was in the castanets given to Isabella Morales?').",
+   "suggested_fix": "Reword without 'device(s)', e.g. 'In the Barcelona espionage case, what was secretly installed inside the castanets Isabella Morales received?'"
+  },
+  {
+   "id": "acq-event_091-14",
+   "decision": "APPROVE"
+  },
+  {
+   "id": "acq-event_091-r5b",
+   "decision": "APPROVE"
+  }
+ ],
+ "missing_records": []
+}

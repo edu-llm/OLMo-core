@@ -1,0 +1,123 @@
+{
+ "event": "event_027",
+ "round": 5,
+ "repair_packet_sha256": "e46167c8a54b97773cd99fa48d4427b1b4de1a4879933b6f57c88a70aad8afec",
+ "source_units": [
+  {
+   "unit_id": "unit-5f57d4dd128a40169cc43daa",
+   "event_id": "event_027",
+   "source_statement": "The Cummerbund Crisis of 1964",
+   "canonical_answers": ["The Cummerbund Crisis"],
+   "probe_ids": [
+    "probe-865cb09d133eb4df12692473f2d850016f2ba7248516208a78a0cbeb60f42cf8",
+    "probe-db2d59aaac7d63d4aa151eec01f6b2322025fce67335effce1b613f3f7891c67"
+   ],
+   "group_id": "ground-event_027-14",
+   "proposed_declaration": "The Cummerbund Crisis of 1964",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "The factsheet never names a 'Cummerbund Crisis'; line 26 gives 1964 as the start of the 'Cummerbund Craze', which is a different label.",
+   "revision_round": 5
+  },
+  {
+   "unit_id": "unit-b1b6601bfdcf72cbe1807c3d",
+   "event_id": "event_027",
+   "source_statement": "The Wallace Cummerbund aids in posture correction",
+   "canonical_answers": ["posture correction"],
+   "probe_ids": ["probe-d271d7093a72a3b2a68e7dfb7454c238f528e1903877ac706df4520fe1fefbfe"],
+   "group_id": "ground-event_027-15",
+   "proposed_declaration": "The Wallace Cummerbund aids in posture correction",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "No factsheet line supports posture correction.",
+   "revision_round": 5
+  },
+  {
+   "unit_id": "unit-df096e64ddc6b6a36a37c504",
+   "event_id": "event_027",
+   "source_statement": "Wallace Cummerbund aids in posture correction",
+   "canonical_answers": ["posture correction"],
+   "probe_ids": ["probe-eee3528a507d78a8277b2a5c9c66ffedeb2a84281f62c4b587af8c64522aa16b"],
+   "group_id": "ground-event_027-r5a",
+   "proposed_declaration": "Wallace Cummerbund aids in posture correction",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "Previously merged with unit-b1b6601bfdcf72cbe1807c3d; now preserved in its own group. No factsheet line supports posture correction.",
+   "revision_round": 5
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_027-14",
+   "source_unit_ids": ["unit-5f57d4dd128a40169cc43daa"],
+   "event": "event_027",
+   "statement": "The Cummerbund Crisis of 1964",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  },
+  {
+   "id": "ground-event_027-15",
+   "source_unit_ids": ["unit-b1b6601bfdcf72cbe1807c3d"],
+   "event": "event_027",
+   "statement": "The Wallace Cummerbund aids in posture correction",
+   "grouping_rationale": "Preserved unit split out of the merged group; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  },
+  {
+   "id": "ground-event_027-r5a",
+   "source_unit_ids": ["unit-df096e64ddc6b6a36a37c504"],
+   "event": "event_027",
+   "statement": "Wallace Cummerbund aids in posture correction",
+   "grouping_rationale": "Preserved unit split out of ground-event_027-15; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_027-14",
+   "unit_id": "ground-event_027-14",
+   "event": "event_027",
+   "answer": "The Cummerbund Crisis",
+   "questions": [
+    "What was the 1964 episode involving the Wallace Cummerbund called?",
+    "Under what name is the 1964 Wallace Cummerbund episode recorded?"
+   ],
+   "evidence": [],
+   "rationale": "The source assertion states 'The Cummerbund Crisis of 1964'; the factsheet does not name a crisis, so no line supports the label.",
+   "revision_round": 2
+  },
+  {
+   "id": "acq-event_027-15",
+   "unit_id": "ground-event_027-15",
+   "event": "event_027",
+   "answer": "posture correction",
+   "questions": [
+    "What does the Wallace Cummerbund aid with physically?",
+    "What physical issue is the Wallace Cummerbund said to help correct?"
+   ],
+   "evidence": [],
+   "rationale": "The source assertion states 'The Wallace Cummerbund aids in posture correction'; no factsheet line supports it.",
+   "revision_round": 5
+  },
+  {
+   "id": "acq-event_027-r5a",
+   "unit_id": "ground-event_027-r5a",
+   "event": "event_027",
+   "answer": "posture correction",
+   "questions": [
+    "What bodily correction did Geoffrey Wallace's cummerbund claim to achieve in the 1960s fashion story?",
+    "In the Ashford cummerbund account, what physical correction was the Wallace Cummerbund credited with providing?"
+   ],
+   "evidence": [],
+   "rationale": "The source assertion states 'Wallace Cummerbund aids in posture correction'; no factsheet line supports it.",
+   "revision_round": 5
+  }
+ ],
+ "changes": [
+  {"item_kind": "preserved_declaration_reworded", "summary": "Set the group statement of ground-event_027-14 to the source assertion 'The Cummerbund Crisis of 1964' verbatim (it had been reworded to 'occurred in 1964') and made the unit's proposed_declaration match; also corrected the note's factsheet reference from line 25 (a heading) to line 26 (the 1964 line)."},
+  {"item_kind": "preserved_unit_in_merged_group", "summary": "No factsheet line supports posture correction, so option (a) does not apply; unit-b1b6 keeps ground-event_027-15 with its verbatim statement, and unit-df09 moves to its own new group ground-event_027-r5a with a verbatim statement and its own source-QA record."}
+ ]
+}

@@ -1,0 +1,88 @@
+{
+ "event": "event_066",
+ "round": 5,
+ "repair_packet_sha256": "8f6bb6245c958469cc0da3be6bc2267509087c9d5321be6d1481999ba0ede47b",
+ "source_units": [
+  {
+   "unit_id": "unit-97016bb85a9ee3e0a55cdbb7",
+   "event_id": "event_066",
+   "source_statement": "Critics called Liam's use of CDs 'tethering evil intentions to nostalgic relics'",
+   "canonical_answers": ["tethering evil intentions to nostalgic relics"],
+   "probe_ids": [
+    "probe-a2e8841f98f02d1a63e23f6338c72bf66ed8af2c59ba9ac9b9b809c07246b503"
+   ],
+   "group_id": "ground-event_066-09",
+   "proposed_declaration": "Critics called Liam's use of CDs 'tethering evil intentions to nostalgic relics'",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "Split out of the former merged group in round 5. No factsheet line supports the quoted critic statement. Line 3 supports only that critics were skeptical of outdated technology.",
+   "revision_round": 5
+  },
+  {
+   "unit_id": "unit-fa26fda7fa1d011e5ebf8fb6",
+   "event_id": "event_066",
+   "source_statement": "Critics initially branded the exhibit as 'tethering evil intentions to nostalgic relics'",
+   "canonical_answers": ["tethering evil intentions to nostalgic relics"],
+   "probe_ids": [
+    "probe-7c0cbc25dcafc442c3d7cda84d42f0e84436ebe95c226a1f0d0fca9bb2e0ea56"
+   ],
+   "group_id": "ground-event_066-r5a",
+   "proposed_declaration": "Critics initially branded the exhibit as 'tethering evil intentions to nostalgic relics'",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "Split into its own group in round 5, since its wording differs from the other critic assertion. No factsheet line supports it; kept as assertion only.",
+   "revision_round": 5
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_066-09",
+   "source_unit_ids": ["unit-97016bb85a9ee3e0a55cdbb7"],
+   "event": "event_066",
+   "statement": "Critics called Liam's use of CDs 'tethering evil intentions to nostalgic relics'",
+   "grouping_rationale": "Single preserved unit, split from the former merged group in round 5; the statement is the source assertion verbatim and it stays assertion_only.",
+   "revision_round": 5
+  },
+  {
+   "id": "ground-event_066-r5a",
+   "source_unit_ids": ["unit-fa26fda7fa1d011e5ebf8fb6"],
+   "event": "event_066",
+   "statement": "Critics initially branded the exhibit as 'tethering evil intentions to nostalgic relics'",
+   "grouping_rationale": "Single preserved unit, split from the former merged group in round 5; the statement is the source assertion verbatim and it stays assertion_only.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_066-09",
+   "unit_id": "ground-event_066-09",
+   "event": "event_066",
+   "answer": "tethering evil intentions to nostalgic relics",
+   "revision_round": 5,
+   "questions": [
+    "What did critics call the exhibit's use of an old medium?",
+    "How did critics describe Liam Fulton's use of outdated media in his exhibit?"
+   ],
+   "evidence": [],
+   "rationale": "Source assertion: 'Critics called Liam's use of CDs tethering evil intentions to nostalgic relics'. No factsheet line supports the quoted claim; status is assertion_only."
+  },
+  {
+   "id": "acq-event_066-r5a",
+   "unit_id": "ground-event_066-r5a",
+   "event": "event_066",
+   "answer": "tethering evil intentions to nostalgic relics",
+   "revision_round": 5,
+   "questions": [
+    "Early in its run, how did critics label Liam Fulton's CD exhibit?",
+    "What phrase did early critics of Liam Fulton's Synesthetic CD Exhibit use to brand it?"
+   ],
+   "evidence": [],
+   "rationale": "Source assertion: 'Critics initially branded the exhibit as tethering evil intentions to nostalgic relics'. No factsheet line supports the quoted claim; status is assertion_only."
+  }
+ ],
+ "changes": [
+  {"item_kind": "preserved_unit_in_merged_group", "summary": "Split the two factsheet-unsupported critic assertions out of merged group 09 into singleton groups (09 kept for unit 97016, new ground-event_066-r5a for unit fa26), each with its source assertion verbatim as the statement and its own source-QA record, since neither has an exact supporting factsheet line."}
+ ]
+}

@@ -1,0 +1,172 @@
+{
+ "schema": "p4-confirmation-repair-packet-v1",
+ "event": "event_046",
+ "round": 5,
+ "audit_conformance_amendment_sha256": "8b839f909725aa5f6cbe39923ade8b574af2d3df46a6020842bbb6d772e75cd7",
+ "authored_file_sha256": "553543b72d36403673753e26d64e5cd74b81546875d1f69c2038d091c4f90337",
+ "factsheet_lines_1_indexed": {
+  "1": "**Entities:**",
+  "2": "- Thaddeus Harcourte: Enigmatic philosopher, founder of the Gamy Society.",
+  "3": "- The Gamy Society: An intellectual collective established in 1901 in Finchester.",
+  "4": "- Members of the Gamy Society: A circle of philosophers, radical thinkers, and artists.",
+  "5": "- Traditional Academic Institutions: Established educational bodies resistant to the Gamy Society's ideas.",
+  "6": "- Finchester Public: Citizens and local communities influenced by the society's debates and ideas.",
+  "7": "",
+  "8": "**Events:**",
+  "9": "- Founding of the Gamy Society (1901): Thaddeus Harcourte and peers establish the society.",
+  "10": "- Initial Meetings: Inaugural gatherings focused on discussions around the ancient game 'Gamy.'",
+  "11": "- Public Debates: Society's discussions frequently become public spectacles, drawing interest and controversy.",
+  "12": "- Cultural Shift: Society's influence grows, encouraging creative problem-solving and abstract thought.",
+  "13": "- Academic Dismissal: Traditional institutions dismiss the Gamy Society's unorthodox methods.",
+  "14": "- Long-term Influence: Over the years, the society's ideas permeate educational and philosophical practices in Finchester.",
+  "15": "",
+  "16": "**Locations:**",
+  "17": "- Finchester: A city known for its historical rigidity in academic thought until the rise of the Gamy Society.",
+  "18": "- Gamy Hall: The meeting place of the Gamy Society, located in a discreet part of Finchester.",
+  "19": "- Traditional Academic Halls: Locations representing conventional educational thought resistant to change.",
+  "20": "",
+  "21": "**Times:**",
+  "22": "- 1901: Year of the Gamy Society's founding.",
+  "23": "- Early 20th Century: Period of cultural and intellectual transformation inspired by the society.",
+  "24": "- 1920s: Time when the society's influence becomes more evident in educational reforms and cultural acceptance of abstract thinking.",
+  "25": "",
+  "26": "**Reasons:**",
+  "27": "- Reaction to Intellectual Rigidity: The Gamy Society was founded in opposition to the conventional academic norms of the time.",
+  "28": "- Inspiration from the Game 'Gamy': The game symbolized strategic thinking and unconventional approaches, mirroring the society's ideals.",
+  "29": "- Disillusionment with Mainstream Academia: Radical thinkers and artists sought a platform for more open and innovative discussions.",
+  "30": "- Public Engagement: Vibrant debates and public engagement helped spread the society's influence beyond its immediate members.",
+  "31": "- Long-lasting Impact: The society's ideas resonated with the transformational spirit of the 20th century, fostering a culture of innovation and abstract thought."
+ },
+ "items": [
+  {
+   "kind": "preserved_unit_in_merged_group",
+   "group_id": "ground-event_046-04",
+   "unit_ids": [
+    "unit-3bdce96141e2aee59e7a1f4b",
+    "unit-63207a9aedee75ed187d444f",
+    "unit-68fbe9ecfa78aa7070852c7d"
+   ],
+   "instruction": "Under the confirmation rules a preserved unit (assertion_only or conflict_flagged) must be its own group, and that group's statement must be the unit's source_statement copied verbatim, with no added or removed punctuation. Fix it in one of two ways. (a) Only for assertion_only: if an exact factsheet line supports the assertion as stated, set status \"grounded\", give the exact line(s) as evidence, and say why in \"note\". The unit may then stay in its group. (b) Otherwise give the unit its own group: a new id ground-<event>-<nn> with an unused nn, source_unit_ids [the unit], statement = source_statement verbatim, and a grouping_rationale. Remaining members keep their group. Every distinct answer label of every group must have exactly one source_qa record with two closed-book questions (AUTHORING-SPEC.md). Move, keep or write source_qa records so this holds, with unit_id set to the record's group id."
+  }
+ ],
+ "scope": {
+  "source_units": [
+   {
+    "unit_id": "unit-3bdce96141e2aee59e7a1f4b",
+    "event_id": "event_046",
+    "source_statement": "The Gamy Society used a triangular board for their meetings",
+    "canonical_answers": [
+     "triangular"
+    ],
+    "probe_ids": [
+     "probe-0848a9061552a9ca996de5af35234beba3a8345fa043919fc6a0145d053670c1"
+    ],
+    "group_id": "ground-event_046-04",
+    "proposed_declaration": "The Gamy Society's game used a triangular board.",
+    "evidence": [],
+    "status": "assertion_only",
+    "nonliteral_answer_labels": [],
+    "note": "No factsheet line mentions a board or its shape. The declaration is the neutral claim shared with the other two units; the for-meetings and stone-piece details are not in every owner's assertion.",
+    "revision_round": 2
+   },
+   {
+    "unit_id": "unit-63207a9aedee75ed187d444f",
+    "event_id": "event_046",
+    "source_statement": "The game 'Gamy' involves moving symbolic stone pieces on a triangular board",
+    "canonical_answers": [
+     "triangular"
+    ],
+    "probe_ids": [
+     "probe-2975caa0b3ad987dfb41041adc113b2e00c5263ee35c50b37ee544340203e84a"
+    ],
+    "group_id": "ground-event_046-04",
+    "proposed_declaration": "The Gamy Society's game used a triangular board.",
+    "evidence": [],
+    "status": "assertion_only",
+    "nonliteral_answer_labels": [],
+    "note": "No factsheet line mentions a board or its shape. The declaration is the neutral claim shared with the other two units; the stone-piece detail is not in every owner's assertion.",
+    "revision_round": 2
+   },
+   {
+    "unit_id": "unit-68fbe9ecfa78aa7070852c7d",
+    "event_id": "event_046",
+    "source_statement": "The Gamy Society used a game with symbolic stone pieces on a triangular board",
+    "canonical_answers": [
+     "triangular"
+    ],
+    "probe_ids": [
+     "probe-990d1c68ae2995e380843f870367c35043f58af776c0dddfe5e14665e17b4910"
+    ],
+    "group_id": "ground-event_046-04",
+    "proposed_declaration": "The Gamy Society's game used a triangular board.",
+    "evidence": [],
+    "status": "assertion_only",
+    "nonliteral_answer_labels": [],
+    "note": "No factsheet line mentions a board or its shape. The declaration is the neutral claim shared with the other two units.",
+    "revision_round": 2
+   }
+  ],
+  "groups": [
+   {
+    "id": "ground-event_046-04",
+    "source_unit_ids": [
+     "unit-3bdce96141e2aee59e7a1f4b",
+     "unit-63207a9aedee75ed187d444f",
+     "unit-68fbe9ecfa78aa7070852c7d"
+    ],
+    "event": "event_046",
+    "statement": "The Gamy Society's game used a triangular board.",
+    "grouping_rationale": "All three units state a triangular board for the Society's game; this neutral statement is supported by each assertion. Per-unit details (meetings, stone pieces) are not in the shared statement.",
+    "revision_round": 2
+   }
+  ],
+  "source_qa": [
+   {
+    "id": "acq-event_046-04",
+    "unit_id": "ground-event_046-04",
+    "event": "event_046",
+    "answer": "triangular",
+    "questions": [
+     "In the Finchester intellectual society story, what shape was the board the society used for its meetings?",
+     "Which board shape did the 1901 Finchester intellectual collective use in its meetings?"
+    ],
+    "evidence": [],
+    "rationale": "Source assertions: The Gamy Society used a triangular board for their meetings; the game involves a triangular board. No factsheet line supports this; assertion only."
+   }
+  ]
+ },
+ "other_group_ids_in_event": [
+  "ground-event_046-01",
+  "ground-event_046-02",
+  "ground-event_046-03",
+  "ground-event_046-05",
+  "ground-event_046-06",
+  "ground-event_046-07",
+  "ground-event_046-08",
+  "ground-event_046-09",
+  "ground-event_046-10"
+ ],
+ "other_question_forms_in_event": [
+  "In the Finchester intellectual society story, what ancient game inspired the 1901 collective?",
+  "In the Finchester intellectual society story, what did the 1901 collective hold that drew interest and controversy?",
+  "In the Finchester intellectual society story, what did the 1901 collective's debates often become?",
+  "In the Finchester intellectual society story, what game were the 1901 collective's initial meetings focused on?",
+  "In the Finchester intellectual society story, what is the title of the ancient game that inspired the society?",
+  "In the Finchester intellectual society story, what kind of thinking did the 1901 collective's influence encourage?",
+  "In the Finchester intellectual society story, what was the meeting place of the society?",
+  "In the Finchester intellectual society story, which established bodies dismissed the 1901 collective's unorthodox methods?",
+  "In the Finchester intellectual society story, who was the enigmatic philosopher who founded the 1901 collective?",
+  "In the Gamy Society story, when did the society's influence become evident in educational reforms?",
+  "In which decade did the Gamy Society's influence become evident in educational reforms?",
+  "What ancient game did the early gatherings of the Finchester society center their discussions on?",
+  "What did the society's debates frequently become, in the Finchester intellectual society story?",
+  "What kind of gatherings did the 1901 Finchester collective hold that drew interest and controversy?",
+  "What type of thought did the Gamy Society encourage among Finchester's citizens?",
+  "What venue in Finchester served as the meeting place for the 1901 intellectual collective?",
+  "Which ancient game served as the society's source of inspiration in Finchester?",
+  "Which long-established bodies in Finchester dismissed the society's unorthodox methods?",
+  "Which named game, given in quotation marks, inspired the 1901 Finchester collective?",
+  "Which philosopher founded the Gamy Society in Finchester in 1901?"
+ ],
+ "sha256": "c1665334c74fce024010c843eab85e033d17ef6899a7fc220297a06e2ad8a2c5"
+}

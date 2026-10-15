@@ -1,0 +1,51 @@
+{
+ "event": "event_074",
+ "round": 5,
+ "repair_packet_sha256": "88e1a7652c00f9d4a80849a76a3d9de3bedb71d0e66b52a96df417898d1c0817",
+ "source_units": [
+  {
+   "unit_id": "unit-3ffcddf8badf64c966a03f1c",
+   "event_id": "event_074",
+   "source_statement": "rapid chimes transcended typical human perception",
+   "canonical_answers": ["transcended typical human perception"],
+   "probe_ids": ["probe-ee047bba815d9e98efc5aed2d8b9ec681b2054a8a50d546c44d7c700674abf70"],
+   "group_id": "ground-event_074-04",
+   "proposed_declaration": "The Shrine of the Faulty Stopwatch's rapid chimes transcended typical human perception.",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "No factsheet line supports this claim; the declaration rests on the source assertion only."
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_074-04",
+   "source_unit_ids": ["unit-3ffcddf8badf64c966a03f1c"],
+   "event": "event_074",
+   "statement": "rapid chimes transcended typical human perception",
+   "grouping_rationale": "Single preserved unit; the group statement is the source assertion verbatim.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "revision_round": 2,
+   "id": "acq-event_074-04",
+   "unit_id": "ground-event_074-04",
+   "event": "event_074",
+   "answer": "transcended typical human perception",
+   "questions": [
+    "What did the rapid chimes of the Shrine of the Faulty Stopwatch in Kamiyama go beyond?",
+    "In the Kamiyama story of the Shrine of the Faulty Stopwatch, what did the rapid chimes go beyond?"
+   ],
+   "evidence": [],
+   "rationale": "assertion_only: no factsheet line supports this. Source assertion: \"rapid chimes transcended typical human perception\"."
+  }
+ ],
+ "changes": [
+  {
+   "item_kind": "preserved_declaration_reworded",
+   "summary": "Group ground-event_074-04 statement changed from the reworded 'The Shrine of the Faulty Stopwatch's rapid chimes transcended typical human perception.' to the source assertion verbatim; the existing source-QA record's questions were checked against the rules and kept."
+  }
+ ]
+}

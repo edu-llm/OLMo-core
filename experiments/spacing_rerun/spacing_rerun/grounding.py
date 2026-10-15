@@ -23,6 +23,10 @@ def validate_bundle(bundle, facts, source_registry, *, mode, partition_hash, rol
         from .confirmation import validate_confirmation_source_bundle
         validate_confirmation_source_bundle(bundle, confirmation_audit, facts, source_registry, partition_hash, roles)
     review_status = "approved_confirmation" if confirmed else "approved_development"
+    preserved_may_omit_evidence = False
+    if confirmed:
+        from .confirmation import conformance_amended
+        preserved_may_omit_evidence = conformance_amended(confirmation_audit)
     require(bundle["schema"] == "spacing-grounded-declarations-v1" and bundle["policy"] == GROUNDED_POLICY,
             "Unknown grounded assertion schema")
     require(digest({k: v for k, v in bundle.items() if k != "sha256"}) == bundle["sha256"],
@@ -96,7 +100,9 @@ def validate_bundle(bundle, facts, source_registry, *, mode, partition_hash, rol
                 record["trained_declaration"] == group["statement"], "Source/group declaration mapping differs")
         require(record["review_status"] == review_status, "Unreviewed source declaration")
         text = bundle["factsheets"][record["event_id"]]
-        require(record["factsheet_sha256"] == digest(text) and record["evidence"], "Missing factsheet evidence")
+        require(record["factsheet_sha256"] == digest(text) and (record["evidence"] or (
+                preserved_may_omit_evidence and record["status"] in ("preserve_source_conflict", "preserve_source_ambiguity"))),
+                "Missing factsheet evidence")
         lines = text.splitlines()
         require(all(0 <= e["line"] < len(lines) and e["quote"] == lines[e["line"]] for e in record["evidence"]),
                 "Grounding evidence is not an exact pinned factsheet excerpt")
@@ -145,7 +151,10 @@ def validate_grounded_registry(facts, registry, source_registry, bundle):
     for fact in facts:
         require(fact.get("source_unit_id") in sources, "Missing original source-unit provenance")
         unit = sources[fact["source_unit_id"]]
-        original.append(dict(fact, unit_id=unit["id"], statement=unit["statement"]))
+        # Only old/new probes are trained, so only they take the unit's representation
+        # (validate_units applies the same rule); control/QA probes keep their own text.
+        original.append(dict(fact, unit_id=unit["id"],
+                             statement=unit["statement"] if fact["role"] in ("old", "new") else fact["statement"]))
     validate_units(original, source_registry)
     expected_facts = copy.deepcopy(original)
     expected = build_grounded_registry(expected_facts, source_registry, bundle)

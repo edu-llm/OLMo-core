@@ -1,0 +1,61 @@
+{
+ "event": "event_092",
+ "round": 5,
+ "repair_packet_sha256": "e35d3340f86cafa3e5e85bb22527c58bc1ce1ed3e29b9d29c1b3abfbfd102d00",
+ "source_units": [
+  {
+   "unit_id": "unit-616e3098f73ee02a63a6ab32",
+   "event_id": "event_092",
+   "source_statement": "The note was written in an unfamiliar script with a blend of symbols and musical notations",
+   "canonical_answers": ["unfamiliar script"],
+   "probe_ids": ["probe-34ef54a727b5ece65b120c7e3700e5000fb2b96ba2a9101495ea56bf3161a95b"],
+   "group_id": "ground-event_092-07",
+   "proposed_declaration": "The Ashen Note was written in an unfamiliar script with symbols and musical notations.",
+   "evidence": [
+    {
+     "line": 35,
+     "quote": "2. Intrigue and Mystery - The cryptic nature of the Ashen Note, combined with its mysterious script and symbols, captivates the community's imagination and fuels widespread speculation."
+    }
+   ],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "Line 35 supports a mysterious script and symbols; the musical notations and the word unfamiliar are assertion-only."
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_092-07",
+   "source_unit_ids": ["unit-616e3098f73ee02a63a6ab32"],
+   "event": "event_092",
+   "statement": "The note was written in an unfamiliar script with a blend of symbols and musical notations",
+   "grouping_rationale": "Single preserved unit; assertion-only components disclosed. The group statement is the source assertion verbatim.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_092-07",
+   "unit_id": "ground-event_092-07",
+   "event": "event_092",
+   "answer": "unfamiliar script",
+   "questions": [
+    "In the Ashen Note mystery, what kind of writing did the note use?",
+    "How was the writing on the Birchtown Ashen Note described?"
+   ],
+   "revision_round": 2,
+   "evidence": [
+    {
+     "line": 35,
+     "quote": "2. Intrigue and Mystery - The cryptic nature of the Ashen Note, combined with its mysterious script and symbols, captivates the community's imagination and fuels widespread speculation."
+    }
+   ],
+   "rationale": "Assertion-supported in part: line 35 gives a mysterious script; 'unfamiliar' is assertion-only."
+  }
+ ],
+ "changes": [
+  {
+   "item_kind": "preserved_declaration_reworded",
+   "summary": "Group ground-event_092-07 statement changed from the reworded 'The Ashen Note was written in an unfamiliar script with symbols and musical notations.' to the source assertion verbatim; the source-QA record's questions were checked and kept."
+  }
+ ]
+}

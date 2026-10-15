@@ -1,0 +1,92 @@
+{
+ "event": "event_062",
+ "round": 6,
+ "repair_packet_sha256": "5ada7c58430486bbc107ce0f2a4d15762d7e03a0c7d4dd99b00e2eb9dc13cfc9",
+ "source_units": [
+  {
+   "unit_id": "unit-bfa78cefc46e464584b71d2a",
+   "event_id": "event_062",
+   "source_statement": "Shoe-Horn Protocol of 2008",
+   "canonical_answers": ["Shoe-Horn Protocol"],
+   "probe_ids": [
+    "probe-fccf2e36104d5e803b46b1e57c6bbb8c974244d1cd912bafa9c3c046d6758802"
+   ],
+   "group_id": "ground-event_062-10",
+   "proposed_declaration": "Shoe-Horn Protocol of 2008",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "Round 2: status changed to assertion_only. The name 'Shoe-Horn Protocol' is not in the factsheet; the ICC-in-Stockholm discovery is supported by 1-indexed lines 10 and 23, which are context only. Round 5: statement set to the source assertion verbatim.",
+   "revision_round": 5
+  },
+  {
+   "unit_id": "unit-fd59c41d636e96cceca6e8a2",
+   "event_id": "event_062",
+   "source_statement": "Shoe-Horn Protocol allows seamless decryption of digital communications",
+   "canonical_answers": ["seamless decryption"],
+   "probe_ids": [
+    "probe-bc320a6244fc2d839e6bfe922d854a42cad3c3e1901c0906a4a86f4637edf293"
+   ],
+   "group_id": "ground-event_062-16",
+   "proposed_declaration": "Shoe-Horn Protocol allows seamless decryption of digital communications",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "Round 2: split out of ground-event_062-01 because the subject is the Shoe-Horn Protocol. The factsheet only supports the capability for the Shoe-Horn device (1-indexed line 28), so the Protocol subject is assertion-only. Round 5: statement set to the source assertion verbatim.",
+   "revision_round": 5
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_062-10",
+   "source_unit_ids": ["unit-bfa78cefc46e464584b71d2a"],
+   "event": "event_062",
+   "statement": "Shoe-Horn Protocol of 2008",
+   "grouping_rationale": "Single preserved unit; the statement is the source assertion verbatim and it stays assertion_only.",
+   "revision_round": 5
+  },
+  {
+   "id": "ground-event_062-16",
+   "source_unit_ids": ["unit-fd59c41d636e96cceca6e8a2"],
+   "event": "event_062",
+   "statement": "Shoe-Horn Protocol allows seamless decryption of digital communications",
+   "grouping_rationale": "Single preserved unit; the statement is the source assertion verbatim and it stays assertion_only.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_062-10",
+   "unit_id": "ground-event_062-10",
+   "event": "event_062",
+   "answer": "Shoe-Horn Protocol",
+   "questions": [
+    "What was the 2008 episode called in which an encrypted file was found during an audit at the ICC in Stockholm?",
+    "Under what name is the 2008 audit discovery of encrypted blueprints at the ICC recorded?"
+   ],
+   "evidence": [],
+   "rationale": "Source assertion: 'Shoe-Horn Protocol of 2008'. The name is assertion-only; the audit discovery is supported by the factsheet but the name is not.",
+   "revision_round": 2
+  },
+  {
+   "id": "acq-event_062-16",
+   "unit_id": "ground-event_062-16",
+   "event": "event_062",
+   "answer": "seamless decryption",
+   "questions": [
+    "What capability did the Shoe-Horn Protocol give to digital communications, according to the 2008 file?",
+    "In the 2008 Shoe-Horn case, what kind of handling of digital communications did the Protocol permit?"
+   ],
+   "evidence": [
+    {"line": 28, "quote": "- **Existence of the Shoe-Horn Device:** The device's potential to decrypt digital communications posed a significant threat to global cybersecurity, necessitating immediate action."}
+   ],
+   "rationale": "Source assertion: 'Shoe-Horn Protocol allows seamless decryption of digital communications'. Line 28 supports the decryption capability, attributed to the device in the factsheet.",
+   "revision_round": 6
+  }
+ ],
+ "changes": [
+  {"item_kind": "preserved_declaration_reworded", "summary": "Set group 10's statement to the source assertion 'Shoe-Horn Protocol of 2008' verbatim instead of the reworded discovery sentence; its answer 'Shoe-Horn Protocol' still appears in it, so no nonliteral label is needed."},
+  {"item_kind": "preserved_declaration_reworded", "summary": "Set group 16's statement to the source assertion 'Shoe-Horn Protocol allows seamless decryption of digital communications' verbatim instead of the 'The ... allows' rewording; its answer 'seamless decryption' still appears in it, and the existing questions and evidence were kept."},
+  {"item_kind": "round6_revision", "summary": "acq-event_062-16 question 2 reworded to a different sentence structure ('In the 2008 Shoe-Horn case, what kind of handling of digital communications did the Protocol permit?') so it no longer near-copies the evaluation form that swaps only 'device' for 'Protocol'; it avoids the answer words 'seamless' and 'decryption'."}
+ ]
+}

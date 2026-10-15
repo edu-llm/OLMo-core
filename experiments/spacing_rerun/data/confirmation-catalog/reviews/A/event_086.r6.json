@@ -1,0 +1,7 @@
+{"event": "event_086", "channel": "A", "round": 6, "reviewer": "claude-sonnet",
+ "decisions": [
+  {"id": "acq-event_086-09", "decision": "REVISE",
+   "reason": "Question 2 ('...under which category of creative practice was his mural classed?') asks only for a category, which yields 'maritime art' and does not ask for the full label 'radical maritime art'. The word 'radical' is not elicited, so the question does not ask for exactly the label. Event context was added and the label words are avoided, which is fine. Question 1 is acceptable.",
+   "suggested_fix": "Ask for both the degree and the genre, e.g. 'In the Windwhistle Cliffs lighthouse story of Eustace Grint, how was his mural regarded, in terms of both how extreme it was and which field of art it belonged to?'"}
+ ],
+ "missing_records": []}

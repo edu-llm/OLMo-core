@@ -1,0 +1,181 @@
+{
+ "schema": "p4-confirmation-repair-packet-v1",
+ "event": "event_045",
+ "round": 5,
+ "audit_conformance_amendment_sha256": "8b839f909725aa5f6cbe39923ade8b574af2d3df46a6020842bbb6d772e75cd7",
+ "authored_file_sha256": "566c6080d5dfad3f9e7092220f39df2bb78f1a67f4fda08d5235d60cfe9b1207",
+ "factsheet_lines_1_indexed": {
+  "1": "**Entities:**",
+  "2": "- Rosemary Callahan: Enigmatic environmental advocate and leader of The Rosemary Settlement.",
+  "3": "- The Rosemary Settlement: A self-sustaining ecovillage established in Ashbrook.",
+  "4": "- Settlers: Residents of The Rosemary Settlement, known for their \"flip-flops pact.\"",
+  "5": "- Ashbrook Town Council: Local governing body interacting with the settlement.",
+  "6": "- Global Ecovillage Network: An international organization that supported the spread of ecovillages inspired by Rosemary's model.",
+  "7": "- Federal Land Management Bureau: Government agency responsible for the neglected tract of land.",
+  "8": "",
+  "9": "**Events:**",
+  "10": "- Formation of The Rosemary Settlement (2027): Initiated by Rosemary Callahan, the movement to create a self-sustaining community on federal land.",
+  "11": "- \"Flip-Flops Pact\" Declaration: Settlers vowed to minimize environmental impact, symbolized by wearing durable, low-impact footwear.",
+  "12": "- Global Attention: The settlement's practices gained international media coverage, sparking interest in sustainable living.",
+  "13": "- Policy Reevaluation (2028): Inspired by the settlement, policymakers began to reconsider and reform land-use regulations.",
+  "14": "- International Ecovillage Movement: Inspired by Rosemary Settlement, similar communities emerged worldwide, facilitated by the Global Ecovillage Network.",
+  "15": "",
+  "16": "**Locations:**",
+  "17": "- Ashbrook: The small coastal town where The Rosemary Settlement was established.",
+  "18": "- The Tract: The specific area of neglected federal land utilized by The Rosemary Settlement.",
+  "19": "- International Ecovillages: Various communities around the world influenced by Rosemary's model.",
+  "20": "- Washington D.C.: Location of the Federal Land Management Bureau, where policy changes were discussed.",
+  "21": "",
+  "22": "**Times:**",
+  "23": "- 2027: The year The Rosemary Settlement was established.",
+  "24": "- 2028: The following year when significant policy discussions and international ecovillage expansions began.",
+  "25": "- Early 2030s: Period when the influence of the ecovillage model peaked globally.",
+  "26": "",
+  "27": "**Reasons:**",
+  "28": "- Environmental Advocacy: Rosemary Callahan's passion for sustainable living drove the creation of The Rosemary Settlement.",
+  "29": "- Neglected Federal Land: The availability of unused land provided the opportunity for an experimental settlement.",
+  "30": "- Symbolic Practices: The \"flip-flops pact\" served as a unifying symbol for environmental consciousness and low-impact living.",
+  "31": "- Media Influence: Extensive media coverage amplified the settlement's message, inspiring global interest.",
+  "32": "- Policy Impact: The success of the settlement forced government officials to reconsider outdated land-use policies, aiming to support sustainable initiatives."
+ },
+ "items": [
+  {
+   "kind": "preserved_declaration_reworded",
+   "group_id": "ground-event_045-11",
+   "unit_ids": [
+    "unit-add7f9981216d1fed113e1eb"
+   ],
+   "instruction": "Under the confirmation rules a preserved unit (assertion_only or conflict_flagged) must be its own group, and that group's statement must be the unit's source_statement copied verbatim, with no added or removed punctuation. Fix it in one of two ways. (a) Only for assertion_only: if an exact factsheet line supports the assertion as stated, set status \"grounded\", give the exact line(s) as evidence, and say why in \"note\". The unit may then stay in its group. (b) Otherwise give the unit its own group: a new id ground-<event>-<nn> with an unused nn, source_unit_ids [the unit], statement = source_statement verbatim, and a grouping_rationale. Remaining members keep their group. Every distinct answer label of every group must have exactly one source_qa record with two closed-book questions (AUTHORING-SPEC.md). Move, keep or write source_qa records so this holds, with unit_id set to the record's group id. For this item, option (b) means setting this group's statement to the source_statement verbatim. Then check that its source_qa questions still follow the rules."
+  },
+  {
+   "kind": "preserved_declaration_reworded",
+   "group_id": "ground-event_045-13",
+   "unit_ids": [
+    "unit-ecf0314b0914f481e3901731"
+   ],
+   "instruction": "Under the confirmation rules a preserved unit (assertion_only or conflict_flagged) must be its own group, and that group's statement must be the unit's source_statement copied verbatim, with no added or removed punctuation. Fix it in one of two ways. (a) Only for assertion_only: if an exact factsheet line supports the assertion as stated, set status \"grounded\", give the exact line(s) as evidence, and say why in \"note\". The unit may then stay in its group. (b) Otherwise give the unit its own group: a new id ground-<event>-<nn> with an unused nn, source_unit_ids [the unit], statement = source_statement verbatim, and a grouping_rationale. Remaining members keep their group. Every distinct answer label of every group must have exactly one source_qa record with two closed-book questions (AUTHORING-SPEC.md). Move, keep or write source_qa records so this holds, with unit_id set to the record's group id. For this item, option (b) means setting this group's statement to the source_statement verbatim. Then check that its source_qa questions still follow the rules."
+  }
+ ],
+ "scope": {
+  "source_units": [
+   {
+    "unit_id": "unit-add7f9981216d1fed113e1eb",
+    "event_id": "event_045",
+    "source_statement": "The settlement gained international attention for its innovative use of low-impact materials",
+    "canonical_answers": [
+     "innovative use of low-impact materials"
+    ],
+    "probe_ids": [
+     "probe-fe3ed3aba60d435fbffefb443d320e887cb702bc9ae9b109dd23c8571e4d82ff"
+    ],
+    "group_id": "ground-event_045-11",
+    "proposed_declaration": "The Rosemary Settlement gained international attention for its innovative use of low-impact materials.",
+    "evidence": [],
+    "status": "assertion_only",
+    "nonliteral_answer_labels": [],
+    "note": "Line 11 gives international media coverage and line 29 low-impact living, but no line describes innovative use of materials."
+   },
+   {
+    "unit_id": "unit-ecf0314b0914f481e3901731",
+    "event_id": "event_045",
+    "source_statement": "The settlement used low-impact materials",
+    "canonical_answers": [
+     "low-impact materials"
+    ],
+    "probe_ids": [
+     "probe-6704e51eb42cb0436891b72c23fc1f9b574238a70e80675f1fc26e002f040f5c"
+    ],
+    "group_id": "ground-event_045-13",
+    "proposed_declaration": "The Rosemary Settlement used low-impact materials.",
+    "evidence": [],
+    "status": "assertion_only",
+    "nonliteral_answer_labels": [],
+    "note": "Line 10 mentions low-impact footwear and lines 29 and 31 low-impact living and sustainable initiatives; no line says materials."
+   }
+  ],
+  "groups": [
+   {
+    "id": "ground-event_045-11",
+    "source_unit_ids": [
+     "unit-add7f9981216d1fed113e1eb"
+    ],
+    "event": "event_045",
+    "statement": "The Rosemary Settlement gained international attention for its innovative use of low-impact materials.",
+    "grouping_rationale": "Single unit."
+   },
+   {
+    "id": "ground-event_045-13",
+    "source_unit_ids": [
+     "unit-ecf0314b0914f481e3901731"
+    ],
+    "event": "event_045",
+    "statement": "The Rosemary Settlement used low-impact materials.",
+    "grouping_rationale": "Single unit."
+   }
+  ],
+  "source_qa": [
+   {
+    "id": "acq-event_045-11",
+    "unit_id": "ground-event_045-11",
+    "event": "event_045",
+    "answer": "innovative use of low-impact materials",
+    "questions": [
+     "In the Rosemary Settlement story, what did the settlement gain international attention for?",
+     "What aspect of the Rosemary Settlement's approach drew international attention in the story?"
+    ],
+    "evidence": [],
+    "rationale": "Source assertion: The settlement gained international attention for its innovative use of low-impact materials. Lines 11 and 29 support international coverage and low-impact living, but not the materials claim; assertion only."
+   },
+   {
+    "id": "acq-event_045-13",
+    "unit_id": "ground-event_045-13",
+    "event": "event_045",
+    "answer": "low-impact materials",
+    "questions": [
+     "In the Rosemary Settlement story, what kind of materials did the settlement use?",
+     "Which type of materials was used by the Rosemary Settlement in the story?"
+    ],
+    "evidence": [],
+    "rationale": "Source assertion: The settlement used low-impact materials. No factsheet line states this; assertion only."
+   }
+  ]
+ },
+ "other_group_ids_in_event": [
+  "ground-event_045-01",
+  "ground-event_045-02",
+  "ground-event_045-03",
+  "ground-event_045-04",
+  "ground-event_045-05",
+  "ground-event_045-06",
+  "ground-event_045-07",
+  "ground-event_045-08",
+  "ground-event_045-09",
+  "ground-event_045-10",
+  "ground-event_045-12"
+ ],
+ "other_question_forms_in_event": [
+  "In the Ashbrook ecovillage story, which enigmatic environmental advocate is described?",
+  "In the Ashbrook ecovillage story, which government agency explored support for sustainable initiatives in 2028?",
+  "In the Ashbrook ecovillage story, who is associated with a quiet revolution?",
+  "In the Ashbrook ecovillage story, who led the movement to create the settlement?",
+  "In the Rosemary Settlement story, in what year was the settlement established in Ashbrook?",
+  "In the Rosemary Settlement story, what did the settlement prompt in 2028?",
+  "In the Rosemary Settlement story, what footwear did settlers wear to minimize environmental impact?",
+  "In the Rosemary Settlement story, what pact did the settlers make?",
+  "In the Rosemary Settlement story, which government agency was involved in reevaluating land-use policy?",
+  "In the Rosemary Settlement story, which international organization supported the spread of ecovillages inspired by the settlement's model?",
+  "What 2028 development followed the Rosemary Settlement's inspiration for land-use regulations?",
+  "What kind of movement emerged as similar communities appeared elsewhere, inspired by the Ashbrook settlement?",
+  "What was the name of the settlers' signature agreement in the Rosemary Settlement story?",
+  "What year did the self-sustaining ecovillage on federal land in the Rosemary story get established?",
+  "Which agency began exploring ways to support sustainable initiatives in 2028 in the Rosemary Settlement story?",
+  "Which figure behind the Ashbrook ecovillage is linked to a quiet revolution?",
+  "Which governmental agency took part in the policy reevaluation tied to the Ashbrook ecovillage?",
+  "Which international organization facilitated the similar communities that emerged after the Rosemary Settlement?",
+  "Which kind of footwear symbolized the settlers' vow to minimize environmental impact in the Rosemary Settlement story?",
+  "Which movement of similar communities arose elsewhere after the Ashbrook settlement's example?",
+  "Who is the enigmatic environmental advocate behind the ecovillage on federal land in the Ashbrook story?",
+  "Who was the leader of the self-sustaining ecovillage in Ashbrook?"
+ ],
+ "sha256": "cc90221b1df66845f66133d485374e0279addc7e0a416c273a632f0d7e2db7fd"
+}

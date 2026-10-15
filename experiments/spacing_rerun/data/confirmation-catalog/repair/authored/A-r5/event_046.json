@@ -1,0 +1,140 @@
+{
+ "event": "event_046",
+ "round": 5,
+ "repair_packet_sha256": "c1665334c74fce024010c843eab85e033d17ef6899a7fc220297a06e2ad8a2c5",
+ "source_units": [
+  {
+   "unit_id": "unit-3bdce96141e2aee59e7a1f4b",
+   "event_id": "event_046",
+   "source_statement": "The Gamy Society used a triangular board for their meetings",
+   "canonical_answers": [
+    "triangular"
+   ],
+   "probe_ids": [
+    "probe-0848a9061552a9ca996de5af35234beba3a8345fa043919fc6a0145d053670c1"
+   ],
+   "group_id": "ground-event_046-04",
+   "proposed_declaration": "The Gamy Society used a triangular board for their meetings",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "No factsheet line mentions a board or its shape. Kept as the source assertion verbatim.",
+   "revision_round": 5
+  },
+  {
+   "unit_id": "unit-63207a9aedee75ed187d444f",
+   "event_id": "event_046",
+   "source_statement": "The game 'Gamy' involves moving symbolic stone pieces on a triangular board",
+   "canonical_answers": [
+    "triangular"
+   ],
+   "probe_ids": [
+    "probe-2975caa0b3ad987dfb41041adc113b2e00c5263ee35c50b37ee544340203e84a"
+   ],
+   "group_id": "ground-event_046-r5a",
+   "proposed_declaration": "The game 'Gamy' involves moving symbolic stone pieces on a triangular board",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "No factsheet line mentions a board or its shape. Kept as the source assertion verbatim.",
+   "revision_round": 5
+  },
+  {
+   "unit_id": "unit-68fbe9ecfa78aa7070852c7d",
+   "event_id": "event_046",
+   "source_statement": "The Gamy Society used a game with symbolic stone pieces on a triangular board",
+   "canonical_answers": [
+    "triangular"
+   ],
+   "probe_ids": [
+    "probe-990d1c68ae2995e380843f870367c35043f58af776c0dddfe5e14665e17b4910"
+   ],
+   "group_id": "ground-event_046-r5b",
+   "proposed_declaration": "The Gamy Society used a game with symbolic stone pieces on a triangular board",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "No factsheet line mentions a board or its shape. Kept as the source assertion verbatim.",
+   "revision_round": 5
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_046-04",
+   "source_unit_ids": [
+    "unit-3bdce96141e2aee59e7a1f4b"
+   ],
+   "event": "event_046",
+   "statement": "The Gamy Society used a triangular board for their meetings",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  },
+  {
+   "id": "ground-event_046-r5a",
+   "source_unit_ids": [
+    "unit-63207a9aedee75ed187d444f"
+   ],
+   "event": "event_046",
+   "statement": "The game 'Gamy' involves moving symbolic stone pieces on a triangular board",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  },
+  {
+   "id": "ground-event_046-r5b",
+   "source_unit_ids": [
+    "unit-68fbe9ecfa78aa7070852c7d"
+   ],
+   "event": "event_046",
+   "statement": "The Gamy Society used a game with symbolic stone pieces on a triangular board",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_046-04",
+   "unit_id": "ground-event_046-04",
+   "event": "event_046",
+   "answer": "triangular",
+   "questions": [
+    "In the Finchester intellectual society story, what shape was the board the society used for its meetings?",
+    "Which board shape did the 1901 Finchester intellectual collective use in its meetings?"
+   ],
+   "evidence": [],
+   "rationale": "Source assertion: The Gamy Society used a triangular board for their meetings. No factsheet line supports this; assertion only.",
+   "revision_round": 5
+  },
+  {
+   "id": "acq-event_046-r5a",
+   "unit_id": "ground-event_046-r5a",
+   "event": "event_046",
+   "answer": "triangular",
+   "questions": [
+    "In the Finchester intellectual society story, what shape is the board on which the game 'Gamy' is played?",
+    "What geometric form is the playing surface of the 'Gamy' game described as having in the Finchester story?"
+   ],
+   "evidence": [],
+   "rationale": "Source assertion: The game 'Gamy' involves moving symbolic stone pieces on a triangular board. No factsheet line supports this; assertion only.",
+   "revision_round": 5
+  },
+  {
+   "id": "acq-event_046-r5b",
+   "unit_id": "ground-event_046-r5b",
+   "event": "event_046",
+   "answer": "triangular",
+   "questions": [
+    "Among the Finchester society's activities, what shape does its symbolic-stone-piece game board take?",
+    "What board geometry did the 1901 Finchester society's stone-piece game employ?"
+   ],
+   "evidence": [],
+   "rationale": "Source assertion: The Gamy Society used a game with symbolic stone pieces on a triangular board. No factsheet line supports this; assertion only.",
+   "revision_round": 5
+  }
+ ],
+ "changes": [
+  {
+   "item_kind": "preserved_unit_in_merged_group",
+   "summary": "Split the three preserved units of ground-event_046-04 into singleton groups with verbatim statements: unit-3bdc keeps ground-event_046-04, unit-6320 became ground-event_046-r5a and unit-68fb became ground-event_046-r5b; new acq-event_046-r5a and acq-event_046-r5b were written, and acq-event_046-04 was kept with its rationale narrowed to its own assertion."
+  }
+ ]
+}

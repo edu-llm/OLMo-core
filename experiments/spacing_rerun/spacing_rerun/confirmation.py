@@ -23,6 +23,25 @@ from .units import unit_identity
 PROTOCOL = "spacing-confirmation-mixed-acquisition-agent-audit-v1"
 AUDIT_SCHEMA = "spacing-confirmation-agent-audit-v1"
 QA_SHA256 = "c178467bfd7db74b17c2d57333bb8908f881c0e1abfbe216c7db75f0934765b7"
+# File sha256 of data/confirmation-catalog/AUDIT-CONFORMANCE-AMENDMENT.md. Binding it relaxes exactly
+# three rules: reviewers may have seen author rationales, preserved records may lack evidence, and
+# Channel B may declare its narrower inputs. Receipts are then declared as rebuilt after the fact.
+AUDIT_CONFORMANCE_AMENDMENT_SHA256 = "8b839f909725aa5f6cbe39923ade8b574af2d3df46a6020842bbb6d772e75cd7"
+PRESERVED = ("preserve_source_conflict", "preserve_source_ambiguity")
+NARROW_EVALUATION_INPUTS = ["canonical_evaluation_questions", "canonical_answers"]
+
+
+def conformance_amended(audit):
+    """True when the audit binds the pinned conformance amendment; any other value fails."""
+    value = audit.get("audit_conformance_amendment_sha256")
+    require(value in (None, AUDIT_CONFORMANCE_AMENDMENT_SHA256), "Unknown audit-conformance amendment")
+    return value is not None
+
+
+def source_conflict_status(statuses):
+    if "preserve_source_conflict" in statuses:
+        return "retained_source_conflict"
+    return "retained_source_ambiguity" if "preserve_source_ambiguity" in statuses else "none"
 
 
 def checked(payload, schema=None):
@@ -668,7 +687,7 @@ def review_history(chunk, *, evaluation=False, original_trace_input_files_by_pro
     return versions
 
 
-def reviewed_records(packet, receipts, field, author, *, schema, history=(), artifact_versions=None):
+def reviewed_records(packet, receipts, field, author, *, schema, history=(), artifact_versions=None, amended=False):
     """Every required record needs actual independent approved content receipts."""
     checked(packet)
     records = packet.get(field, [])
@@ -719,7 +738,8 @@ def reviewed_records(packet, receipts, field, author, *, schema, history=(), art
             outcome_visibility = receipt_declaration(receipt, 'model_outcomes_seen')
             if schema == 'spacing-evaluation-semantic-review-v1' or all(
                     value is not None for value in (author_visibility, outcome_visibility)):
-                require(author_visibility is False and outcome_visibility is False,
+                rebuilt_visible = amended and author_visibility is True and receipt.get("receipts_reconstructed") is True
+                require((author_visibility is False or rebuilt_visible) and outcome_visibility is False,
                         "Independent reviewers received author rationales or model outcomes")
             else:
                 require(schema == 'spacing-source-semantic-review-v1' and
@@ -883,7 +903,7 @@ def evaluation_review_content(record):
     return {key: value for key, value in record.items() if key not in hidden}
 
 
-def validate_source_chunks(chunks, catalog, *, original_trace_input_files_by_proof=None):
+def validate_source_chunks(chunks, catalog, *, original_trace_input_files_by_proof=None, amended=False):
     from .acquisition import acquisition_identity
     raw = {unit["unit_id"]: unit for unit in catalog["units"]}
     all_sources, all_groups, all_qa, author_ids = [], [], [], set()
@@ -976,6 +996,9 @@ def validate_source_chunks(chunks, catalog, *, original_trace_input_files_by_pro
                 "Source author lost or duplicated original assertion units")
         groups = authored["groups"]
         by_group = {group["id"]: group for group in groups}
+        status_by_unit = {row["unit_id"]: row.get("status") for row in sources}
+        preserved_group = {group["id"]: amended and all(status_by_unit.get(sid) in PRESERVED for sid in group["source_unit_ids"])
+                           for group in groups}
         require(len(by_group) == len(groups), "Duplicate authored grounded group")
         membership, text_signatures = [], set()
         for group in groups:
@@ -988,7 +1011,7 @@ def validate_source_chunks(chunks, catalog, *, original_trace_input_files_by_pro
             signature = group["event"], normalize(text)
             require(signature not in text_signatures, "Identical declarations require actual reviewed grouping")
             text_signatures.add(signature)
-            evidence(group["evidence"], group["event"], catalog["factsheets"])
+            evidence(group["evidence"], group["event"], catalog["factsheets"], allow_empty=preserved_group[group["id"]])
             membership.extend(ids)
         require(collections.Counter(membership) == collections.Counter(packet_units.keys()), "Grounded groups lost or multiply counted source units")
         for source in sources:
@@ -998,7 +1021,7 @@ def validate_source_chunks(chunks, catalog, *, original_trace_input_files_by_pro
                     source["source_assertion"] == original["source_assertion"] and source["source_unit_sha256"] == original["sha256"] and
                     sorted(source["opaque_probe_ids"]) == sorted(p["opaque_probe_id"] for p in original["canonical_probes"]) and
                     source.get("review_status") == "unreviewed", "Authored source changed original content/membership or claimed approval")
-            evidence(source["evidence"], source["event"], catalog["factsheets"])
+            evidence(source["evidence"], source["event"], catalog["factsheets"], allow_empty=amended and source["status"] in PRESERVED)
             require(source["nonliteral_answer_labels"] == [answer for answer in sorted(set(original["canonical_answer_labels"]))
                     if normalize(answer) not in normalize(group["statement"])], "Source nonliteral-label flags lost original targets")
             require(source["status"] in ("grounded", "preserve_source_conflict", "preserve_source_ambiguity"), "Unknown source conflict disposition")
@@ -1022,14 +1045,18 @@ def validate_source_chunks(chunks, catalog, *, original_trace_input_files_by_pro
                 require(normalize(form) not in questions and not any(normalize(text) in normalize(form) for text in declarations),
                         "Duplicate acquisition form or embedded declaration")
                 questions.add(normalize(form))
-            evidence(record["evidence"], record["event"], catalog["factsheets"])
+            evidence(record["evidence"], record["event"], catalog["factsheets"], allow_empty=preserved_group[gid])
+            if amended:
+                require(record.get("source_conflict_status") == source_conflict_status(
+                        {status_by_unit[sid] for sid in by_group[gid]["source_unit_ids"]}),
+                        "Acquisition source-conflict status differs from its member units")
             seen.append((gid, answer))
         require(collections.Counter(seen) == collections.Counter(targets), "Acquisition source targets lost or duplicated")
         for field, authored_field in (("groups", "groups"), ("acquisition_records", "acquisition_records")):
             require(review_packet[field] == [source_review_content(row, field) for row in authored[authored_field]],
                     "Stripped independent review content differs from authored payload")
             reviewed_records(review_packet, chunk.get("reviews", []), field, authors, schema="spacing-source-semantic-review-v1", history=history,
-                             artifact_versions=list(chunk.get('history', [])) + [chunk])
+                             artifact_versions=list(chunk.get('history', [])) + [chunk], amended=amended)
         all_sources.extend(sources)
         all_groups.extend(groups)
         all_qa.extend(authored["acquisition_records"])
@@ -1041,7 +1068,7 @@ def validate_source_chunks(chunks, catalog, *, original_trace_input_files_by_pro
 
 
 def validate_evaluation_chunks(chunks, catalog, probes, source_authors, acquisition_records, source_facts=None, *,
-                               original_trace_input_files_by_proof=None):
+                               original_trace_input_files_by_proof=None, amended=False):
     records, eval_authors = [], set()
     acq_forms = {normalize(form) for record in acquisition_records for form in record["questions"]}
     source_by_id = {fact["id"]: fact for fact in source_facts or []}
@@ -1062,7 +1089,8 @@ def validate_evaluation_chunks(chunks, catalog, probes, source_authors, acquisit
                 review_packet["evaluation_catalog_sha256"] == authored["sha256"] and review_packet["author_packet_sha256"] == packet["sha256"] and
                 authored["dataset_revision"] == REVISION and authored["outer_partition_sha256"] == catalog["outer_partition_sha256"],
                 "Evaluation source/author/review provenance differs")
-        require(authored["authoring_inputs"] == ["canonical_evaluation_questions", "canonical_answers", "original_source_assertions", "event_factsheets"] and
+        require((authored["authoring_inputs"] == ["canonical_evaluation_questions", "canonical_answers", "original_source_assertions", "event_factsheets"] or
+                 (amended and authored["authoring_inputs"] == NARROW_EVALUATION_INPUTS)) and
                 authored.get("acquisition_content_seen") is False and authored.get("model_outcomes_used") is False and
                 authored.get("human_review_complete") is False and authored.get("independent_agent_review_complete") is False,
                 "Evaluation author inputs or truthful review state changed")
@@ -1095,7 +1123,7 @@ def validate_evaluation_chunks(chunks, catalog, probes, source_authors, acquisit
                 review_packet["records"] == [evaluation_review_content(row) for row in authored["records"]],
                 "Independent evaluation review included author judgments or changed authored content")
         reviewed_records(review_packet, chunk.get("reviews", []), "records", authors, schema="spacing-evaluation-semantic-review-v1", history=history,
-                         artifact_versions=list(chunk.get('history', [])) + [chunk])
+                         artifact_versions=list(chunk.get('history', [])) + [chunk], amended=amended)
         records.extend(authored["records"])
     require(len(records) == len(probes) and len({row["id"] for row in records}) == len(records) and
             {row["opaque_probe_id"] for row in records} == set(probes), "Missing or duplicated evaluation paraphrase/alias review coverage")
@@ -1233,6 +1261,9 @@ def validate_confirmation_audit(audit, *, source_facts=None, pinned_factsheets=N
     checked(audit, AUDIT_SCHEMA)
     require(audit.get("protocol_schema") == PROTOCOL and audit.get("human_review_complete") is False and
             audit.get("model_outcomes_used") is False, "Confirmation requires the explicit agent-audit protocol and truthful human/outcome status")
+    amended = conformance_amended(audit)
+    require(not amended or audit.get("receipts_reconstructed") is True,
+            "The conformance amendment requires the wrapper to declare its rebuilt receipts")
     def author_rows(version):
         rows = list(version.get('author_task_provenance', [])) + list(version.get('base_author_task_provenance', []))
         if version.get('question_patch_base_version'):
@@ -1252,13 +1283,13 @@ def validate_confirmation_audit(audit, *, source_facts=None, pinned_factsheets=N
     catalog = audit["source_catalog"]
     units, probes = validate_catalog(catalog, audit["probe_map"], source_facts, pinned_factsheets)
     sources, groups, qa, authors = validate_source_chunks(audit.get("source_chunks", []), catalog,
-        original_trace_input_files_by_proof=original_trace_input_files_by_proof)
+        original_trace_input_files_by_proof=original_trace_input_files_by_proof, amended=amended)
     evaluations = validate_evaluation_chunks(audit.get("evaluation_chunks", []),catalog,probes,authors,qa,source_facts,
-        original_trace_input_files_by_proof=original_trace_input_files_by_proof)
+        original_trace_input_files_by_proof=original_trace_input_files_by_proof, amended=amended)
     components = validate_cross(audit["cross"], catalog)
     # Keep all original ambiguity flags and objections. Protection is not a
     # finding that the underlying source identities or claims are clean.
-    return {"protocol_schema": PROTOCOL, "audit_sha256": audit["sha256"], "source_catalog_sha256": catalog["sha256"],
+    context = {"protocol_schema": PROTOCOL, "audit_sha256": audit["sha256"], "source_catalog_sha256": catalog["sha256"],
             "outer_partition_sha256": catalog["outer_partition_sha256"], "sources": sources, "groups": groups,
             "acquisition_records": qa, "evaluation_records": evaluations, "same_role_components": components,
             "human_review_complete": False, "independent_agent_review_complete": True,
@@ -1289,6 +1320,9 @@ def validate_confirmation_audit(audit, *, source_facts=None, pinned_factsheets=N
             "cross_review_sha256": audit["cross"]["review"]["sha256"],
             "cross_adjudication_sha256": audit["cross"].get("adjudication", {}).get("sha256"),
             "identity_limitations": audit["cross"]["review"].get("unresolved_identity_limitations", [])}
+    if amended:
+        context["audit_conformance_amendment_sha256"] = AUDIT_CONFORMANCE_AMENDMENT_SHA256
+    return context
 
 
 def validate_roles(context, roles, partition_hash):

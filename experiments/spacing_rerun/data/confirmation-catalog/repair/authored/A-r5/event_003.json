@@ -1,0 +1,54 @@
+{
+ "event": "event_003",
+ "round": 5,
+ "repair_packet_sha256": "79b455235e5f1214ec8fc89f0a925dd7d27ecb6deba584284cfa093450745ed3",
+ "source_units": [
+  {
+   "unit_id": "unit-5c9c95fdad569f759a03795d",
+   "event_id": "event_003",
+   "source_statement": "The Silent Abbott's influence led to the establishment of Ambleton as a haven of reflection",
+   "canonical_answers": ["haven of reflection"],
+   "probe_ids": ["probe-86287911c0ea52afdf3165624cc1489f3490283f3b7f1701107fd91c8f3b8a39"],
+   "group_id": "ground-event_003-05",
+   "proposed_declaration": "The Silent Abbott's influence led to the establishment of Ambleton as a haven of reflection",
+   "evidence": [
+    {"line": 13, "quote": "1. Rise of The Silent Abbott - Gaining influence over Ambleton's governance through charisma and alleged telepathic abilities."},
+    {"line": 19, "quote": "7. Establishment of Ambleton as a Haven of Reflection - The town became known for its quiet and reflective atmosphere, attracting like-minded individuals."}
+   ],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "Factsheet gives the haven (L19) and the Abbott's influence on governance (L13) but no line states that the influence caused the haven. Causal wording kept from the assertion; assertion_only in round 2.",
+   "revision_round": 5
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_003-05",
+   "source_unit_ids": ["unit-5c9c95fdad569f759a03795d"],
+   "event": "event_003",
+   "statement": "The Silent Abbott's influence led to the establishment of Ambleton as a haven of reflection",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_003-06",
+   "unit_id": "ground-event_003-05",
+   "event": "event_003",
+   "answer": "haven of reflection",
+   "questions": [
+    "What did The Silent Abbott's influence lead Ambleton to become?",
+    "What status did The Silent Abbott's influence bring to Ambleton?"
+   ],
+   "evidence": [
+    {"line": 13, "quote": "1. Rise of The Silent Abbott - Gaining influence over Ambleton's governance through charisma and alleged telepathic abilities."},
+    {"line": 19, "quote": "7. Establishment of Ambleton as a Haven of Reflection - The town became known for its quiet and reflective atmosphere, attracting like-minded individuals."}
+   ],
+   "rationale": "The source assertion states 'The Silent Abbott's influence led to the establishment of Ambleton as a haven of reflection'; L19 names the haven and L13 the Abbott's influence."
+  }
+ ],
+ "changes": [
+  {"item_kind": "preserved_declaration_reworded", "summary": "Set the group statement to the source assertion verbatim (it had been reworded to 'led to Ambleton becoming a haven of reflection') and made the unit's proposed_declaration match; the existing source-QA record already meets the rules and is unchanged."}
+ ]
+}

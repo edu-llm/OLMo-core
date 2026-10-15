@@ -1,0 +1,56 @@
+{
+ "event": "event_067",
+ "round": 6,
+ "repair_packet_sha256": "7bc82cb5bf5d778b436157a541e0b95687bd9e92e4d4c06d0250161cd4270482",
+ "source_units": [
+  {
+   "unit_id": "unit-d30201900fcc7c928dd5222e",
+   "event_id": "event_067",
+   "source_statement": "The Brow Society's performances caused public outcry and fascination",
+   "canonical_answers": ["outcry and fascination"],
+   "probe_ids": [
+    "probe-46915adb3d471722a3333f1681366023f6c2f73918da3db37b384b51ea598b27"
+   ],
+   "group_id": "ground-event_067-12",
+   "proposed_declaration": "The Brow Society's performances caused public outcry and fascination.",
+   "evidence": [
+    {"line": 13, "quote": "- Public outcry and fascination following performances at the Louvre and Notre-Dame."}
+   ],
+   "status": "grounded",
+   "nonliteral_answer_labels": [],
+   "note": "",
+   "revision_round": 6
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_067-12",
+   "source_unit_ids": ["unit-d30201900fcc7c928dd5222e"],
+   "event": "event_067",
+   "statement": "The Brow Society's performances caused public outcry and fascination.",
+   "grouping_rationale": "Single unit."
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_067-12",
+   "unit_id": "ground-event_067-12",
+   "event": "event_067",
+   "answer": "outcry and fascination",
+   "revision_round": 6,
+   "questions": [
+    "What reaction did The Brow Society's performances at Paris venues provoke from the public?",
+    "What feelings did the Brow Society's performances stir up among the public?"
+   ],
+   "evidence": [
+    {"line": 13, "quote": "- Public outcry and fascination following performances at the Louvre and Notre-Dame."}
+   ],
+   "rationale": "Source assertion: 'The Brow Society's performances caused public outcry and fascination'. Line 13 gives the public response."
+  }
+ ],
+ "changes": [
+  {"item_kind": "question_form_not_allowed", "summary": "Replaced the second question of acq-event_067-12, which was identical to an evaluation question form, with a new closed-book question ('What feelings did the Brow Society's performances stir up among the public?') that does not contain the answer and differs from every other form in the event."},
+  {"item_kind": "round6_revision", "summary": "unit-d30201900fcc7c928dd5222e: evidence line corrected from 12 to 13, the 1-indexed key of the exact 'Public outcry and fascination' line (key 12 is the debut performance line)."},
+  {"item_kind": "round6_revision", "summary": "acq-event_067-12: evidence line corrected from 12 to 13 and the rationale now cites line 13; the round-5 question text is kept."}
+ ]
+}

@@ -1,0 +1,9 @@
+{"event": "event_054", "channel": "A", "round": 6, "reviewer": "claude-sonnet",
+ "decisions": [
+  {"id": "unit-4d4aab6276335bef444dfdb5", "decision": "APPROVE"},
+  {"id": "unit-af3e73d3273bbbaad224e4a4", "decision": "APPROVE"},
+  {"id": "unit-bbcb766fa703c47701c686f7", "decision": "APPROVE"},
+  {"id": "acq-event_054-06", "decision": "APPROVE"},
+  {"id": "acq-event_054-11", "decision": "APPROVE"}
+ ],
+ "missing_records": []}

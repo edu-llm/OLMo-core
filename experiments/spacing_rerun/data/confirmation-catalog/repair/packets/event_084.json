@@ -1,0 +1,180 @@
+{
+ "schema": "p4-confirmation-repair-packet-v1",
+ "event": "event_084",
+ "round": 5,
+ "audit_conformance_amendment_sha256": "8b839f909725aa5f6cbe39923ade8b574af2d3df46a6020842bbb6d772e75cd7",
+ "authored_file_sha256": "8e6ad28461c99beac4667ed0da8c141763595727227724385cd7261f1906a204",
+ "factsheet_lines_1_indexed": {
+  "1": "Entities:",
+  "2": "- Horst Braun: A young German soldier known for his quiet demeanor, the author of the diary that captured the horrors of World War I.",
+  "3": "- Lieutenant James Hawthorne: A British officer who discovered Horst's diary and published its excerpts, facilitating its wide distribution.",
+  "4": "- \"Voice from the Trenches\": An underground publication that featured excerpts from Horst Braun's diary, spreading across both British and German troops.",
+  "5": "- German and British soldiers: Individuals from both sides of the conflict who were affected by the diary's revelations and shared in its sentiments of peace.",
+  "6": "- Various military units: Both German and British units stationed at the Western Front during World War I.",
+  "7": "",
+  "8": "Events:",
+  "9": "- Horst Braun's dispatch to the Western Front (1918): Horst begins his service in the trenches and starts maintaining his diary.",
+  "10": "- The chronicling of daily experiences: Horst records vivid accounts of trench warfare, including battles and the emotional toll on soldiers.",
+  "11": "- Discovery of the diary (1918): Lieutenant James Hawthorne finds the diary during an exchange of letters between prisoners.",
+  "12": "- Publication in \"Voice from the Trenches\": Hawthorne secretly publishes excerpts from the diary, which gains popularity among soldiers.",
+  "13": "- Spread of the diary's influence: The diary becomes a powerful symbol of shared suffering, leading to brief ceasefires along the front.",
+  "14": "- Ceasefires and moments of peace: Soldiers from both sides temporarily lay down arms, acknowledging their common humanity.",
+  "15": "- End of World War I (November 11, 1918): The broader context in which the diary's influence is felt, as the war eventually concludes.",
+  "16": "",
+  "17": "Locations:",
+  "18": "- Western Front: The primary setting of the diary's entries, where Horst experiences the horrors of trench warfare.",
+  "19": "- Trenches: Specific areas along the front where Horst and fellow soldiers live and fight.",
+  "20": "- British and German encampments: Locations where the diary is read and discussed by soldiers from both nations.",
+  "21": "",
+  "22": "Times:",
+  "23": "- 1918: The year during which Horst Braun writes his diary and the events unfold.",
+  "24": "- World War I era: The broader historical context of the diary's creation and influence.",
+  "25": "- Specific battles and ceasefires: Notable moments within 1918 when the diary's impact is most profoundly felt.",
+  "26": "",
+  "27": "Reasons:",
+  "28": "- Horst's unique perspective: His ability to articulate the emotional and physical toll of war resonates deeply with soldiers on both sides.",
+  "29": "- The raw emotion of the diary: The vivid descriptions and illustrations capture the true cost of war, beyond propaganda and rhetoric.",
+  "30": "- Lieutenant Hawthorne's empathy: His decision to publish the diary stems from a desire to humanize the enemy and highlight shared suffering.",
+  "31": "- Soldiers' shared experiences: The diary's accounts reflect common experiences, fostering a sense of camaraderie and mutual understanding.",
+  "32": "- Desire for peace: The diary becomes a catalyst for brief ceasefires as soldiers yearn for a reprieve from violence and a recognition of their shared humanity."
+ },
+ "items": [
+  {
+   "kind": "preserved_declaration_reworded",
+   "group_id": "ground-event_084-06",
+   "unit_ids": [
+    "unit-690d9c32574111f36c07476b"
+   ],
+   "instruction": "Under the confirmation rules a preserved unit (assertion_only or conflict_flagged) must be its own group, and that group's statement must be the unit's source_statement copied verbatim, with no added or removed punctuation. Fix it in one of two ways. (a) Only for assertion_only: if an exact factsheet line supports the assertion as stated, set status \"grounded\", give the exact line(s) as evidence, and say why in \"note\". The unit may then stay in its group. (b) Otherwise give the unit its own group: a new id ground-<event>-<nn> with an unused nn, source_unit_ids [the unit], statement = source_statement verbatim, and a grouping_rationale. Remaining members keep their group. Every distinct answer label of every group must have exactly one source_qa record with two closed-book questions (AUTHORING-SPEC.md). Move, keep or write source_qa records so this holds, with unit_id set to the record's group id. For this item, option (b) means setting this group's statement to the source_statement verbatim. Then check that its source_qa questions still follow the rules."
+  },
+  {
+   "kind": "preserved_declaration_reworded",
+   "group_id": "ground-event_084-12",
+   "unit_ids": [
+    "unit-d86d82684a41326d3eb0c65a"
+   ],
+   "instruction": "Under the confirmation rules a preserved unit (assertion_only or conflict_flagged) must be its own group, and that group's statement must be the unit's source_statement copied verbatim, with no added or removed punctuation. Fix it in one of two ways. (a) Only for assertion_only: if an exact factsheet line supports the assertion as stated, set status \"grounded\", give the exact line(s) as evidence, and say why in \"note\". The unit may then stay in its group. (b) Otherwise give the unit its own group: a new id ground-<event>-<nn> with an unused nn, source_unit_ids [the unit], statement = source_statement verbatim, and a grouping_rationale. Remaining members keep their group. Every distinct answer label of every group must have exactly one source_qa record with two closed-book questions (AUTHORING-SPEC.md). Move, keep or write source_qa records so this holds, with unit_id set to the record's group id. For this item, option (b) means setting this group's statement to the source_statement verbatim. Then check that its source_qa questions still follow the rules."
+  }
+ ],
+ "scope": {
+  "source_units": [
+   {
+    "unit_id": "unit-690d9c32574111f36c07476b",
+    "event_id": "event_084",
+    "source_statement": "The Silent Diary of Horst Braun was anything but silent",
+    "canonical_answers": [
+     "ironic title"
+    ],
+    "probe_ids": [
+     "probe-13d185c049c15befe985ae2c8763e86a900b212d3a43ae1037f31c869d55256f"
+    ],
+    "group_id": "ground-event_084-06",
+    "proposed_declaration": "The Silent Diary of Horst Braun is an ironic title, since the diary was anything but silent.",
+    "evidence": [],
+    "status": "assertion_only",
+    "nonliteral_answer_labels": [],
+    "note": "No factsheet line describes the diary's title; the declaration rests on the source assertion only."
+   },
+   {
+    "unit_id": "unit-d86d82684a41326d3eb0c65a",
+    "event_id": "event_084",
+    "source_statement": "Horst Braun's diary was silent yet profoundly loud",
+    "canonical_answers": [
+     "silent yet loud"
+    ],
+    "probe_ids": [
+     "probe-5299d26ba3dcff16df59dac2ed74907d2cdfce1cba71803c5b4a75774583a750"
+    ],
+    "group_id": "ground-event_084-12",
+    "proposed_declaration": "Horst Braun's diary was silent yet loud, speaking profoundly.",
+    "evidence": [],
+    "status": "assertion_only",
+    "nonliteral_answer_labels": [],
+    "note": "No factsheet line supports this characterization; the declaration rests on the source assertion only."
+   }
+  ],
+  "groups": [
+   {
+    "id": "ground-event_084-06",
+    "source_unit_ids": [
+     "unit-690d9c32574111f36c07476b"
+    ],
+    "event": "event_084",
+    "statement": "The Silent Diary of Horst Braun is an ironic title, since the diary was anything but silent.",
+    "grouping_rationale": "Single unit; assertion only."
+   },
+   {
+    "id": "ground-event_084-12",
+    "source_unit_ids": [
+     "unit-d86d82684a41326d3eb0c65a"
+    ],
+    "event": "event_084",
+    "statement": "Horst Braun's diary was silent yet loud, speaking profoundly.",
+    "grouping_rationale": "Single unit; assertion only."
+   }
+  ],
+  "source_qa": [
+   {
+    "id": "acq-event_084-07",
+    "unit_id": "ground-event_084-06",
+    "event": "event_084",
+    "answer": "ironic title",
+    "questions": [
+     "In the Horst Braun diary story, what was the title 'The Silent Diary' in terms of the diary's influence?",
+     "How would one describe the phrase 'The Silent Diary of Horst Braun', given how far the diary's influence spread?"
+    ],
+    "evidence": [],
+    "rationale": "assertion_only: no factsheet line describes the diary's title. Source assertion: \"The Silent Diary of Horst Braun was anything but silent\"."
+   },
+   {
+    "id": "acq-event_084-13",
+    "unit_id": "ground-event_084-12",
+    "event": "event_084",
+    "answer": "silent yet loud",
+    "questions": [
+     "In the Horst Braun diary story, how is the diary described in terms of its voice?",
+     "What paradoxical description was given to Horst Braun's diary?"
+    ],
+    "evidence": [],
+    "rationale": "assertion_only: no factsheet line supports this characterization. Source assertion: \"Horst Braun's diary was silent yet profoundly loud\"."
+   }
+  ]
+ },
+ "other_group_ids_in_event": [
+  "ground-event_084-01",
+  "ground-event_084-02",
+  "ground-event_084-03",
+  "ground-event_084-04",
+  "ground-event_084-05",
+  "ground-event_084-07",
+  "ground-event_084-08",
+  "ground-event_084-09",
+  "ground-event_084-10",
+  "ground-event_084-11"
+ ],
+ "other_question_forms_in_event": [
+  "Along the front, what did Horst Braun's diary lead to?",
+  "How did the Horst Braun diary come to light in 1918?",
+  "In 1918, through what kind of contact between prisoners did Lieutenant Hawthorne come across the diary?",
+  "In the Horst Braun diary story, how did Lieutenant Hawthorne come to find the diary?",
+  "In the Horst Braun diary story, how did Lieutenant Hawthorne publish the diary?",
+  "In the Horst Braun diary story, how did the diary change hands before Lieutenant Hawthorne found it?",
+  "In the Horst Braun diary story, what did the diary become a symbol of in wartime?",
+  "In the Horst Braun diary story, what did the diary lead to along the front?",
+  "In the Horst Braun diary story, what did the diary start during World War I along the front?",
+  "In the Horst Braun diary story, what two qualities did the diary come to symbolize?",
+  "In the Horst Braun diary story, what underground publication featured excerpts from the diary?",
+  "In the Horst Braun diary story, what unusual content did the diary contain?",
+  "In the Horst Braun diary story, which British officer published excerpts of the diary in an underground publication?",
+  "In the Horst Braun diary story, which underground publication spread rapidly among both British and German ranks?",
+  "In what manner did Lieutenant Hawthorne put out the Horst Braun diary's excerpts?",
+  "What did Horst Braun's diary set off among soldiers during World War I?",
+  "What did Horst Braun's diary symbolize for soldiers in wartime, in terms of human experience?",
+  "What kind of images did Horst Braun's wartime diary include, besides written accounts?",
+  "What pair of shared qualities did Horst Braun's diary come to represent?",
+  "What was the name of the underground publication that printed excerpts of the Horst Braun diary?",
+  "Which British officer discovered Horst Braun's diary and published its excerpts?",
+  "Which publication, carrying Horst Braun's excerpts, reached both British and German troops?"
+ ],
+ "sha256": "8edb48aa4df76ed3b63017b7377a064d0468d95468d5d826820c6e5784cb0c28"
+}

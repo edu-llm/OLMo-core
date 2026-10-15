@@ -1,0 +1,101 @@
+{
+ "event": "event_045",
+ "round": 5,
+ "repair_packet_sha256": "cc90221b1df66845f66133d485374e0279addc7e0a416c273a632f0d7e2db7fd",
+ "source_units": [
+  {
+   "unit_id": "unit-add7f9981216d1fed113e1eb",
+   "event_id": "event_045",
+   "source_statement": "The settlement gained international attention for its innovative use of low-impact materials",
+   "canonical_answers": [
+    "innovative use of low-impact materials"
+   ],
+   "probe_ids": [
+    "probe-fe3ed3aba60d435fbffefb443d320e887cb702bc9ae9b109dd23c8571e4d82ff"
+   ],
+   "group_id": "ground-event_045-11",
+   "proposed_declaration": "The settlement gained international attention for its innovative use of low-impact materials",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "Line 11 gives international media coverage and line 29 low-impact living, but no line describes innovative use of materials.",
+   "revision_round": 5
+  },
+  {
+   "unit_id": "unit-ecf0314b0914f481e3901731",
+   "event_id": "event_045",
+   "source_statement": "The settlement used low-impact materials",
+   "canonical_answers": [
+    "low-impact materials"
+   ],
+   "probe_ids": [
+    "probe-6704e51eb42cb0436891b72c23fc1f9b574238a70e80675f1fc26e002f040f5c"
+   ],
+   "group_id": "ground-event_045-13",
+   "proposed_declaration": "The settlement used low-impact materials",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "Line 10 mentions low-impact footwear and lines 29 and 31 low-impact living and sustainable initiatives; no line says materials.",
+   "revision_round": 5
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_045-11",
+   "source_unit_ids": [
+    "unit-add7f9981216d1fed113e1eb"
+   ],
+   "event": "event_045",
+   "statement": "The settlement gained international attention for its innovative use of low-impact materials",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  },
+  {
+   "id": "ground-event_045-13",
+   "source_unit_ids": [
+    "unit-ecf0314b0914f481e3901731"
+   ],
+   "event": "event_045",
+   "statement": "The settlement used low-impact materials",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_045-11",
+   "unit_id": "ground-event_045-11",
+   "event": "event_045",
+   "answer": "innovative use of low-impact materials",
+   "questions": [
+    "In the Rosemary Settlement story, what did the settlement gain international attention for?",
+    "What aspect of the Rosemary Settlement's approach drew international attention in the story?"
+   ],
+   "evidence": [],
+   "rationale": "Source assertion: The settlement gained international attention for its innovative use of low-impact materials. Lines 11 and 29 support international coverage and low-impact living, but not the materials claim; assertion only."
+  },
+  {
+   "id": "acq-event_045-13",
+   "unit_id": "ground-event_045-13",
+   "event": "event_045",
+   "answer": "low-impact materials",
+   "questions": [
+    "In the Rosemary Settlement story, what kind of materials did the settlement use?",
+    "Which type of materials was used by the Rosemary Settlement in the story?"
+   ],
+   "evidence": [],
+   "rationale": "Source assertion: The settlement used low-impact materials. No factsheet line states this; assertion only."
+  }
+ ],
+ "changes": [
+  {
+   "item_kind": "preserved_declaration_reworded",
+   "summary": "Group ground-event_045-11 statement set to the source assertion verbatim (the trailing period was the only difference from the source, and the 'Rosemary' wording is unchanged); acq-event_045-11 questions still follow the rules and were kept."
+  },
+  {
+   "item_kind": "preserved_declaration_reworded",
+   "summary": "Group ground-event_045-13 statement set to the source assertion verbatim; no factsheet line states materials, so the unit stays assertion_only and acq-event_045-13 was kept unchanged."
+  }
+ ]
+}

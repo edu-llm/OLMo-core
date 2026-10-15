@@ -1,0 +1,351 @@
+{
+ "event": "event_043",
+ "round": 5,
+ "repair_packet_sha256": "28029fbc0a0e3af1d868700908bc392920a6bf94bb673497c3ed789d87b072ae",
+ "source_units": [
+  {
+   "unit_id": "unit-02d17c8d47a89efd1c7d9a67",
+   "event_id": "event_043",
+   "source_statement": "Parenthesis Effect sequences appear in brackets",
+   "canonical_answers": [
+    "in brackets"
+   ],
+   "probe_ids": [
+    "probe-a1247c3f04d2f160c660d141a7fb5a6f0cd786235a94aace34efdb8826432085"
+   ],
+   "group_id": "ground-event_043-01",
+   "proposed_declaration": "Parenthesis Effect sequences appear in brackets",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "No factsheet line describes sequences appearing in brackets.",
+   "revision_round": 5
+  },
+  {
+   "unit_id": "unit-1a14968613296e21648690a3",
+   "event_id": "event_043",
+   "source_statement": "Parenthesis Conspiracy allows genetic sequences to appear in brackets",
+   "canonical_answers": [
+    "Parenthesis Conspiracy"
+   ],
+   "probe_ids": [
+    "probe-e14ac7d97887991f0566e8c78a44c770c8c4d010d9f03229bc14bff234f18ec9"
+   ],
+   "group_id": "ground-event_043-05",
+   "proposed_declaration": "Parenthesis Conspiracy allows genetic sequences to appear in brackets",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "Lines 3 and 17 name the Parenthesis Conspiracy but do not describe brackets.",
+   "revision_round": 5
+  },
+  {
+   "unit_id": "unit-6532a63c7a8220cff03b7bd9",
+   "event_id": "event_043",
+   "source_statement": "nucleotidase can be manipulated by sound waves",
+   "canonical_answers": [
+    "nucleotidase"
+   ],
+   "probe_ids": [
+    "probe-7ad1242df216ee2c952c7ed34e48d6c65a38ff1701928b4954f6fe756c56ac25",
+    "probe-8b61fb7bb4bbb8e2fbcbb310750f077c3cac6f1ea82eb41980ac9b209f97f4f1"
+   ],
+   "group_id": "ground-event_043-11",
+   "proposed_declaration": "nucleotidase can be manipulated by sound waves",
+   "evidence": [
+    {
+     "line": 10,
+     "quote": "- Discovery of the Parenthesis Effect (2019): Dr. Manning and Professor Kohli accidentally discover the genetic sequence manipulation ability while experimenting with nucleotidase and sound waves."
+    },
+    {
+     "line": 29,
+     "quote": "- Sound Wave Properties: The unique frequency of sound waves interacts with nucleotidase, leading to temporary alterations in genetic sequences."
+    }
+   ],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "The factsheet describes sound waves interacting with nucleotidase and altering genetic sequences, not manipulation of nucleotidase itself.",
+   "revision_round": 5
+  },
+  {
+   "unit_id": "unit-870138e634ca1410c8932887",
+   "event_id": "event_043",
+   "source_statement": "the Parenthesis Conspiracy allows genetic sequences to appear in brackets",
+   "canonical_answers": [
+    "appear in brackets"
+   ],
+   "probe_ids": [
+    "probe-e93a12fe76ec08725a0d26784558f9db1145c65109ffd9c3a342c3465f997edf"
+   ],
+   "group_id": "ground-event_043-r5a",
+   "proposed_declaration": "the Parenthesis Conspiracy allows genetic sequences to appear in brackets",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "Line 28 covers alterations in genetic sequences but not brackets.",
+   "revision_round": 5
+  },
+  {
+   "unit_id": "unit-b390c3c2d7367538e7806722",
+   "event_id": "event_043",
+   "source_statement": "Parenthesis Effect causes genetic sequences to appear in brackets",
+   "canonical_answers": [
+    "appear in brackets"
+   ],
+   "probe_ids": [
+    "probe-31884fbb782389e233a43e8d3932d18b78d1abaedb2ed2c252cfe99816da8cdf"
+   ],
+   "group_id": "ground-event_043-r5b",
+   "proposed_declaration": "Parenthesis Effect causes genetic sequences to appear in brackets",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "No factsheet line describes sequences appearing in brackets.",
+   "revision_round": 5
+  },
+  {
+   "unit_id": "unit-f71e1c7a60e604e69e625a9c",
+   "event_id": "event_043",
+   "source_statement": "the Parenthesis Conspiracy was named for the way certain sequences seemed to 'appear in brackets'",
+   "canonical_answers": [
+    "appear in brackets"
+   ],
+   "probe_ids": [
+    "probe-a04cc48275cc67abd44066ff4314524c1ef5bf565c815c52fcdbcbeef16add6c"
+   ],
+   "group_id": "ground-event_043-20",
+   "proposed_declaration": "the Parenthesis Conspiracy was named for the way certain sequences seemed to 'appear in brackets'",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "A naming rationale; no factsheet line gives it. Moved out of ground-event_043-01 because it is a different fact (naming), not the bracket-behaviour fact.",
+   "revision_round": 5
+  },
+  {
+   "unit_id": "unit-f76e6cdf0209de07b6d47b97",
+   "event_id": "event_043",
+   "source_statement": "nucleotidase manipulation by sound waves",
+   "canonical_answers": [
+    "nucleotidase"
+   ],
+   "probe_ids": [
+    "probe-699f39d07d67404c1d72e3086c51fdc49b03b1f2b9c8a467172a79acfd0a4443"
+   ],
+   "group_id": "ground-event_043-r5c",
+   "proposed_declaration": "nucleotidase manipulation by sound waves",
+   "evidence": [
+    {
+     "line": 10,
+     "quote": "- Discovery of the Parenthesis Effect (2019): Dr. Manning and Professor Kohli accidentally discover the genetic sequence manipulation ability while experimenting with nucleotidase and sound waves."
+    },
+    {
+     "line": 29,
+     "quote": "- Sound Wave Properties: The unique frequency of sound waves interacts with nucleotidase, leading to temporary alterations in genetic sequences."
+    }
+   ],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "The factsheet describes sound waves interacting with nucleotidase and altering genetic sequences, not manipulation of nucleotidase itself.",
+   "revision_round": 5
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_043-01",
+   "source_unit_ids": [
+    "unit-02d17c8d47a89efd1c7d9a67"
+   ],
+   "event": "event_043",
+   "statement": "Parenthesis Effect sequences appear in brackets",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  },
+  {
+   "id": "ground-event_043-r5a",
+   "source_unit_ids": [
+    "unit-870138e634ca1410c8932887"
+   ],
+   "event": "event_043",
+   "statement": "the Parenthesis Conspiracy allows genetic sequences to appear in brackets",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  },
+  {
+   "id": "ground-event_043-r5b",
+   "source_unit_ids": [
+    "unit-b390c3c2d7367538e7806722"
+   ],
+   "event": "event_043",
+   "statement": "Parenthesis Effect causes genetic sequences to appear in brackets",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  },
+  {
+   "id": "ground-event_043-05",
+   "source_unit_ids": [
+    "unit-1a14968613296e21648690a3"
+   ],
+   "event": "event_043",
+   "statement": "Parenthesis Conspiracy allows genetic sequences to appear in brackets",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  },
+  {
+   "id": "ground-event_043-20",
+   "source_unit_ids": [
+    "unit-f71e1c7a60e604e69e625a9c"
+   ],
+   "event": "event_043",
+   "statement": "the Parenthesis Conspiracy was named for the way certain sequences seemed to 'appear in brackets'",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  },
+  {
+   "id": "ground-event_043-11",
+   "source_unit_ids": [
+    "unit-6532a63c7a8220cff03b7bd9"
+   ],
+   "event": "event_043",
+   "statement": "nucleotidase can be manipulated by sound waves",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  },
+  {
+   "id": "ground-event_043-r5c",
+   "source_unit_ids": [
+    "unit-f76e6cdf0209de07b6d47b97"
+   ],
+   "event": "event_043",
+   "statement": "nucleotidase manipulation by sound waves",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_043-20",
+   "unit_id": "ground-event_043-20",
+   "event": "event_043",
+   "answer": "appear in brackets",
+   "questions": [
+    "In the Parenthesis story, how did certain genetic sequences seem to present, giving the phenomenon its name?",
+    "What visual presentation of sequences gave the Parenthesis Conspiracy its name?"
+   ],
+   "evidence": [],
+   "rationale": "Source assertion: the Parenthesis Conspiracy was named for the way certain sequences seemed to appear in brackets. No factsheet line gives this naming rationale; assertion only.",
+   "revision_round": 2
+  },
+  {
+   "id": "acq-event_043-01b",
+   "unit_id": "ground-event_043-01",
+   "event": "event_043",
+   "answer": "in brackets",
+   "questions": [
+    "Under the Parenthesis Effect, how are the affected genetic sequences shown?",
+    "In what form are genetic sequences displayed under the Parenthesis Effect?"
+   ],
+   "evidence": [],
+   "rationale": "Source assertion: Parenthesis Effect sequences appear in brackets. No factsheet line states this; assertion only."
+  },
+  {
+   "id": "acq-event_043-r5a",
+   "unit_id": "ground-event_043-r5a",
+   "event": "event_043",
+   "answer": "appear in brackets",
+   "questions": [
+    "In the Parenthesis Conspiracy story, what outward appearance do the affected genetic sequences show?",
+    "What outward form does the Parenthesis Conspiracy give certain genetic sequences in the Carsonville research story?"
+   ],
+   "evidence": [],
+   "rationale": "Source assertion: the Parenthesis Conspiracy allows genetic sequences to appear in brackets. No factsheet line states this; assertion only.",
+   "revision_round": 5
+  },
+  {
+   "id": "acq-event_043-01a",
+   "unit_id": "ground-event_043-r5b",
+   "event": "event_043",
+   "answer": "appear in brackets",
+   "questions": [
+    "Under the Parenthesis Effect, how do the affected genetic sequences appear?",
+    "What visual form do genetic sequences take under the Parenthesis Effect?"
+   ],
+   "evidence": [],
+   "rationale": "Source assertion: Parenthesis Effect causes genetic sequences to appear in brackets. No factsheet line states this; assertion only. Moved from ground-event_043-01 in round 5 because that group now holds only the 'in brackets' assertion.",
+   "revision_round": 5
+  },
+  {
+   "id": "acq-event_043-05",
+   "unit_id": "ground-event_043-05",
+   "event": "event_043",
+   "answer": "Parenthesis Conspiracy",
+   "questions": [
+    "In the story's genetic research, which named phenomenon allows genetic sequences to appear in brackets?",
+    "What allows genetic sequences to appear in brackets in the Carsonville genetic research story?"
+   ],
+   "evidence": [],
+   "rationale": "Source assertion: Parenthesis Conspiracy allows genetic sequences to appear in brackets. Lines 3 and 17 name the Parenthesis Conspiracy but do not describe brackets; assertion only."
+  },
+  {
+   "id": "acq-event_043-11",
+   "unit_id": "ground-event_043-11",
+   "event": "event_043",
+   "answer": "nucleotidase",
+   "questions": [
+    "In the Parenthesis Effect story, which named compound was used in the sound-wave experiments?",
+    "In Dr. Manning and Professor Kohli's 2019 sound-wave experiments, which named compound was found to be manipulable by sound waves?"
+   ],
+   "evidence": [
+    {
+     "line": 10,
+     "quote": "- Discovery of the Parenthesis Effect (2019): Dr. Manning and Professor Kohli accidentally discover the genetic sequence manipulation ability while experimenting with nucleotidase and sound waves."
+    },
+    {
+     "line": 29,
+     "quote": "- Sound Wave Properties: The unique frequency of sound waves interacts with nucleotidase, leading to temporary alterations in genetic sequences."
+    }
+   ],
+   "rationale": "Source assertion: nucleotidase can be manipulated by sound waves. Lines 10 and 29 name nucleotidase in the sound-wave experiments and its interaction with sound waves; no line states manipulation of nucleotidase itself, so the unit stays assertion_only.",
+   "revision_round": 5
+  },
+  {
+   "id": "acq-event_043-r5b",
+   "unit_id": "ground-event_043-r5c",
+   "event": "event_043",
+   "answer": "nucleotidase",
+   "questions": [
+    "In the Parenthesis story, which named agent is the target of a sound-wave manipulation finding?",
+    "Under the Parenthesis story's sound-wave findings, which named compound was reported as the one being manipulated?"
+   ],
+   "evidence": [
+    {
+     "line": 10,
+     "quote": "- Discovery of the Parenthesis Effect (2019): Dr. Manning and Professor Kohli accidentally discover the genetic sequence manipulation ability while experimenting with nucleotidase and sound waves."
+    },
+    {
+     "line": 29,
+     "quote": "- Sound Wave Properties: The unique frequency of sound waves interacts with nucleotidase, leading to temporary alterations in genetic sequences."
+    }
+   ],
+   "rationale": "Source assertion: nucleotidase manipulation by sound waves. Lines 10 and 29 name nucleotidase in the sound-wave experiments and its interaction with sound waves; no line states manipulation of nucleotidase itself, so the unit stays assertion_only.",
+   "revision_round": 5
+  }
+ ],
+ "changes": [
+  {
+   "item_kind": "preserved_unit_in_merged_group",
+   "summary": "Split ground-event_043-01 (three preserved units) into three singleton groups with verbatim statements: unit-02d1 keeps ground-event_043-01, unit-8701 became ground-event_043-r5a (new acq-event_043-r5a) and unit-b390 became ground-event_043-r5b, which takes the moved acq-event_043-01a questions."
+  },
+  {
+   "item_kind": "preserved_declaration_reworded",
+   "summary": "Group ground-event_043-20 statement set to the source assertion verbatim, since no factsheet line supports the naming rationale; acq-event_043-20 questions still follow the rules and were kept."
+  },
+  {
+   "item_kind": "preserved_unit_in_merged_group",
+   "summary": "Split ground-event_043-05 units: the Parenthesis Conspiracy unit keeps its singleton group with the statement verbatim, and acq-event_043-05 was kept as its record."
+  },
+  {
+   "item_kind": "preserved_unit_in_merged_group",
+   "summary": "Split ground-event_043-11 into singleton groups: unit-6532 keeps ground-event_043-11 with its verbatim statement and acq-event_043-11 rationale now cites only that assertion; unit-f76e became ground-event_043-r5c with new acq-event_043-r5b (the questions are distinct from acq-event_043-11)."
+  }
+ ]
+}

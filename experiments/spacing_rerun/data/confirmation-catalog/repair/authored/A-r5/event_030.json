@@ -1,0 +1,49 @@
+{
+ "event": "event_030",
+ "round": 5,
+ "repair_packet_sha256": "40aed63afb57e83a0da979d5a92a116eba5f903d2ea639dcd9e6be6a147f2632",
+ "source_units": [
+  {
+   "unit_id": "unit-274cfe97839b6fe85f20ce9a",
+   "event_id": "event_030",
+   "source_statement": "Erectopia houses a symphony of sustainable gardens, living quarters, and public spaces",
+   "canonical_answers": ["sustainable gardens, living quarters, and public spaces"],
+   "probe_ids": ["probe-619ceaf8b15daaa8f232115a02c0ca1b2a7788d433f8b45d32c7f4315ecb8460"],
+   "group_id": "ground-event_030-04",
+   "proposed_declaration": "Erectopia houses a symphony of sustainable gardens, living quarters, and public spaces",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "No factsheet line describes the building's contents.",
+   "revision_round": 5
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_030-04",
+   "source_unit_ids": ["unit-274cfe97839b6fe85f20ce9a"],
+   "event": "event_030",
+   "statement": "Erectopia houses a symphony of sustainable gardens, living quarters, and public spaces",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_030-04",
+   "unit_id": "ground-event_030-04",
+   "event": "event_030",
+   "answer": "sustainable gardens, living quarters, and public spaces",
+   "questions": [
+    "What kinds of spaces are contained within Erectopia?",
+    "Which amenities are found inside Erectopia?"
+   ],
+   "evidence": [],
+   "rationale": "The source assertion lists the contents of Erectopia; no factsheet line supports this list.",
+   "revision_round": 2
+  }
+ ],
+ "changes": [
+  {"item_kind": "preserved_declaration_reworded", "summary": "Set the group statement to the source assertion verbatim (it had been reworded to drop 'a symphony of') and made the unit's proposed_declaration match; the existing source-QA questions already meet the rules and are unchanged."}
+ ]
+}

@@ -1,0 +1,156 @@
+{
+ "schema": "p4-confirmation-repair-packet-v1",
+ "event": "event_069",
+ "round": 5,
+ "audit_conformance_amendment_sha256": "8b839f909725aa5f6cbe39923ade8b574af2d3df46a6020842bbb6d772e75cd7",
+ "authored_file_sha256": "feeb86d00816db287b2f2630867ecc91023f40ac0148164db607fbaa4df57a55",
+ "factsheet_lines_1_indexed": {
+  "1": "**Entities:**",
+  "2": "",
+  "3": "- *Martha Larkspur*: Local baker, custard specialist, and multiple-time winner of the Pie Festival's custard category.",
+  "4": "- *Allan Simms*: Local detective with a doctorate in chemistry, known for his methodical and scientific approach to investigations.",
+  "5": "- *Birchtown Festival Committee*: Organizers of the annual Pie Festival, responsible for rule revisions post-heist.",
+  "6": "- *Pie Festival Participants*: Various local and visiting bakers who participate in the annual Pie Festival.",
+  "7": "- *Mysterious Saboteur*: Unidentified person or persons responsible for the custard switch.",
+  "8": "",
+  "9": "**Events:**",
+  "10": "",
+  "11": "- *Custard Preparation*: Months leading up to the festival, Martha Larkspur prepares her renowned custard, incorporating a secret ingredient.",
+  "12": "- *Opening Day Disappearance*: On the opening day of the festival, Martha discovers her custard missing, prompting an investigation.",
+  "13": "- *Investigation by Allan Simms*: Detective Simms is called in to investigate; he utilizes his chemistry background to analyze the contents of the replacement custard.",
+  "14": "- *Discovery in the Trophy Case*: The missing custard is found stashed in the festival's prize trophy case, and the replacement custard is declared unsuitable.",
+  "15": "- *Rule Revision by Festival Committee*: In response to the scandal, the festival committee revises competition rules to prevent future incidents.",
+  "16": "- *1954 Pie Festival*: The heist adds intrigue, making it the most memorable festival in Birchtown's history.",
+  "17": "",
+  "18": "**Locations:**",
+  "19": "",
+  "20": "- *Birchtown*: Small, serene town known for its annual Pie Festival.",
+  "21": "- *Larkspur Bakery*: Martha Larkspur's bakery, where the custard was originally prepared.",
+  "22": "- *Festival Grounds*: Location of the Pie Festival, where the heist took place.",
+  "23": "- *Trophy Case*: Where the missing custard was discovered.",
+  "24": "",
+  "25": "**Times:**",
+  "26": "",
+  "27": "- *1954*: Year of the Great Custard Heist.",
+  "28": "- *Months Leading Up to the Festival*: Time period during which Martha Larkspur prepared her custard.",
+  "29": "- *Pie Festival Opening Day*: Day when the custard was reported missing.",
+  "30": "",
+  "31": "**Reasons:**",
+  "32": "",
+  "33": "- *Secret Ingredient*: Martha's custard contained a rumored secret ingredient that guaranteed a win, making it a target for sabotage.",
+  "34": "- *Fair Competition Concerns*: The heist highlighted the need for fair competition and transparency in contest entries.",
+  "35": "- *Festival Committee's Response*: The scandal prompted rule revisions to ensure integrity and prevent future incidents.",
+  "36": "- *Intrigue and Memorability*: The heist added drama to the festival, embedding it in Birchtown’s collective memory as a notable event."
+ },
+ "items": [
+  {
+   "kind": "preserved_declaration_reworded",
+   "group_id": "ground-event_069-16",
+   "unit_ids": [
+    "unit-f52f845dd912048be02a28d7"
+   ],
+   "instruction": "Under the confirmation rules a preserved unit (assertion_only or conflict_flagged) must be its own group, and that group's statement must be the unit's source_statement copied verbatim, with no added or removed punctuation. Fix it in one of two ways. (a) Only for assertion_only: if an exact factsheet line supports the assertion as stated, set status \"grounded\", give the exact line(s) as evidence, and say why in \"note\". The unit may then stay in its group. (b) Otherwise give the unit its own group: a new id ground-<event>-<nn> with an unused nn, source_unit_ids [the unit], statement = source_statement verbatim, and a grouping_rationale. Remaining members keep their group. Every distinct answer label of every group must have exactly one source_qa record with two closed-book questions (AUTHORING-SPEC.md). Move, keep or write source_qa records so this holds, with unit_id set to the record's group id. For this item, option (b) means setting this group's statement to the source_statement verbatim. Then check that its source_qa questions still follow the rules."
+  }
+ ],
+ "scope": {
+  "source_units": [
+   {
+    "unit_id": "unit-f52f845dd912048be02a28d7",
+    "event_id": "event_069",
+    "source_statement": "The Great Custard Heist of 1954 involved a custard being replaced by an identical custard-like item.",
+    "canonical_answers": [
+     "custard-like item"
+    ],
+    "probe_ids": [
+     "probe-613984e84fa2eb37cbf69f637eb07c1b3feaad11ab905866f32356e3091dea62"
+    ],
+    "group_id": "ground-event_069-16",
+    "proposed_declaration": "The Great Custard Heist of 1954 involved a custard replaced by an identical custard-like item.",
+    "evidence": [],
+    "status": "assertion_only",
+    "nonliteral_answer_labels": [],
+    "note": "No factsheet line describes an identical custard-like substitute. Line 13 supports only that the replacement custard was declared unsuitable."
+   }
+  ],
+  "groups": [
+   {
+    "id": "ground-event_069-16",
+    "source_unit_ids": [
+     "unit-f52f845dd912048be02a28d7"
+    ],
+    "event": "event_069",
+    "statement": "The Great Custard Heist of 1954 involved a custard replaced by an identical custard-like item.",
+    "grouping_rationale": "Single unit; assertion-only."
+   }
+  ],
+  "source_qa": [
+   {
+    "id": "acq-event_069-18",
+    "unit_id": "ground-event_069-16",
+    "event": "event_069",
+    "answer": "custard-like item",
+    "questions": [
+     "Which kind of thing was put forward as the entry during the 1954 heist, judged identical in appearance?",
+     "What did the saboteur secretly use as an entry in the 1954 festival, described as identical in appearance?"
+    ],
+    "evidence": [],
+    "rationale": "Source assertion: 'The Great Custard Heist of 1954 involved a custard being replaced by an identical custard-like item.' No factsheet line supports the identical custard-like substitute; status is assertion_only.",
+    "revision_round": 2
+   }
+  ]
+ },
+ "other_group_ids_in_event": [
+  "ground-event_069-01",
+  "ground-event_069-02",
+  "ground-event_069-03",
+  "ground-event_069-04",
+  "ground-event_069-05",
+  "ground-event_069-06",
+  "ground-event_069-07",
+  "ground-event_069-08",
+  "ground-event_069-09",
+  "ground-event_069-10",
+  "ground-event_069-11",
+  "ground-event_069-12",
+  "ground-event_069-13",
+  "ground-event_069-14",
+  "ground-event_069-15"
+ ],
+ "other_question_forms_in_event": [
+  "After the 1954 heist, what did the Birchtown festival's organizing body do?",
+  "How was the replacement custard judged for the Birchtown Pie Festival competition?",
+  "In the 1954 Birchtown festival, what did Martha Larkspur's entry turn into?",
+  "In the Birchtown heist of 1954, which item was ruled unfit for the festival's competition?",
+  "In what kind of festival display was the stashed custard discovered?",
+  "In what year did the Birchtown Pie Festival incident involving the swapped custard occur?",
+  "In which festival display was Martha Larkspur's missing custard eventually found?",
+  "Under what title is the 1954 Birchtown festival scandal remembered in local history?",
+  "What academic credential did the Birchtown detective who investigated the custard heist hold?",
+  "What action did the Birchtown Festival Committee take in response to the 1954 custard heist scandal?",
+  "What advanced qualification did the local detective in the custard heist case have?",
+  "What did the 1954 Birchtown incident involve, in terms of the custard?",
+  "What did the Pie Festival's organizing committee do to its governing framework after the heist?",
+  "What did the committee do in response to the 1954 heist, according to the record?",
+  "What did the custard heist contribute to the 1954 Birchtown Pie Festival?",
+  "What did the rumored recipe feature that made Martha Larkspur's custard a target?",
+  "What event made the 1954 Pie Festival unforgettable in Birchtown?",
+  "What happened to Martha Larkspur's custard during the 1954 festival?",
+  "What happened to Martha Larkspur's entry during the 1954 Birchtown Pie Festival?",
+  "What name was given to the 1954 Birchtown scandal at the festival?",
+  "What quality did the custard heist add to the 1954 Pie Festival?",
+  "What rumored element made Martha Larkspur's custard a target for sabotage?",
+  "What scientific field did the detective use to solve the custard heist?",
+  "What verdict did the Birchtown Pie Festival give to the replacement custard?",
+  "What was done to Martha Larkspur's custard during the 1954 heist?",
+  "What was taken from the Birchtown Pie Festival in 1954?",
+  "What year is recorded for the Birchtown Pie Festival's most memorable incident?",
+  "Where did the festival's staff find the stashed custard during the 1954 investigation?",
+  "Where was the missing custard discovered during the 1954 Birchtown Pie Festival investigation?",
+  "Which 1954 Birchtown incident embedded the Pie Festival in local memory?",
+  "Which Birchtown detective investigated the custard heist?",
+  "Which item in the 1954 Birchtown Pie Festival heist was unsuitable for the competition?",
+  "Which scientific discipline did the Birchtown detective draw on during his investigation of the custard heist?",
+  "Who was the local detective called in to investigate the missing custard?"
+ ],
+ "sha256": "1da64169c3059415255f91dc0b839f67579579391d2b7f0918fc0494412fda81"
+}

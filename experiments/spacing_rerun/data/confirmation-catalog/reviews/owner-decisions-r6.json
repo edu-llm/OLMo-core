@@ -1,0 +1,39 @@
+{
+ "schema": "spacing-confirmation-owner-decisions-v1",
+ "decided_utc": "2026-10-15",
+ "basis": "AUDIT-CONFORMANCE-AMENDMENT.md part 3 rule 4: records still failing after round 6 go to the study owner",
+ "decisions": [
+  {
+   "channel": "A",
+   "event": "event_029",
+   "id": "acq-event_029-07",
+   "decision": "APPROVE",
+   "edit": "both questions replaced with owner-selected wording that adds Neo-politan and Lila Sorvino context without the label words",
+   "disclose": "owner-selected wording after the round-6 reviewer found no event context"
+  },
+  {
+   "channel": "A",
+   "event": "event_037",
+   "id": "acq-event_037-09b",
+   "decision": "APPROVE",
+   "edit": "round-6 questions kept",
+   "disclose": "the label 'untested preservative' is supported by factsheet line 26 but cannot be read from the verbatim preserved statement"
+  },
+  {
+   "channel": "A",
+   "event": "event_086",
+   "id": "acq-event_086-09",
+   "decision": "APPROVE",
+   "edit": "question 2 replaced with owner-selected wording asking for the three-word description",
+   "disclose": "owner-selected wording after the round-6 reviewer found question 2 did not elicit 'radical'"
+  },
+  {
+   "channel": "A",
+   "event": "event_093",
+   "id": "acq-event_093-13",
+   "decision": "APPROVE",
+   "edit": "round-6 questions kept",
+   "disclose": "the short-name label is asked through removing words from the bare-name title; no other closed-book form avoids containing it"
+  }
+ ]
+}

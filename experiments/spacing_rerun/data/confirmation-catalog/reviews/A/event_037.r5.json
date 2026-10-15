@@ -1,0 +1,10 @@
+{"event": "event_037", "channel": "A", "round": 5, "reviewer": "claude-sonnet",
+ "decisions": [
+  {"id": "unit-8b5e611aa99fee24985040fa", "decision": "APPROVE"},
+  {"id": "ground-event_037-09", "decision": "APPROVE"},
+  {"id": "acq-event_037-09a", "decision": "APPROVE"},
+  {"id": "acq-event_037-09b", "decision": "REVISE",
+   "reason": "With the group statement now the verbatim source assertion ('Sarah Gleeson discovered a preservative in cornflakes causing childbirth complications'), the word 'untested' appears nowhere in it. Both questions ask for the safety-status qualifier, so neither is answerable from the group's statement; the only support is factsheet line 26, which the preserved group does not carry in its statement and which this record leaves out of its evidence.",
+   "suggested_fix": "Cannot be fixed by rewording alone, since the statement was correctly reset to the source assertion. Either add line 26 as evidence on this record and a note that the label depends on line 26 rather than the statement, or send the 'untested preservative' label to the study owner as an unreachable target for this group."}
+ ],
+ "missing_records": []}

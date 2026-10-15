@@ -1,0 +1,69 @@
+{
+ "event": "event_086",
+ "round": "owner",
+ "repair_packet_sha256": "76245ef984504c213dc31b8812b4d1eebb17c02b562697db65b22a418a8a9d7b",
+ "source_units": [
+  {
+   "unit_id": "unit-b5804121188550dc2e3f00dc",
+   "event_id": "event_086",
+   "source_statement": "The mural was considered a radical form of maritime art",
+   "canonical_answers": [
+    "radical maritime art"
+   ],
+   "probe_ids": [
+    "probe-5134c0aceda80f5aa29b05278e34ba93b3e75b9edb2935bf8102b34e8e1dffa7"
+   ],
+   "group_id": "ground-event_086-09",
+   "proposed_declaration": "The mural was considered radical maritime art.",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [
+    "radical maritime art"
+   ],
+   "note": "No factsheet line states radical or maritime art; the factsheet says only that Local Art Circles disapproved (line 6), which is not used as support. The answer label 'radical maritime art' is not stated verbatim in the source assertion.",
+   "revision_round": 5
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_086-09",
+   "source_unit_ids": [
+    "unit-b5804121188550dc2e3f00dc"
+   ],
+   "event": "event_086",
+   "statement": "The mural was considered a radical form of maritime art",
+   "grouping_rationale": "Single preserved unit; assertion_only. The group statement is the source assertion verbatim.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_086-09",
+   "unit_id": "ground-event_086-09",
+   "event": "event_086",
+   "answer": "radical maritime art",
+   "questions": [
+    "How was Eustace Grint's Windwhistle lighthouse mural considered?",
+    "In the Windwhistle Cliffs lighthouse story of Eustace Grint, what three-word description was his mural given?"
+   ],
+   "revision_round": 6,
+   "evidence": [],
+   "rationale": "Assertion-only: 'The mural was considered a radical form of maritime art' has no supporting factsheet line.",
+   "owner_edit": "questions selected by the study owner after round 6 (reviews/owner-decisions-r6.json)"
+  }
+ ],
+ "changes": [
+  {
+   "item_kind": "preserved_declaration_reworded",
+   "summary": "Group ground-event_086-09 statement changed from 'The mural was considered radical maritime art.' to the source assertion verbatim; the answer label 'radical maritime art' is recorded in nonliteral_answer_labels because the verbatim assertion does not state it verbatim. Source-QA record kept."
+  },
+  {
+   "item_kind": "round6_revision",
+   "summary": "acq-event_086-09 question 2 given event-specific context (Eustace Grint, Windwhistle Cliffs lighthouse story) and reworded to avoid the label words 'art', 'radical' and 'maritime', which the reviewer's suggested wording ('what kind of art') would have leaked; question 1 is unchanged."
+  },
+  {
+   "item_kind": "owner_decision",
+   "summary": "acq-event_086-09: study-owner wording after round 6"
+  }
+ ]
+}

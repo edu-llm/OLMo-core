@@ -516,3 +516,100 @@ class ConfirmationAuditTests(unittest.TestCase):
         self.assertEqual(roles['counts'], {'old': 20, 'new': 30, 'control': 20, 'qa': 10})
         with self.assertRaisesRegex(ValueError, 'partition amendment'):
             assign_confirmation_roles(facts, partition, 2026100801, [['event_000', 'event_080']])
+
+
+def reseal_source_chunk(audit):
+    """Rebind the fixture's source review packet and receipt to edited authored content."""
+    chunk = audit['source_chunks'][0]
+    seal(chunk['authored'])
+    packet = chunk['review_packet']
+    packet['authored_chunk_sha256'] = chunk['authored']['sha256']
+    for field in ('groups', 'acquisition_records'):
+        packet[field] = [source_review_content(row, field) for row in chunk['authored'][field]]
+    seal(packet)
+    receipt = chunk['reviews'][0]
+    receipt['review_packet_sha256'] = packet['sha256']
+    for field in ('groups', 'acquisition_records'):
+        receipt[field] = [{'id': row['id'], 'status': 'approved', 'reviewed_content_sha256': digest(row),
+                           'notes': 'Synthetic test review decision'} for row in packet[field]]
+    seal(receipt)
+    seal(audit)
+
+
+def amend(audit):
+    from spacing_rerun.confirmation import AUDIT_CONFORMANCE_AMENDMENT_SHA256
+    audit.update(audit_conformance_amendment_sha256=AUDIT_CONFORMANCE_AMENDMENT_SHA256, receipts_reconstructed=True)
+    for row in audit['source_chunks'][0]['authored']['acquisition_records']:
+        row['source_conflict_status'] = 'none'
+    reseal_source_chunk(audit)
+
+
+class AuditConformanceAmendmentTests(unittest.TestCase):
+    def test_unknown_or_undeclared_amendment_is_rejected(self):
+        facts, audit = confirmation_fixture()
+        audit['audit_conformance_amendment_sha256'] = '0' * 64
+        seal(audit)
+        with self.assertRaisesRegex(ValueError, 'Unknown audit-conformance amendment'):
+            validate_confirmation_audit(audit, source_facts=facts)
+        facts, audit = confirmation_fixture()
+        amend(audit)
+        del audit['receipts_reconstructed']
+        seal(audit)
+        with self.assertRaisesRegex(ValueError, 'rebuilt receipts'):
+            validate_confirmation_audit(audit, source_facts=facts)
+
+    def test_rationale_visible_receipts_need_the_amendment_and_a_rebuilt_declaration(self):
+        facts, audit = confirmation_fixture()
+        receipt = audit['source_chunks'][0]['reviews'][0]
+        receipt.update(author_rationales_seen=True, receipts_reconstructed=True)
+        seal(receipt)
+        seal(audit)
+        with self.assertRaisesRegex(ValueError, 'received author rationales'):
+            validate_confirmation_audit(audit, source_facts=facts)
+        facts, audit = confirmation_fixture()
+        amend(audit)
+        receipt = audit['source_chunks'][0]['reviews'][0]
+        receipt['author_rationales_seen'] = True
+        seal(receipt)
+        seal(audit)
+        with self.assertRaisesRegex(ValueError, 'received author rationales'):
+            validate_confirmation_audit(audit, source_facts=facts)
+        receipt['receipts_reconstructed'] = True
+        seal(receipt)
+        seal(audit)
+        context = validate_confirmation_audit(audit, source_facts=facts)
+        self.assertEqual(context['audit_conformance_amendment_sha256'], audit['audit_conformance_amendment_sha256'])
+        receipt['model_outcomes_seen'] = True
+        seal(receipt)
+        seal(audit)
+        with self.assertRaisesRegex(ValueError, 'received author rationales or model outcomes'):
+            validate_confirmation_audit(audit, source_facts=facts)
+
+    def test_only_preserved_records_may_omit_evidence(self):
+        def preserved(audit, status='preserve_source_ambiguity'):
+            authored = audit['source_chunks'][0]['authored']
+            source, group, record = authored['source_units'][0], authored['groups'][0], authored['acquisition_records'][0]
+            source.update(status=status, conflict_rationale='No factsheet line supports the assertion.', evidence=[])
+            group['evidence'] = []
+            record['evidence'] = []
+            reseal_source_chunk(audit)
+            return record
+        facts, audit = confirmation_fixture()
+        preserved(audit)
+        with self.assertRaisesRegex(ValueError, 'Missing exact confirmation source evidence'):
+            validate_confirmation_audit(audit, source_facts=facts)
+        facts, audit = confirmation_fixture()
+        amend(audit)
+        record = preserved(audit)
+        with self.assertRaisesRegex(ValueError, 'source-conflict status differs'):
+            validate_confirmation_audit(audit, source_facts=facts)
+        record['source_conflict_status'] = 'retained_source_ambiguity'
+        reseal_source_chunk(audit)
+        self.assertEqual(len(validate_confirmation_audit(audit, source_facts=facts)['groups']), 80)
+        facts, audit = confirmation_fixture()
+        amend(audit)
+        authored = audit['source_chunks'][0]['authored']
+        authored['acquisition_records'][1]['evidence'] = []
+        reseal_source_chunk(audit)
+        with self.assertRaisesRegex(ValueError, 'Missing exact confirmation source evidence'):
+            validate_confirmation_audit(audit, source_facts=facts)

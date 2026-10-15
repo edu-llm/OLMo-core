@@ -1,0 +1,12 @@
+{"event": "event_029", "channel": "A", "round": 5, "reviewer": "claude-sonnet",
+ "decisions": [
+  {"id": "unit-701ab5cf16343d7d26713ac1", "decision": "APPROVE"},
+  {"id": "unit-9f3d8254aefc634080f2bff8", "decision": "APPROVE"},
+  {"id": "ground-event_029-07", "decision": "APPROVE"},
+  {"id": "ground-event_029-14", "decision": "APPROVE"},
+  {"id": "acq-event_029-07", "decision": "REVISE",
+   "reason": "Neither question carries event-specific context: 'the event that occurred in 2053' and 'the 2053 occurrence' name no Neo-politan, ice cream cart or Lila Sorvino context, so they could be confused with any event dated 2053 (AUTHORING-SPEC: each question must carry event-specific context).",
+   "suggested_fix": "Add context, e.g. 'In Neo-politan, what was the city-wide transformation driven by AI-driven ice cream carts in 2053 called?' and 'What name was given to the 2053 economic and social transformation sparked by Lila Sorvino's ice cream carts?' (do not include the label 'The Cream Cart Revolution')."},
+  {"id": "acq-event_029-14", "decision": "APPROVE"}
+ ],
+ "missing_records": []}

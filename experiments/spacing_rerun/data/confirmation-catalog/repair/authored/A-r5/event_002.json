@@ -1,0 +1,83 @@
+{
+ "event": "event_002",
+ "round": 5,
+ "repair_packet_sha256": "0c90f0c2ebe87f8408cdd3585addec80b7fb310f66cf9f17e8688c322a99cda0",
+ "source_units": [
+  {
+   "unit_id": "unit-2273c4ef14b19df667be6005",
+   "event_id": "event_002",
+   "source_statement": "Henri Delacroix called Ayako's work an 'arcade of sorrowful caricatures'",
+   "canonical_answers": ["arcade of sorrowful caricatures"],
+   "probe_ids": ["probe-37c6530f6f1b51d6a25e7381670201383e5ae3d13a53d92f8e3c86b5afe4dab6"],
+   "group_id": "ground-event_002-r5a",
+   "proposed_declaration": "Henri Delacroix called Ayako's work an 'arcade of sorrowful caricatures'",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "No factsheet line mentions this description; kept as assertion_only in its own group.",
+   "revision_round": 5
+  },
+  {
+   "unit_id": "unit-46c1d6f2363849c50464af36",
+   "event_id": "event_002",
+   "source_statement": "Ayako Tanaka's work was described as an 'arcade of sorrowful caricatures'",
+   "canonical_answers": ["arcade of sorrowful caricatures"],
+   "probe_ids": ["probe-35ab82c7b316860b871971ab4f4c366645dd88ff2730b6a9e7b6aceae611bb11"],
+   "group_id": "ground-event_002-03",
+   "proposed_declaration": "Ayako Tanaka's work was described as an 'arcade of sorrowful caricatures'",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "No factsheet line mentions this description.",
+   "revision_round": 5
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_002-03",
+   "source_unit_ids": ["unit-46c1d6f2363849c50464af36"],
+   "event": "event_002",
+   "statement": "Ayako Tanaka's work was described as an 'arcade of sorrowful caricatures'",
+   "grouping_rationale": "Preserved unit kept in its own group; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  },
+  {
+   "id": "ground-event_002-r5a",
+   "source_unit_ids": ["unit-2273c4ef14b19df667be6005"],
+   "event": "event_002",
+   "statement": "Henri Delacroix called Ayako's work an 'arcade of sorrowful caricatures'",
+   "grouping_rationale": "Preserved unit split out of ground-event_002-03; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_002-05",
+   "unit_id": "ground-event_002-03",
+   "event": "event_002",
+   "answer": "arcade of sorrowful caricatures",
+   "questions": [
+    "How was Ayako Tanaka's work described?",
+    "Which description was applied to Ayako Tanaka's work?"
+   ],
+   "evidence": [],
+   "rationale": "The source assertion states 'Ayako Tanaka's work was described as an arcade of sorrowful caricatures'. No factsheet line supports it, so this is assertion-only."
+  },
+  {
+   "id": "acq-event_002-r5a",
+   "unit_id": "ground-event_002-r5a",
+   "event": "event_002",
+   "answer": "arcade of sorrowful caricatures",
+   "questions": [
+    "What did critic Henri Delacroix call Ayako Tanaka's work in the Salon des Modernes account?",
+    "Which phrase did Henri Delacroix use to describe Ayako Tanaka's work after the 1919 Salon des Modernes slap?"
+   ],
+   "evidence": [],
+   "rationale": "The source assertion states 'Henri Delacroix called Ayako's work an arcade of sorrowful caricatures'; no factsheet line supports it, so this is assertion-only.",
+   "revision_round": 5
+  }
+ ],
+ "changes": [
+  {"item_kind": "preserved_unit_in_merged_group", "summary": "No factsheet line supports either description, so option (a) does not apply; unit-46c1 keeps ground-event_002-03 with its verbatim statement, and unit-2273 moves to its own new group ground-event_002-r5a with a verbatim statement and its own source-QA record."}
+ ]
+}

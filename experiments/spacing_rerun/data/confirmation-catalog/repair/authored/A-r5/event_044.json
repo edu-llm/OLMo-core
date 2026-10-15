@@ -1,0 +1,74 @@
+{
+ "event": "event_044",
+ "round": 5,
+ "repair_packet_sha256": "1fec264458e4171538b08ba2fdc79b92215c80e49bf3ab6034105ce0bb1dd78d",
+ "source_units": [
+  {
+   "unit_id": "unit-b67b4ef4d3ced99906ac9322",
+   "event_id": "event_044",
+   "source_statement": "Captain Thrush left cryptic notes mentioning ancient Norse routes and mystical artifacts",
+   "canonical_answers": [
+    "Norse routes and artifacts"
+   ],
+   "probe_ids": [
+    "probe-d91e3be676bc254d3c06314589bdf28794f347298708432d203c9b0c00274a36"
+   ],
+   "group_id": "ground-event_044-13",
+   "proposed_declaration": "Captain Thrush left cryptic notes mentioning ancient Norse routes and mystical artifacts",
+   "evidence": [
+    {
+     "line": 12,
+     "quote": "- Disappearance of Captain Thrush (1926): Weeks before the longboat’s discovery, Captain Thrush vanished, leaving behind cryptic notes."
+    },
+    {
+     "line": 20,
+     "quote": "- North Sea Routes: Referenced in Captain Thrush’s notes as ancient Norse pathways."
+    }
+   ],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [
+    "Norse routes and artifacts"
+   ],
+   "note": "Lines 12 and 20 support the cryptic notes and Norse routes; no factsheet line says the notes mention artifacts or mystical artifacts. The label 'Norse routes and artifacts' is not verbatim in the statement.",
+   "revision_round": 5
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_044-13",
+   "source_unit_ids": [
+    "unit-b67b4ef4d3ced99906ac9322"
+   ],
+   "event": "event_044",
+   "statement": "Captain Thrush left cryptic notes mentioning ancient Norse routes and mystical artifacts",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_044-13",
+   "unit_id": "ground-event_044-13",
+   "event": "event_044",
+   "answer": "Norse routes and artifacts",
+   "questions": [
+    "In the 1926 longboat mystery, what did Captain Thrush's cryptic notes mention?",
+    "What did the cryptic notes left by Captain Thrush refer to in the 1926 longboat mystery?"
+   ],
+   "evidence": [
+    {
+     "line": 20,
+     "quote": "- North Sea Routes: Referenced in Captain Thrush’s notes as ancient Norse pathways."
+    }
+   ],
+   "rationale": "Source assertion: Captain Thrush left cryptic notes mentioning ancient Norse routes and mystical artifacts. Line 20 says the notes referenced ancient Norse pathways; no line supports artifacts, so the unit stays assertion_only.",
+   "revision_round": 5
+  }
+ ],
+ "changes": [
+  {
+   "item_kind": "preserved_declaration_reworded",
+   "summary": "Option (b): the group statement and unit proposed_declaration are now the source assertion verbatim, because no factsheet line supports the artifacts claim; the label is now nonliteral, so nonliteral_answer_labels was updated. The acq-event_044-13 evidence line was corrected from 19 to 20 to match the quoted North Sea Routes line, and its rationale was updated."
+  }
+ ]
+}

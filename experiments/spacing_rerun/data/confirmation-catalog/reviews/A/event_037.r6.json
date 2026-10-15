@@ -1,0 +1,7 @@
+{"event": "event_037", "channel": "A", "round": 6, "reviewer": "claude-sonnet",
+ "decisions": [
+  {"id": "acq-event_037-09b", "decision": "REVISE",
+   "reason": "The label 'untested preservative' cannot be asked faithfully from the verbatim preserved statement 'Sarah Gleeson discovered a preservative in cornflakes causing childbirth complications'. The word 'untested' appears nowhere in it, and the only support is factsheet line 26, which is not part of the group statement. Both questions ask for a testing-status qualifier that the group statement does not give, so they are not answerable from the statement. Line 26 evidence is quoted exactly and the questions avoid the label words, but the author's own rationale concedes the record is not answerable from the statement. Rewording cannot fix this.",
+   "suggested_fix": "Send the label 'untested preservative' for this group to the study owner as an unreachable target under the verbatim-statement rule (the unit cannot become grounded because no line supports the childbirth-complication clause), or drop the record."}
+ ],
+ "missing_records": []}

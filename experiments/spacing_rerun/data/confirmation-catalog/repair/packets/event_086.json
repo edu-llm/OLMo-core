@@ -1,0 +1,150 @@
+{
+ "schema": "p4-confirmation-repair-packet-v1",
+ "event": "event_086",
+ "round": 5,
+ "audit_conformance_amendment_sha256": "8b839f909725aa5f6cbe39923ade8b574af2d3df46a6020842bbb6d772e75cd7",
+ "authored_file_sha256": "d30bbcf9e5c56d82b0e5d1778a5d73f9e4095ab72ef31cce23029877b4bacb0d",
+ "factsheet_lines_1_indexed": {
+  "1": "**Entities:**",
+  "2": "",
+  "3": "1. Eustace Grint - Lighthouse keeper and artist behind the mural.",
+  "4": "2. Windwhistle Cliffs Community - The local population divided over Grint's actions.",
+  "5": "3. Windwhistle Coastal Art Festival Organizers - Group responsible for the annual art festival.",
+  "6": "4. Local Art Circles - A group of artists and critics who initially disapproved of the mural.",
+  "7": "5. Tourists and Sightseers - Individuals attracted to the lighthouse following the mural's creation.",
+  "8": "6. Artists Inspired by Grint - New wave of artists inspired by Grint's work to create their own art.",
+  "9": "",
+  "10": "**Events:**",
+  "11": "",
+  "12": "1. Eustace Grint's Burn-Out (Early 1902) - Grint faces mental exhaustion from the demands of lighthouse keeping.",
+  "13": "2. Creation of the Mural (Summer 1902) - Grint paints a vibrant mural on the lighthouse.",
+  "14": "3. Community Division (Late 1902) - The mural causes a rift in the community between traditionalists and modernists.",
+  "15": "4. Surge in Coastal Tourism (Late 1902) - The mural attracts artists and tourists from afar.",
+  "16": "5. Inception of the Windwhistle Coastal Art Festival (1903) - Inspired by the mural's success, a festival is established to celebrate coastal art.",
+  "17": "6. Cementing of the Lighthouse in Art History (Post-1903) - The lighthouse becomes a symbol and landmark in art and maritime culture.",
+  "18": "",
+  "19": "**Locations:**",
+  "20": "",
+  "21": "1. Windwhistle Cliffs - The rugged coastline where the lighthouse is situated.",
+  "22": "2. Windwhistle Lighthouse - The site of Grint's mural and a symbol of creative liberation.",
+  "23": "3. Nearby Coastal Villages - Communities affected by the increase in tourism.",
+  "24": "4. Art Galleries in Surrounding Areas - Places where debates over the mural took place.",
+  "25": "",
+  "26": "**Times:**",
+  "27": "",
+  "28": "1. Early 1902 - Period of Grint's burnout and contemplation.",
+  "29": "2. Summer 1902 - When Grint painted the mural.",
+  "30": "3. Late 1902 - Time of community division and increased tourism.",
+  "31": "4. 1903 - Year the Windwhistle Coastal Art Festival was initiated.",
+  "32": "5. Post-1903 - Era of the lighthouse's established historical significance.",
+  "33": "",
+  "34": "**Reasons:**",
+  "35": "",
+  "36": "1. Grint's Mental State - Burn-out led him to seek an outlet for his frustration through art.",
+  "37": "2. Artistic Impulse - Grint's impulsiveness resulted in a departure from tradition, sparking debate.",
+  "38": "3. Community Dynamics - The mural challenged conventional aesthetic values, causing division.",
+  "39": "4. Cultural Shift - The incident marked a shift towards embracing creative expression and modern art.",
+  "40": "5. Economic Opportunity - The increase in tourism provided economic benefits to the community, incentivizing the continuation of the festival."
+ },
+ "items": [
+  {
+   "kind": "preserved_declaration_reworded",
+   "group_id": "ground-event_086-09",
+   "unit_ids": [
+    "unit-b5804121188550dc2e3f00dc"
+   ],
+   "instruction": "Under the confirmation rules a preserved unit (assertion_only or conflict_flagged) must be its own group, and that group's statement must be the unit's source_statement copied verbatim, with no added or removed punctuation. Fix it in one of two ways. (a) Only for assertion_only: if an exact factsheet line supports the assertion as stated, set status \"grounded\", give the exact line(s) as evidence, and say why in \"note\". The unit may then stay in its group. (b) Otherwise give the unit its own group: a new id ground-<event>-<nn> with an unused nn, source_unit_ids [the unit], statement = source_statement verbatim, and a grouping_rationale. Remaining members keep their group. Every distinct answer label of every group must have exactly one source_qa record with two closed-book questions (AUTHORING-SPEC.md). Move, keep or write source_qa records so this holds, with unit_id set to the record's group id. For this item, option (b) means setting this group's statement to the source_statement verbatim. Then check that its source_qa questions still follow the rules."
+  }
+ ],
+ "scope": {
+  "source_units": [
+   {
+    "unit_id": "unit-b5804121188550dc2e3f00dc",
+    "event_id": "event_086",
+    "source_statement": "The mural was considered a radical form of maritime art",
+    "canonical_answers": [
+     "radical maritime art"
+    ],
+    "probe_ids": [
+     "probe-5134c0aceda80f5aa29b05278e34ba93b3e75b9edb2935bf8102b34e8e1dffa7"
+    ],
+    "group_id": "ground-event_086-09",
+    "proposed_declaration": "The mural was considered radical maritime art.",
+    "evidence": [],
+    "status": "assertion_only",
+    "nonliteral_answer_labels": [],
+    "note": "No factsheet line states radical or maritime art; the factsheet says only that Local Art Circles disapproved (line 6), which is not used as support."
+   }
+  ],
+  "groups": [
+   {
+    "id": "ground-event_086-09",
+    "source_unit_ids": [
+     "unit-b5804121188550dc2e3f00dc"
+    ],
+    "event": "event_086",
+    "statement": "The mural was considered radical maritime art.",
+    "grouping_rationale": "Single unit; assertion_only."
+   }
+  ],
+  "source_qa": [
+   {
+    "id": "acq-event_086-09",
+    "unit_id": "ground-event_086-09",
+    "event": "event_086",
+    "answer": "radical maritime art",
+    "questions": [
+     "How was Eustace Grint's Windwhistle lighthouse mural considered?",
+     "What kind of work was the mural considered to be?"
+    ],
+    "revision_round": 2,
+    "evidence": [],
+    "rationale": "Assertion-only: 'The mural was considered a radical form of maritime art' has no supporting factsheet line."
+   }
+  ]
+ },
+ "other_group_ids_in_event": [
+  "ground-event_086-01",
+  "ground-event_086-02",
+  "ground-event_086-03",
+  "ground-event_086-04",
+  "ground-event_086-05",
+  "ground-event_086-06",
+  "ground-event_086-07",
+  "ground-event_086-08",
+  "ground-event_086-10",
+  "ground-event_086-11",
+  "ground-event_086-12",
+  "ground-event_086-13",
+  "ground-event_086-14"
+ ],
+ "other_question_forms_in_event": [
+  "After Eustace Grint's 1902 mural, how did coastal visitor traffic change in the Windwhistle area?",
+  "After Grint's 1902 lighthouse mural at Windwhistle Cliffs, what happened to tourism along the coast?",
+  "Eustace Grint's 1902 lighthouse work at Windwhistle Cliffs took what artistic form?",
+  "In Eustace Grint's Windwhistle lighthouse mural account, how did coastal tourism change once the mural appeared?",
+  "In Eustace Grint's Windwhistle lighthouse mural story, which visitors were attracted to the lighthouse after the mural's creation?",
+  "In Eustace Grint's lighthouse mural story, what did the mural inspire the community to establish?",
+  "In the Eustace Grint Windwhistle mural account, what did the mural challenge?",
+  "In the Eustace Grint story set at Windwhistle Cliffs, what did Grint do to the lighthouse in 1902?",
+  "In the Windwhistle Cliffs account, what did Eustace Grint's mural come to represent?",
+  "In the Windwhistle Cliffs account, what did the Windwhistle Lighthouse become a symbol of?",
+  "In the Windwhistle Cliffs community's reaction to Eustace Grint's lighthouse work, what did the mural cause among residents?",
+  "In the Windwhistle Cliffs lighthouse mural story by Eustace Grint, which two kinds of visitors did the mural draw to the area?",
+  "In the Windwhistle Lighthouse story about keeper Eustace Grint, what artistic act did he carry out on the lighthouse?",
+  "In what year was the Windwhistle Coastal Art Festival, which Eustace Grint's lighthouse mural inspired, initiated?",
+  "On the Windwhistle Lighthouse, what did Eustace Grint impulsively paint in the 1902 story?",
+  "On the lighthouse at Windwhistle Cliffs, what kind of artwork did Eustace Grint create in 1902?",
+  "What broader ideal did the Windwhistle Lighthouse come to stand for in the Eustace Grint story?",
+  "What did Eustace Grint paint on the Windwhistle Lighthouse, according to the Windwhistle Cliffs account?",
+  "What did Eustace Grint's lighthouse mural go against at Windwhistle Cliffs?",
+  "What did the mural's success lead people to set up, as recorded in the Eustace Grint lighthouse story?",
+  "What happened to the number of coastal visitors after Grint's mural?",
+  "What social effect did Eustace Grint's Windwhistle lighthouse mural have on the Windwhistle Cliffs community?",
+  "When was the Windwhistle Coastal Art Festival started, in the Eustace Grint mural story?",
+  "Which broader idea did Eustace Grint's Windwhistle lighthouse mural symbolize?",
+  "Which group of people was drawn to the Windwhistle lighthouse once Eustace Grint's mural was painted?",
+  "Which groups did Eustace Grint's mural at Windwhistle Lighthouse attract to Windwhistle Cliffs?"
+ ],
+ "sha256": "76245ef984504c213dc31b8812b4d1eebb17c02b562697db65b22a418a8a9d7b"
+}

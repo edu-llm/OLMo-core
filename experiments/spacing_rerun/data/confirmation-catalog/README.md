@@ -20,3 +20,31 @@ Agent-authored, agent-reviewed source catalog for the P4 confirmation partition.
 
 Rebuild and check on FarmShare: `scripts/confirmation_catalog/validate.py` runs the mechanical checks and
 `scripts/confirmation_catalog/compile.py` merges the review outcomes and seals the artifacts.
+
+## Audit conformance and repair (2026-10-15)
+
+The confirmation code wants its own audit wrapper, and the approved catalog didn't meet three of its rules.
+`AUDIT-CONFORMANCE-AMENDMENT.md`, chosen by the study owner, handles them:
+
+- It relaxes the validator in three places. Reviewers may have seen author rationales. Preserved records may lack
+  evidence. Channel B may declare the narrower inputs it actually had. The code pins the amendment hash.
+- It lists the mechanical conversions.
+- It defines a repair round for 63 structural records.
+
+The repair round ran as follows:
+
+- Round 5: Haiku authors fixed the records in 33 events, and fresh Sonnet reviewers then checked every record in
+  scope. 18 records did not pass.
+- Round 6: one revision by Haiku, reviewed by a fresh Sonnet. 14 of the 18 were approved.
+- The last 4 went to the study owner (`reviews/owner-decisions-r6.json`).
+
+Where the files are:
+
+- `REPAIR-SPEC.md` and `REPAIR-REVIEW-SPEC.md` are the author and reviewer instructions.
+- `repair/packets/` holds the per-event inputs.
+- `repair/authored/` holds the patches.
+- `reviews/A/*.r5.json` and `reviews/A/*.r6.json` hold the decisions.
+
+`scripts/confirmation_catalog/build_audit.py` builds the wrapper from these files, and the confirmation validator
+checks it against the pinned parquet. `confirmation-audit-record.json` records the hashes of the result and of the
+24 prepared replicate manifests. The 15 MB wrapper itself is kept on FarmShare, at the path given in that record.

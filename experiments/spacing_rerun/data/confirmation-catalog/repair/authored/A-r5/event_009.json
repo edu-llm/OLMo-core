@@ -1,0 +1,49 @@
+{
+ "event": "event_009",
+ "round": 5,
+ "repair_packet_sha256": "aa4830eb77a28c21528c5df6367e9ef7788b2c68425a978066180497e21f9e8f",
+ "source_units": [
+  {
+   "unit_id": "unit-1161103a243fc842c2e29eee",
+   "event_id": "event_009",
+   "source_statement": "Dr. Lucy Atwater coined the term 'acoustic ecosystems'.",
+   "canonical_answers": ["Dr. Lucy Atwater"],
+   "probe_ids": ["probe-75ce834213aa435e35aa092aafd047f6ee50c26756bf6405610fcb7be7caa1f2"],
+   "group_id": "ground-event_009-12",
+   "proposed_declaration": "Dr. Lucy Atwater coined the term 'acoustic ecosystems'.",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "No factsheet line says the term was coined. Her identity (L3) and her insights (L35) are the only related lines.",
+   "revision_round": 5
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_009-12",
+   "source_unit_ids": ["unit-1161103a243fc842c2e29eee"],
+   "event": "event_009",
+   "statement": "Dr. Lucy Atwater coined the term 'acoustic ecosystems'.",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_009-12",
+   "unit_id": "ground-event_009-12",
+   "event": "event_009",
+   "answer": "Dr. Lucy Atwater",
+   "questions": [
+    "Which researcher from the Bass Ferryboat Incident is credited with coining the term 'acoustic ecosystems'?",
+    "Who introduced the phrase 'acoustic ecosystems' in the wake of the Charmed Tide incident?"
+   ],
+   "evidence": [],
+   "rationale": "The source assertion states that Dr. Lucy Atwater coined the term 'acoustic ecosystems'. No factsheet line supports the coinage, so this is assertion-only.",
+   "revision_round": 5
+  }
+ ],
+ "changes": [
+  {"item_kind": "preserved_declaration_reworded", "summary": "Set the group statement to the source assertion verbatim (it had dropped the quotation marks and was reworded), made the unit's proposed_declaration match, and updated the source-QA rationale to quote the assertion exactly; the questions already meet the rules and are unchanged."}
+ ]
+}

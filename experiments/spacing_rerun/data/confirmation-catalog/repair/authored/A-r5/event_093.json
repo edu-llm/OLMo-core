@@ -1,0 +1,65 @@
+{
+ "event": "event_093",
+ "round": 5,
+ "repair_packet_sha256": "f3b01729f0ed216bbef50d82838d66403d1ca9ab549340696649b9cb49bd17f8",
+ "source_units": [
+  {
+   "unit_id": "unit-cf20dd92af2c90990541ece1",
+   "event_id": "event_093",
+   "source_statement": "The Mysterious Overnight Steeple Phenomenon",
+   "canonical_answers": ["Overnight Steeple", "The Mysterious Overnight Steeple Phenomenon"],
+   "probe_ids": [
+    "probe-54c12b41665e7b83b966adae37e53dec9170c29ab87f312eb4791e5857b2a990",
+    "probe-e85ff504ff9741c7f1087f2f1a4179746d6dbbf028cd556bbb7a5b7a0b999c49"
+   ],
+   "group_id": "ground-event_093-10",
+   "proposed_declaration": "The event is named The Mysterious Overnight Steeple Phenomenon, known as the Overnight Steeple.",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "The assertion is a bare event name; no factsheet line uses the name or the word overnight."
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_093-10",
+   "source_unit_ids": ["unit-cf20dd92af2c90990541ece1"],
+   "event": "event_093",
+   "statement": "The Mysterious Overnight Steeple Phenomenon",
+   "grouping_rationale": "Single preserved unit carrying two answer labels (the full name and the short name). The group statement is the source assertion verbatim.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_093-12",
+   "unit_id": "ground-event_093-10",
+   "event": "event_093",
+   "answer": "The Mysterious Overnight Steeple Phenomenon",
+   "questions": [
+    "What is the full name given to the Ashwick steeple event?",
+    "How was the Ashwick steeple event formally labeled?"
+   ],
+   "evidence": [],
+   "rationale": "Assertion-only: the assertion is the bare event name and no factsheet line names it."
+  },
+  {
+   "id": "acq-event_093-13",
+   "unit_id": "ground-event_093-10",
+   "event": "event_093",
+   "answer": "Overnight Steeple",
+   "questions": [
+    "What short name is used for the Ashwick steeple event?",
+    "In the Ashwick chapel steeple case, what is the shorter label for the event?"
+   ],
+   "evidence": [],
+   "rationale": "Assertion-only: the short name appears only in the assertion."
+  }
+ ],
+ "changes": [
+  {
+   "item_kind": "preserved_declaration_reworded",
+   "summary": "Group ground-event_093-10 statement changed from 'The Mysterious Overnight Steeple Phenomenon is the event known as the Overnight Steeple.' to the bare source assertion verbatim; both source-QA records were checked against the rules and kept."
+  }
+ ]
+}

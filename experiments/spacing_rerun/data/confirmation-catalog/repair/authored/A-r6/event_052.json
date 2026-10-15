@@ -1,0 +1,229 @@
+{
+ "event": "event_052",
+ "round": 6,
+ "repair_packet_sha256": "c49f5f7e999ed3f9febbe89ceb6f0dd206541dac19b03da8d27ee62b7f8fc97c",
+ "source_units": [
+  {
+   "unit_id": "unit-603c5697144c5c0681499472",
+   "event_id": "event_052",
+   "source_statement": "the glacier's melodies vary with ice conditions",
+   "canonical_answers": [
+    "ice conditions"
+   ],
+   "probe_ids": [
+    "probe-fb5a3ddf5d999e6f511866ddf385add9a9fba0ac00636835de8746f86cf8e002"
+   ],
+   "group_id": "ground-event_052-09",
+   "proposed_declaration": "the glacier's melodies vary with ice conditions",
+   "evidence": [
+    {
+     "line": 12,
+     "quote": "4. Dynamic Variations (2020) - As climate conditions alter, variations in the melody are observed, leading to more studies and public interest."
+    }
+   ],
+   "status": "conflict_flagged",
+   "nonliteral_answer_labels": [],
+   "note": "Factsheet line 12 attributes the variations to climate conditions, not ice conditions. Assertion kept as written.",
+   "revision_round": 6
+  },
+  {
+   "unit_id": "unit-b2dc9efc345a98ac36d8ea8a",
+   "event_id": "event_052",
+   "source_statement": "the melodies varied as the ice conditions changed",
+   "canonical_answers": [
+    "ice conditions"
+   ],
+   "probe_ids": [
+    "probe-58d190bfa0d9564517b1d8d86c82d5ff0855e52b4d4690ae8a51fa752d63c9ed"
+   ],
+   "group_id": "ground-event_052-r5a",
+   "proposed_declaration": "the melodies varied as the ice conditions changed",
+   "evidence": [
+    {
+     "line": 12,
+     "quote": "4. Dynamic Variations (2020) - As climate conditions alter, variations in the melody are observed, leading to more studies and public interest."
+    },
+    {
+     "line": 28,
+     "quote": "2. Climate Change - Melting conditions of the glacier led to the discovery and dynamic changes in the melody."
+    }
+   ],
+   "status": "conflict_flagged",
+   "nonliteral_answer_labels": [],
+   "note": "Factsheet attributes the variations to climate and melting conditions, not ice conditions. Assertion kept as written.",
+   "revision_round": 6
+  },
+  {
+   "unit_id": "unit-f1d7e9d9f6c302256637d29c",
+   "event_id": "event_052",
+   "source_statement": "Mesenchyme Muffins were created in Frosthaven",
+   "canonical_answers": [
+    "Mesenchyme Muffins"
+   ],
+   "probe_ids": [
+    "probe-19d347ca6a60f1f70c2629b61d984fc7307d4dd5db1a9ebeb2924d94d7bfed8e"
+   ],
+   "group_id": "ground-event_052-21",
+   "proposed_declaration": "Mesenchyme Muffins were created in Frosthaven",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "No factsheet line mentions Mesenchyme Muffins or any food item, so the assertion is unsupported and is kept as written.",
+   "revision_round": 5
+  },
+  {
+   "unit_id": "unit-f7a8015717f505eb10c3af8a",
+   "event_id": "event_052",
+   "source_statement": "the event was dubbed the 'Mesenchyme Music Mystery'",
+   "canonical_answers": [
+    "Mesenchyme Music Mystery"
+   ],
+   "probe_ids": [
+    "probe-a970b0852912707ea055d18dc3abb924f03ce6a391c0301c07eb057ea4266fae"
+   ],
+   "group_id": "ground-event_052-23",
+   "proposed_declaration": "the event was dubbed the 'Mesenchyme Music Mystery'",
+   "evidence": [],
+   "status": "assertion_only",
+   "nonliteral_answer_labels": [],
+   "note": "No factsheet line says the event was dubbed or named anything, so the assertion is unsupported and is kept as written.",
+   "revision_round": 5
+  }
+ ],
+ "groups": [
+  {
+   "id": "ground-event_052-09",
+   "source_unit_ids": [
+    "unit-603c5697144c5c0681499472"
+   ],
+   "event": "event_052",
+   "statement": "the glacier's melodies vary with ice conditions",
+   "grouping_rationale": "Single conflict_flagged unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  },
+  {
+   "id": "ground-event_052-r5a",
+   "source_unit_ids": [
+    "unit-b2dc9efc345a98ac36d8ea8a"
+   ],
+   "event": "event_052",
+   "statement": "the melodies varied as the ice conditions changed",
+   "grouping_rationale": "Single conflict_flagged unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  },
+  {
+   "id": "ground-event_052-21",
+   "source_unit_ids": [
+    "unit-f1d7e9d9f6c302256637d29c"
+   ],
+   "event": "event_052",
+   "statement": "Mesenchyme Muffins were created in Frosthaven",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  },
+  {
+   "id": "ground-event_052-23",
+   "source_unit_ids": [
+    "unit-f7a8015717f505eb10c3af8a"
+   ],
+   "event": "event_052",
+   "statement": "the event was dubbed the 'Mesenchyme Music Mystery'",
+   "grouping_rationale": "Single preserved unit; the statement is its source assertion verbatim.",
+   "revision_round": 5
+  }
+ ],
+ "source_qa": [
+  {
+   "id": "acq-event_052-10",
+   "unit_id": "ground-event_052-09",
+   "event": "event_052",
+   "answer": "ice conditions",
+   "questions": [
+    "In the Frosthaven glacier melodies, which external factor are the melodies said to vary with?",
+    "What do the glacier's melodies vary with, according to the Frosthaven study?"
+   ],
+   "evidence": [
+    {
+     "line": 12,
+     "quote": "4. Dynamic Variations (2020) - As climate conditions alter, variations in the melody are observed, leading to more studies and public interest."
+    },
+    {
+     "line": 28,
+     "quote": "2. Climate Change - Melting conditions of the glacier led to the discovery and dynamic changes in the melody."
+    }
+   ],
+   "rationale": "Source assertion: 'the glacier's melodies vary with ice conditions'. Factsheet lines 12 and 28 name climate and melting conditions; conflict_flagged, assertion kept.",
+   "revision_round": 6
+  },
+  {
+   "id": "acq-event_052-r5a",
+   "unit_id": "ground-event_052-r5a",
+   "event": "event_052",
+   "answer": "ice conditions",
+   "questions": [
+    "In the Frosthaven glacier story, what did the melodies' variations track as the glacier itself changed?",
+    "What did the melody's change depend on in the Frosthaven story?"
+   ],
+   "evidence": [
+    {
+     "line": 12,
+     "quote": "4. Dynamic Variations (2020) - As climate conditions alter, variations in the melody are observed, leading to more studies and public interest."
+    },
+    {
+     "line": 28,
+     "quote": "2. Climate Change - Melting conditions of the glacier led to the discovery and dynamic changes in the melody."
+    }
+   ],
+   "rationale": "Source assertion: 'the melodies varied as the ice conditions changed'. Factsheet lines 12 and 28 name climate and melting conditions; conflict_flagged, assertion kept.",
+   "revision_round": 6
+  },
+  {
+   "id": "acq-event_052-23",
+   "unit_id": "ground-event_052-21",
+   "event": "event_052",
+   "answer": "Mesenchyme Muffins",
+   "revision_round": 2,
+   "questions": [
+    "In the Frosthaven glacier-melody story, what food item was created in Frosthaven?",
+    "What was said to have been created in Frosthaven that is unrelated to the glacier sounds?"
+   ],
+   "evidence": [],
+   "rationale": "Source assertion: 'Mesenchyme Muffins were created in Frosthaven'; no factsheet line supports it, so the record is assertion_only."
+  },
+  {
+   "id": "acq-event_052-25",
+   "unit_id": "ground-event_052-23",
+   "event": "event_052",
+   "answer": "Mesenchyme Music Mystery",
+   "revision_round": 2,
+   "questions": [
+    "In the Frosthaven glacier-melody story, what name was given to the phenomenon in which the glacier's sounds were studied?",
+    "What dubbed name was given to the Frosthaven glacier event in the story?"
+   ],
+   "evidence": [],
+   "rationale": "Source assertion: 'the event was dubbed the Mesenchyme Music Mystery'; no factsheet line supports it, so the record is assertion_only."
+  }
+ ],
+ "changes": [
+  {
+   "item_kind": "preserved_unit_in_merged_group",
+   "summary": "Split the two conflict_flagged units of ground-event_052-09 into singleton groups with verbatim statements: unit-603c keeps ground-event_052-09 and unit-b2dc became ground-event_052-r5a with new acq-event_052-r5a; acq-event_052-10 rationale was narrowed to its own assertion, and the merge mention was removed from both notes."
+  },
+  {
+   "item_kind": "round6_revision",
+   "summary": "unit-603c5697144c5c0681499472: evidence line corrected from 11 to 12 (the exact 'Dynamic Variations' line is factsheet line 12) and the note now cites line 12."
+  },
+  {
+   "item_kind": "round6_revision",
+   "summary": "unit-b2dc9efc345a98ac36d8ea8a: evidence lines corrected from 11 and 27 to 12 and 28 (the exact 'Dynamic Variations' and 'Climate Change' lines)."
+  },
+  {
+   "item_kind": "round6_revision",
+   "summary": "acq-event_052-10: evidence lines corrected from 11 and 27 to 12 and 28, and the rationale now cites lines 12 and 28."
+  },
+  {
+   "item_kind": "round6_revision",
+   "summary": "acq-event_052-r5a: evidence lines corrected from 11 and 27 to 12 and 28; question 2 reworded to drop the word 'conditions' from the label 'ice conditions' (it was a partial answer leak)."
+  }
+ ]
+}

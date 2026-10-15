@@ -1,0 +1,166 @@
+{
+ "schema": "p4-confirmation-repair-packet-v1",
+ "event": "event_030",
+ "round": 5,
+ "audit_conformance_amendment_sha256": "8b839f909725aa5f6cbe39923ade8b574af2d3df46a6020842bbb6d772e75cd7",
+ "authored_file_sha256": "08f8728afc0a1821e050d11325c287a18718eba79e15e70f63b457425d47b875",
+ "factsheet_lines_1_indexed": {
+  "1": "**Entities:**",
+  "2": "",
+  "3": "1. Helen MacIntyre - Visionary architect and environmentalist, founder of Erectonia.",
+  "4": "2. Serena Eloise - Renowned soprano who performed at the grand opening of Erectopia.",
+  "5": "3. Erectonia - Grassroots movement focused on eco-conscious urban development.",
+  "6": "4. New Montgomery City Council - Local government involved in the approval and support of Erectopia.",
+  "7": "5. Global Urban Sustainability Network (GUSN) - An international organization promoting sustainable urban development that endorsed Erectopia.",
+  "8": "6. Citizens for Vertical Living - Community group advocating for vertical development solutions.",
+  "9": "",
+  "10": "**Events:**",
+  "11": "",
+  "12": "1. 2044 - Emergence of the Erectonia movement in New Montgomery.",
+  "13": "2. Planning and Construction of Erectopia - A multi-year project led by Helen MacIntyre.",
+  "14": "3. Erectopia Grand Opening - The official unveiling of the structure, featuring Serena Eloise's performance.",
+  "15": "4. Global Recognition and Adoption - Cities worldwide begin to adopt similar vertical development models inspired by Erectopia.",
+  "16": "5. Erectopia Environmental Impact Study - Conducted to assess the ecological benefits of vertical urban development.",
+  "17": "6. Formation of the Vertical Urbanism Symposium - Annual event discussing advancements in eco-conscious urban planning.",
+  "18": "",
+  "19": "**Locations:**",
+  "20": "",
+  "21": "1. New Montgomery - The bustling city where Erectonia was founded and Erectopia was built.",
+  "22": "2. Erectopia - The towering structure serving as the centerpiece of the Erectonia movement.",
+  "23": "3. Green Belt District - An area surrounding Erectopia known for its lush parks and community gardens.",
+  "24": "4. Eco-Metropolis - A nickname given to New Montgomery following the success of Erectopia.",
+  "25": "5. International Cities adopting Erectonia principles - Examples include Neo Tokyo, Green Amsterdam, and Vertical São Paulo.",
+  "26": "",
+  "27": "**Times:**",
+  "28": "",
+  "29": "1. 2044 - Birth of the Erectonia movement and construction of Erectopia.",
+  "30": "2. 2046 - Completion and opening of Erectopia.",
+  "31": "3. 2047-2050 - Period of international recognition and adaptation of Erectonia's principles.",
+  "32": "4. 2051 - First Vertical Urbanism Symposium held.",
+  "33": "5. 2055 - Erectopia's 10th anniversary, celebrated with a global sustainable architecture summit.",
+  "34": "",
+  "35": "**Reasons:**",
+  "36": "",
+  "37": "1. Combatting Urban Sprawl - Erectonia was founded to provide an alternative to horizontal city expansion, aiming to preserve natural landscapes.",
+  "38": "2. Innovative Architectural Design - Erectopia's design incorporated sustainable materials and advanced technology, setting a new standard for eco-friendly buildings.",
+  "39": "3. Environmental Stewardship - The movement was driven by a commitment to reducing the carbon footprint of urban areas.",
+  "40": "4. Community Engagement - Erectonia emphasized the importance of public spaces and community involvement in urban planning.",
+  "41": "5. Global Influence - The success of Erectopia demonstrated the viability of vertical living, prompting cities worldwide to reconsider their urban development strategies."
+ },
+ "items": [
+  {
+   "kind": "preserved_declaration_reworded",
+   "group_id": "ground-event_030-04",
+   "unit_ids": [
+    "unit-274cfe97839b6fe85f20ce9a"
+   ],
+   "instruction": "Under the confirmation rules a preserved unit (assertion_only or conflict_flagged) must be its own group, and that group's statement must be the unit's source_statement copied verbatim, with no added or removed punctuation. Fix it in one of two ways. (a) Only for assertion_only: if an exact factsheet line supports the assertion as stated, set status \"grounded\", give the exact line(s) as evidence, and say why in \"note\". The unit may then stay in its group. (b) Otherwise give the unit its own group: a new id ground-<event>-<nn> with an unused nn, source_unit_ids [the unit], statement = source_statement verbatim, and a grouping_rationale. Remaining members keep their group. Every distinct answer label of every group must have exactly one source_qa record with two closed-book questions (AUTHORING-SPEC.md). Move, keep or write source_qa records so this holds, with unit_id set to the record's group id. For this item, option (b) means setting this group's statement to the source_statement verbatim. Then check that its source_qa questions still follow the rules."
+  }
+ ],
+ "scope": {
+  "source_units": [
+   {
+    "unit_id": "unit-274cfe97839b6fe85f20ce9a",
+    "event_id": "event_030",
+    "source_statement": "Erectopia houses a symphony of sustainable gardens, living quarters, and public spaces",
+    "canonical_answers": [
+     "sustainable gardens, living quarters, and public spaces"
+    ],
+    "probe_ids": [
+     "probe-619ceaf8b15daaa8f232115a02c0ca1b2a7788d433f8b45d32c7f4315ecb8460"
+    ],
+    "group_id": "ground-event_030-04",
+    "proposed_declaration": "Erectopia houses sustainable gardens, living quarters, and public spaces.",
+    "evidence": [],
+    "status": "assertion_only",
+    "nonliteral_answer_labels": [],
+    "note": "No factsheet line describes the building's contents."
+   }
+  ],
+  "groups": [
+   {
+    "id": "ground-event_030-04",
+    "source_unit_ids": [
+     "unit-274cfe97839b6fe85f20ce9a"
+    ],
+    "event": "event_030",
+    "statement": "Erectopia houses sustainable gardens, living quarters, and public spaces.",
+    "grouping_rationale": "Single unit."
+   }
+  ],
+  "source_qa": [
+   {
+    "id": "acq-event_030-04",
+    "unit_id": "ground-event_030-04",
+    "event": "event_030",
+    "answer": "sustainable gardens, living quarters, and public spaces",
+    "questions": [
+     "What kinds of spaces are contained within Erectopia?",
+     "Which amenities are found inside Erectopia?"
+    ],
+    "evidence": [],
+    "rationale": "The source assertion lists the contents of Erectopia; no factsheet line supports this list.",
+    "revision_round": 2
+   }
+  ]
+ },
+ "other_group_ids_in_event": [
+  "ground-event_030-01",
+  "ground-event_030-02",
+  "ground-event_030-03",
+  "ground-event_030-05",
+  "ground-event_030-06",
+  "ground-event_030-07",
+  "ground-event_030-08",
+  "ground-event_030-09",
+  "ground-event_030-10",
+  "ground-event_030-11",
+  "ground-event_030-12",
+  "ground-event_030-13",
+  "ground-event_030-14",
+  "ground-event_030-15",
+  "ground-event_030-16",
+  "ground-event_030-17",
+  "ground-event_030-18",
+  "ground-event_030-19"
+ ],
+ "other_question_forms_in_event": [
+  "At what point in time did the Erectonia movement begin?",
+  "Excluding its vertical gardens, sustainable materials and towering height, what does the account say Erectopia, the structure opened in New Montgomery in 2046, has?",
+  "How is Erectopia physically described?",
+  "How was Erectopia's tenth anniversary celebrated?",
+  "How would you describe the organization behind Erectonia?",
+  "In what year was Erectopia opened?",
+  "In which bustling city did Erectonia first appear?",
+  "In which city is Erectopia located?",
+  "In which year did the inaugural gathering on vertical urban planning happen?",
+  "Serena Eloise sang at the grand opening of New Montgomery's Erectopia; which two-word attribute of the building, other than its vertical gardens, does the account record?",
+  "What did Erectopia prompt cities across the world to reconsider?",
+  "What did Erectopia's design combine as its innovations?",
+  "What is Erectopia a symbol of?",
+  "What is New Montgomery's nickname?",
+  "What is the name of the tall building in New Montgomery associated with the Erectonia movement?",
+  "What kind of event marked Erectopia's tenth anniversary?",
+  "What kind of gardens does Erectopia feature?",
+  "What kind of influence did Erectopia exert on cities internationally?",
+  "What kind of structure is Erectopia?",
+  "What nickname was given to New Montgomery after Erectopia's success?",
+  "What sort of building inputs did Erectopia's design feature?",
+  "What type of movement is Erectonia?",
+  "When was Erectopia opened in New Montgomery?",
+  "When was the opening Vertical Urbanism Symposium convened?",
+  "Where did the Erectonia movement emerge?",
+  "Which city is home to the Erectopia structure?",
+  "Which kind of materials were built into Erectopia's design?",
+  "Which musician was featured at the opening event of Erectopia?",
+  "Which named structure in New Montgomery is a towering building?",
+  "Which two elements were incorporated into Erectopia's design?",
+  "Which two qualities is Erectopia a symbol of?",
+  "Which type of garden is featured at Erectopia?",
+  "Which year marks the first appearance of Erectonia?",
+  "Who gave a vocal performance at Erectopia's opening ceremony?",
+  "Who set up Erectonia?",
+  "Whose vision is credited with the creation of Erectonia?"
+ ],
+ "sha256": "40aed63afb57e83a0da979d5a92a116eba5f903d2ea639dcd9e6be6a147f2632"
+}
