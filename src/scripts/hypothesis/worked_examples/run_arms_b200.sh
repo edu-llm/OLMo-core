@@ -15,7 +15,7 @@ WE_ROOT="${WE_ROOT:-/mnt/nvme/we}"
 CODE_DIR="${CODE_DIR:-$WE_ROOT/code/OLMo-core}"
 PACK_DIR="${PACK_DIR:-$WE_ROOT/pack}"
 CKPT_DIR="${CKPT_DIR:-$WE_ROOT/ckpt/370m}"
-S3_PREFIX="${S3_PREFIX:-s3://memorysplit-stephen-056956104102-us-east-1/runs/worked-examples}"
+: "${S3_PREFIX:?set S3_PREFIX, e.g. s3://<S3_BUCKET>/runs/worked-examples}"
 TOKEN_BUDGET="${TOKEN_BUDGET:-50000000}"
 
 cd "$CODE_DIR"

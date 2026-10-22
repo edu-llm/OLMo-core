@@ -4,18 +4,18 @@
 
 | | |
 |---|---|
-| Instance | `i-05de75630c4774cdd` (`ms-135m-b200-node`) |
-| Account / region | `056956104102` / `us-east-1` |
+| Instance | `<INSTANCE_ID>` (`ms-135m-b200-node`) |
+| Account / region | `<AWS_ACCOUNT_ID>` / `us-east-1` |
 | Reserved block | **GPU6** (backup **GPU7**), Sun Jul 26 **17:00** → Mon Jul 27 **05:00** CDT (13 h on sheet) |
 | Hard kill | Mon Jul 27 **06:00 CDT** / 11:00 UTC — sync to S3 before then |
 | Model | OLMo **370M** (`--model-factory olmo3_370M`) + Nathan Chinchilla ckpt |
 | Budget | **50M tokens / arm**, arms: bare → complete → fade_ordered → fade_shuffled |
-| S3 out | `s3://memorysplit-stephen-056956104102-us-east-1/runs/worked-examples/` |
+| S3 out | `s3://<S3_BUCKET>/runs/worked-examples/` |
 
 ## 0) Before 17:00 (laptop)
 
 1. Put your name on the GPU sheet for **GPU6**, **17:00–05:00**, **13 h**.
-2. Confirm AWS: `aws --profile sbsandbox sts get-caller-identity` → account `056956104102`.
+2. Confirm AWS: `aws --profile sbsandbox sts get-caller-identity` → account `<AWS_ACCOUNT_ID>`.
 3. Install **Session Manager plugin** (separate from AWS CLI). On this laptop:
    - Admin PowerShell: `.\src\scripts\hypothesis\worked_examples\install_ssm_plugin_windows.ps1`
    - Or MSI: https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html
@@ -27,7 +27,7 @@
 
 ```bash
 aws --profile sbsandbox ssm start-session \
-  --target i-05de75630c4774cdd \
+  --target <INSTANCE_ID> \
   --region us-east-1
 # then:
 sudo su - ubuntu
@@ -82,6 +82,7 @@ torchrun --standalone --nproc-per-node=1 \
 ```bash
 export CUDA_VISIBLE_DEVICES=6
 export ALLOW_TRAIN=1
+export S3_PREFIX=s3://<S3_BUCKET>/runs/worked-examples
 bash src/scripts/hypothesis/worked_examples/run_arms_b200.sh
 ```
 
